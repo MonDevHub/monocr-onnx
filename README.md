@@ -1,69 +1,74 @@
 # MonOCR (Universal SDK)
 
-MonOCR is a high-performance, cross-platform Optical Character Recognition (OCR) engine for the Mon language (mnw). Powered by **ONNX Runtime**, it provides a unified API for image and PDF text recognition across multiple programming environments.
+[![MonDevHub](https://img.shields.io/badge/Maintained%20by-MonDevHub-blue.svg)](https://github.com/MonDevHub)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This repository is the central hub for the MonOCR SDKs, maintained by the [MonDevHub](https://github.com/MonDevHub) organization.
+**MonOCR** is a high-performance, production-ready Optical Character Recognition (OCR) engine specifically optimized for the Mon language (mnw). Built on **ONNX Runtime**, it provides a lightning-fast, unified API for text recognition across any platform.
+
+## Why MonOCR?
+
+- **Production Accuracy**: Aligned with the latest high-precision models (128px vertical resolution).
+- **Universal SDK**: Native, high-performance implementations for JavaScript, Python, Go, and Rust.
+- **Robust Segmentation**: Intelligent line-detection with adaptive thresholding and relative padding for varied document layouts.
+- **Smart Model Management**: Zero-config setup; models are automatically fetched and cached from [Hugging Face](https://huggingface.co/janakhpon/monocr).
 
 ## Supported Platforms
 
-| SDK                    | Directory            | Registry                                                   | Status        |
-| :--------------------- | :------------------- | :--------------------------------------------------------- | :------------ |
-| **JavaScript/Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | ✅ Production |
-| **Python**             | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | ✅ Production |
-| **Go**                 | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | ✅ Production |
-| **Rust**               | [`rust/`](rust/)     | -                                                          | 🚧 Planned    |
-
-## Core Features
-
-- **Unified API**: Identical `read_image` and `read_pdf` patterns across all languages.
-- **Zero-Config Model Management**: Automatically fetches and caches the 56MB ONNX model from Hugging Face on first use.
-- **Layout Awareness**: Built-in line segmentation for full-page document processing.
-- **Optimized Performance**: Leverages modern SIMD/GPU acceleration via ONNX Runtime.
+| SDK                      | Directory            | Registry/Source                                            | Status        |
+| :----------------------- | :------------------- | :--------------------------------------------------------- | :------------ |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | Production    |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Production    |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | Production    |
+| **Rust**                 | [`rust/`](rust/)     | [monocr-onnx](rust/)                                       | Production    |
 
 ## Quick Installation
 
-### JavaScript (npm)
+### Python
 
 ```bash
-npm install monocr || pnpm add monocr
+pip install monocr-onnx
 ```
 
-### Python (pip or uv)
+### Node.js
 
 ```bash
-pip install monocr-onnx || uv add monocr-onnx
+npm install monocr
 ```
 
-### Go (modules)
+### Go
 
 ```bash
 go get github.com/MonDevHub/monocr-onnx/go
 ```
 
-## Quick Start Example (Python)
+## Usage Example (Python)
 
 ```python
-from monocr_onnx import read_image
+from monocr_onnx import MonOCR
 
-# Model is automatically downloaded and cached at ~/.monocr/models/
-text = read_image("scanned_document.jpg")
-print(text)
+# Initialize engine (downloads model automatically on first run)
+engine = MonOCR()
+
+# Simple page-level OCR
+text = engine.predict("scanned_document.jpg")
+print(f"Recognized Text:\n{text}")
+
+# Or process specific lines if you have your own layout analysis
+line_text = engine.predict_line("single_line_crop.png")
 ```
 
-## Documentation
+## Project Structure
 
-Each SDK contains its own detailed documentation and examples:
-
-- [JavaScript Documentation](js/README.md)
-- [Python Documentation](python/README.md)
-- [Go Documentation](go/README.md)
-- [Publishing & Deployment Guide](docs/publishing.md)
+- `python/`: Source code for the Python package.
+- `js/`: Source code for the Node.js package (uses `sharp` for image processing).
+- `go/`: Source code for the Go module.
+- `rust/`: Source code for the Rust crate.
+- `models/`: (Reference) Model architecture and conversion scripts.
 
 ## Model Hub
 
-The underlying weights and multi-format exports (ONNX, TFLite, PyTorch) are hosted on Hugging Face:
-[MonDevHub/monocr](https://huggingface.co/janakhpon/monocr)
+The underlying weights and multi-format exports (ONNX, MLPackage, PyTorch) are hosted on the [Hugging Face Model Hub](https://huggingface.co/janakhpon/monocr).
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. Developed and maintained by the **MonDevHub** team.

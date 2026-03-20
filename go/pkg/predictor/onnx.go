@@ -3,6 +3,7 @@ package predictor
 import (
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
@@ -127,19 +128,29 @@ func (p *Predictor) preprocess(img image.Image) ([]float32, int, int, error) {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	targetHeight := 64
-	aspectRatio := float64(width) / float64(height)
-	targetWidth := int(math.Round(float64(targetHeight) * aspectRatio))
+	targetHeight := 128
+	targetWidth := 1024
+	
+	scale := float64(targetHeight) / float64(height)
+	newWidth := int(math.Round(float64(width) * scale))
+	if newWidth > targetWidth {
+		newWidth = targetWidth
+	}
 
 	// Resize using high quality resampling
-	dst := image.NewGray(image.Rect(0, 0, targetWidth, targetHeight))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	resized := image.NewGray(image.Rect(0, 0, newWidth, targetHeight))
+	draw.CatmullRom.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
 
-	// Normalize
+	// Create white background canvas
+	dst := image.NewGray(image.Rect(0, 0, targetWidth, targetHeight))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{color.Gray{255}}, image.Point{}, draw.Src)
+	draw.Draw(dst, image.Rect(0, 0, newWidth, targetHeight), resized, image.Point{}, draw.Over)
+
+	// Normalize to [-1.0, 1.0]
+	// (pix / 127.5) - 1.0
 	inputData := make([]float32, targetWidth*targetHeight)
 	for i, v := range dst.Pix {
-		// 0-255 -> 0.0-1.0
-		inputData[i] = float32(v) / 255.0
+		inputData[i] = float32(v)/127.5 - 1.0
 	}
 
 	return inputData, targetHeight, targetWidth, nil

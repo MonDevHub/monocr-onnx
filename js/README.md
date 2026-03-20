@@ -1,6 +1,6 @@
 # MonOCR (JavaScript SDK)
 
-The professional JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
+The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
 
 ## Installation
 
@@ -10,51 +10,43 @@ npm install monocr
 
 ## Features
 
-- **Unified API**: Synchronized with Python and Go equivalents.
-- **Auto-Model Management**: Leverages [MonDevHub/monocr](https://huggingface.co/janakhpon/monocr) for automated model delivery.
-- **PDF Support**: Intelligent document segmentation and multi-page processing.
-- **Zero Dependencies**: Core OCR logic is lean and optimized.
+- **Production Accuracy**: Aligned with v2.0 high-precision models (128px vertical resolution).
+- **Auto-Model Management**: Automated model delivery from [Hugging Face](https://huggingface.co/janakhpon/monocr).
+- **Robust Segmentation**: Intelligent line-detection with adaptive thresholding and relative padding.
+- **Optimized Performance**: Direct bindings to ONNX Runtime via Node.js.
 
-## API Reference
-
-### `read_image(imagePath, [options])`
-
-Recognizes text from a single image.
-
-- `imagePath`: String path to the image file.
-- `options`: Optional overrides for model/charset paths.
-- **Returns**: `Promise<string>`
-
-### `read_images(imagePaths, [options])`
-
-Recognizes text from multiple images.
-
-- **Returns**: `Promise<string[]>`
-
-### `read_pdf(pdfPath, [options])`
-
-Converts and recognizes text from all pages of a PDF.
-
-- **Returns**: `Promise<string[]>` (Array of strings per page)
-
-### `read_image_with_accuracy(imagePath, groundTruth, [options])`
-
-Performs OCR and calculates Levenshtein accuracy.
-
-- **Returns**: `Promise<{text: string, accuracy: number}>`
-
-## Usage Example
+## Quick Start
 
 ```javascript
-const { read_image } = require("monocr");
+const { MonOCR } = require("monocr");
 
 async function main() {
-  const text = await read_image("scanned_text.png");
+  const engine = new MonOCR();
+  await engine.init();
+
+  // Recognize text from a full page
+  const text = await engine.predict("scanned_text.png");
   console.log(text);
 }
 
 main();
 ```
+
+## API Reference
+
+### `new MonOCR(options)`
+
+Initialize the OCR engine.
+- `options.modelPath`: Optional path to a local ONNX model.
+- `options.charsetPath`: Optional path to a local charset file.
+
+### `predict(imagePath)` -> `Promise<string>`
+
+Segment an image into lines and recognize each.
+
+### `predictLine(imagePath)` -> `Promise<string>`
+
+Recognize text from a single cropped text line image.
 
 ## CLI Interface
 
@@ -68,6 +60,12 @@ monocr image input.jpg
 # Process a PDF
 monocr pdf document.pdf
 ```
+
+## Requirements
+
+- Node.js 16+
+- sharp (for image processing)
+- onnxruntime-node
 
 ## Maintenance
 

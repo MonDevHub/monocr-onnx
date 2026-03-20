@@ -38,7 +38,7 @@ class MonOCR:
         if img.mode != 'L':
             img = img.convert('L')
         
-        target_height = 64
+        target_height = 128
         # Handle small images
         if img.height == 0:
              return None

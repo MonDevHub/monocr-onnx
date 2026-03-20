@@ -36,18 +36,21 @@ impl MonOCR {
         let gray_img = img.grayscale();
         
         let (width, height) = gray_img.dimensions();
-        let target_height = 64;
-        let aspect_ratio = width as f32 / height as f32;
-        let target_width = (target_height as f32 * aspect_ratio).round() as u32;
-
-        let resized = gray_img.resize_exact(target_width, target_height, FilterType::Triangle);
+        let target_height = 128;
+        let target_width = 1024;
         
-        let mut input_tensor = Array4::<f32>::zeros((1, 1, target_height as usize, target_width as usize));
+        let aspect_ratio = width as f32 / height as f32;
+        let new_width = ((target_height as f32 * aspect_ratio).round() as u32).min(target_width);
+
+        let resized = gray_img.resize_exact(new_width, target_height, FilterType::Triangle);
+        
+        // Create 1x1x128x1024 tensor, initialized with white background normalized to 1.0
+        // (255 / 127.5) - 1.0 = 1.0
+        let mut input_tensor = Array4::<f32>::from_elem((1, 1, target_height as usize, target_width as usize), 1.0);
         
         for (x, y, pixel) in resized.pixels() {
-            // pixel[0] is the grayscale value (0-255)
-            // Normalize to 0-1
-            let val = pixel[0] as f32 / 255.0;
+            // Normalize to [-1.0, 1.0]
+            let val = (pixel[0] as f32 / 127.5) - 1.0;
             input_tensor[[0, 0, y as usize, x as usize]] = val;
         }
 

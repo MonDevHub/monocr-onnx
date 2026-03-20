@@ -113,12 +113,14 @@ class LineSegmenter {
 
         if (!hasPixels) return;
 
-        // Add padding
-        const pad = 4;
-        const y1 = Math.max(0, rStart - pad);
-        const y2 = Math.min(height, rEnd + pad);
-        const x1 = Math.max(0, xMin - pad);
-        const x2 = Math.min(width, xMax + pad);
+        // Relative padding based on line height
+        const hRaw = rEnd - rStart;
+        const padY = Math.ceil(hRaw * 0.20);
+        const padX = Math.ceil(hRaw * 0.15);
+        const y1 = Math.max(0, rStart - padY);
+        const y2 = Math.min(height, rEnd + padY);
+        const x1 = Math.max(0, xMin - padX);
+        const x2 = Math.min(width, xMax + padX);
 
         const w = x2 - x1;
         const h = y2 - y1;

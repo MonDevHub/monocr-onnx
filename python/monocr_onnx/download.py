@@ -4,9 +4,8 @@ import os
 from pathlib import Path
 
 MODEL_URLS = {
-    "onnx": "https://huggingface.co/janakh/monocr/resolve/main/monocr.onnx",
-    "tflite": "https://huggingface.co/janakh/monocr/resolve/main/monocr.tflite",
-    "charset": "https://huggingface.co/janakh/monocr/resolve/main/charset.txt",
+    "onnx": "https://huggingface.co/janakhpon/monocr/resolve/main/monocr.onnx",
+    "charset": "https://huggingface.co/janakhpon/monocr/resolve/main/charset.txt",
 }
 
 def download_file(url, dest):

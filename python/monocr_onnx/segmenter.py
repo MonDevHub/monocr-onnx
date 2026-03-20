@@ -1,7 +1,12 @@
+import cv2
 import numpy as np
 from PIL import Image
 
 class LineSegmenter:
+    """
+    Robust line segmenter using Horizontal Projection Profiles with Smoothing.
+    Handles noisy documents and touching lines by finding valleys in the projection.
+    """
     def __init__(self, min_line_h=10, smooth_window=3):
         self.min_line_h = min_line_h
         self.smooth_window = smooth_window
@@ -14,35 +19,29 @@ class LineSegmenter:
         Returns:
             list: List of dicts with keys 'img' (PIL.Image) and 'bbox' (x, y, w, h).
         """
-        if isinstance(image, Image.Image):
-            img_pil = image
-            if img_pil.mode != 'L':
-                img_pil = img_pil.convert('L')
-            img_arr = np.array(img_pil)
+        # Convert to CV2 grayscale
+        img_np = np.array(image)
+        if len(img_np.shape) == 3:
+            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         else:
-            img_arr = image
-            img_pil = Image.fromarray(img_arr)
-            if img_pil.mode != 'L':
-                img_pil = img_pil.convert('L')
-                img_arr = np.array(img_pil)
+            gray = img_np
 
-        height, width = img_arr.shape
+        h_img, width = gray.shape
 
-        # 1. Binarize / Thresholding for Projection
-        # Text is dark (< 128). We want pixel count of text.
-        # binary = 1 where text, 0 where background.
-        binary = (img_arr < 128).astype(np.int32)
+        # 1. Binarize (Adaptive Thresholding)
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
+        )
         
         # 2. Horizontal Projection Profile
-        hist = np.sum(binary, axis=1) # Sum along width (axis 1) -> shape (height,)
+        raw_hist = np.sum(binary, axis=1).astype(np.float32)
 
         # 3. Smoothing
         if self.smooth_window > 1:
             kernel = np.ones(self.smooth_window) / self.smooth_window
-            # mode='same' returns output of same length as input
-            smoothed_hist = np.convolve(hist, kernel, mode='same')
+            smoothed_hist = np.convolve(raw_hist, kernel, mode='same')
         else:
-            smoothed_hist = hist
+            smoothed_hist = raw_hist
 
         # 4. Gap Detection
         non_zero_vals = smoothed_hist[smoothed_hist > 0]
@@ -51,54 +50,57 @@ class LineSegmenter:
 
         mean_density = np.mean(non_zero_vals)
         gap_threshold = mean_density * 0.05
+        is_text = smoothed_hist > gap_threshold
         
         results = []
         start = None
         
-        for y in range(height):
-            is_text = smoothed_hist[y] > gap_threshold
-            
-            if is_text and start is None:
+        for y, is_text_val in enumerate(is_text):
+            if is_text_val and start is None:
                 start = y
-            elif not is_text and start is not None:
+            elif not is_text_val and start is not None:
+                # End of a text block
                 end = y
                 if (end - start) >= self.min_line_h:
-                    self._extract_line(img_pil, img_arr, width, height, start, end, results)
+                    self._extract_line(binary, gray, start, end, image, results)
                 start = None
                 
-        if start is not None and (height - start) >= self.min_line_h:
-            self._extract_line(img_pil, img_arr, width, height, start, height, results)
+        if start is not None:
+            if (h_img - start) >= self.min_line_h:
+                self._extract_line(binary, gray, start, h_img, image, results)
             
         return results
 
-    def _extract_line(self, img_pil, img_arr, width, height, r_start, r_end, results):
+    def _extract_line(self, binary, gray, r_start, r_end, source_image, results):
+        """Crop a detected line region and append to results list."""
         # Find horizontal bounds within strip
-        # strip is img_arr[r_start:r_end, :]
-        strip = img_arr[r_start:r_end, :]
+        line_slice = binary[r_start:r_end, :]
         
-        # Find x where col sum > 0 (checking binary text pixels)
-        strip_binary = (strip < 128)
-        col_sum = np.sum(strip_binary, axis=0) # shape (width,)
+        col_sums = np.sum(line_slice, axis=0)
+        col_indices = np.where(col_sums > 0)[0]
         
-        non_empty_cols = np.where(col_sum > 0)[0]
-        
-        if len(non_empty_cols) == 0:
+        if len(col_indices) == 0:
             return
             
-        x_min = non_empty_cols[0]
-        x_max = non_empty_cols[-1]
+        x_start, x_end = col_indices[0], col_indices[-1]
         
-        # Add padding
-        pad = 4
-        y1 = max(0, r_start - pad)
-        y2 = min(height, r_end + pad)
-        x1 = max(0, x_min - pad)
-        x2 = min(width, x_max + pad)
+        # Add relative padding based on line height
+        h_raw = r_end - r_start
+        pad_y = int(h_raw * 0.20)
+        pad_x = int(h_raw * 0.15)
+        y1 = max(0, r_start - pad_y)
+        y2 = min(gray.shape[0], r_end + pad_y)
+        x1 = max(0, x_start - pad_x)
+        x2 = min(gray.shape[1], x_end + pad_x)
         
         w = x2 - x1
         h = y2 - y1
         
-        crop = img_pil.crop((x1, y1, x2, y2))
+        # If input was not PIL, ensure we return something consistent
+        if not isinstance(source_image, Image.Image):
+            source_image = Image.fromarray(source_image)
+            
+        crop = source_image.crop((x1, y1, x2, y2))
         
         results.append({
             'img': crop,

@@ -15,7 +15,7 @@ class MonOCR {
         this.modelManager = new ModelManager();
         
         // Metadata
-        this.targetHeight = 64;
+        this.targetHeight = 128;
         this.targetWidth = 1024;
     }
 
@@ -51,6 +51,7 @@ class MonOCR {
         }
         const metadata = await sharpImg.metadata();
         
+        // Scale to target height
         const scale = this.targetHeight / metadata.height;
         const newWidth = Math.min(this.targetWidth, Math.round(metadata.width * scale));
 
@@ -67,13 +68,10 @@ class MonOCR {
 
         // Create target canvas (1024 width, white background = 255)
         const totalSize = this.targetHeight * this.targetWidth;
-        const canvas = new Float32Array(totalSize).fill(1.0);
+        const canvas = new Float32Array(totalSize);
 
-        // Fill canvas with resized image and normalize
-        // Python: canvas = canvas.astype(np.float32) / 127.5 - 1.0
-        // 255 -> 1.0
-        // 0 -> -1.0
-        
+        // Fill canvas with resized image and normalize to [-1.0, 1.0]
+        // (pix / 127.5) - 1.0
         for (let y = 0; y < this.targetHeight; y++) {
             for (let x = 0; x < this.targetWidth; x++) {
                 const canvasIdx = y * this.targetWidth + x;
@@ -82,7 +80,7 @@ class MonOCR {
                     const pixelValue = resizedBuffer[imgIdx];
                     canvas[canvasIdx] = (pixelValue / 127.5) - 1.0;
                 } else {
-                    // Padding is white
+                    // Padding is white (255)
                     canvas[canvasIdx] = (255 / 127.5) - 1.0; // 1.0
                 }
             }
