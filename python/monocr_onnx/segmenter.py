@@ -69,7 +69,7 @@ class LineSegmenter:
                 start = None
                 
         if start is not None:
-            if (h_img - start) >= self.min_line_h:
+            if (h_img - int(start)) >= self.min_line_h:
                 self._extract_line(binary, gray, start, h_img, image, results)
             
         return results

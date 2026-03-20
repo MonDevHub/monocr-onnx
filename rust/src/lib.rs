@@ -214,7 +214,6 @@ pub struct OcrResult {
     /// Accuracy percentage (0-100) based on Levenshtein distance
     pub accuracy: f64,
 }
-}
 
 #[cfg(test)]
 mod tests {
