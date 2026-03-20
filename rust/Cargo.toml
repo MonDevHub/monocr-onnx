@@ -6,26 +6,24 @@ description = "Universal MonOCR package with ONNX bindings for Rust"
 license = "MIT"
 authors = ["Janakh"]
 
-[lib]
-name = "monocr_onnx"
-path = "src/lib.rs"
-
 [[bin]]
 name = "monocr"
 path = "src/main.rs"
 
+[lib]
+name = "monocr_onnx"
+path = "src/lib.rs"
+
 [dependencies]
-ort = { version = "2.0.0-rc.9", features = ["copy-tensors"] }
+ort = "2.0.0-rc.11"
 image = "0.24"
-ndarray = "0.15"
+ndarray = "0.17"
 anyhow = "1.0"
 reqwest = { version = "0.11", features = ["blocking"] }
 tokio = { version = "1", features = ["full"] }
 indicatif = "0.17"
-clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
-levenshtein = "1.0"
 tempfile = "3.8"
-# Note: PDF support in Rust is usually done via libraries like pdf-extract or by calling external tools
-# For simplicity and consistency with other SDKs (system dependency), we might call pdftoppm or use a crate.
-# We'll use a sequential approach first.
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

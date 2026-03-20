@@ -24,3 +24,8 @@ Cargo.lock # Rust app lock (keep for bin, strip for lib - we are lib here, but f
 dist/
 build/
 .ipynb_checkpoints/
+
+# Model artifacts
+*.onnx
+*.tflite
+data/monocr.json

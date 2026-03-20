@@ -7,9 +7,10 @@ class LineSegmenter:
     Robust line segmenter using Horizontal Projection Profiles with Smoothing.
     Handles noisy documents and touching lines by finding valleys in the projection.
     """
-    def __init__(self, min_line_h=10, smooth_window=3):
+    def __init__(self, min_line_h=10, smooth_window=5, threshold_ratio=0.02):
         self.min_line_h = min_line_h
         self.smooth_window = smooth_window
+        self.threshold_ratio = threshold_ratio
 
     def segment(self, image):
         """
@@ -48,14 +49,16 @@ class LineSegmenter:
         if len(non_zero_vals) == 0:
             return []
 
-        mean_density = np.mean(non_zero_vals)
-        gap_threshold = mean_density * 0.05
-        is_text = smoothed_hist > gap_threshold
+        # Find threshold based on ratio or density
+        max_val = np.max(smoothed_hist)
+        threshold = max_val * self.threshold_ratio
         
         results = []
         start = None
         
-        for y, is_text_val in enumerate(is_text):
+        for y in range(h_img):
+            is_text_val = smoothed_hist[y] > threshold
+            
             if is_text_val and start is None:
                 start = y
             elif not is_text_val and start is not None:
