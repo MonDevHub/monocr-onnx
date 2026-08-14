@@ -12,7 +12,7 @@ pip install monocr-onnx
 
 - **Production Accuracy**: Aligned with v2.0 high-precision models (128px vertical resolution).
 - **Parallel Processing**: Native support for multithreaded batch OCR.
-- **Auto-Model Management**: Automated caching of model weights from [Hugging Face](https://huggingface.co/janakhpon/monocr).
+- **Pinned Model**: Weights and charset are fetched from one immutable [Hugging Face](https://huggingface.co/janakhpon/monocr) revision, checksummed, and cached per revision.
 - **Comprehensive API**: Unified methods for images, PDFs, and accuracy benchmarking.
 - **Robust Segmentation**: Advanced line-detection with adaptive thresholding and relative padding.
 
@@ -36,7 +36,9 @@ line_text = engine.predict_line("line_crop.png")
 
 ### `MonOCR(model_path=None, charset_path=None)`
 
-Initialize the OCR engine. If paths are omitted, the latest production models are automatically downloaded.
+Initialize the OCR engine. If paths are omitted, the pinned model and its charset are downloaded on first use.
+
+Loading refuses a model whose output class count or input height disagrees with the charset — a mismatched pair still runs and still returns text, it is just the wrong text.
 
 ### `predict(image_path)` -> `str`
 
@@ -60,8 +62,25 @@ monocr image input.jpg
 monocr pdf document.pdf
 
 # Batch directory processing
-monocr batch ./input -o results.json
+monocr batch ./input
+
+# Pre-fetch the model and charset
+monocr download
 ```
+
+## Model artifact
+
+The model and its charset are pinned to `janakhpon/monocr@a51be11` (v2.0: 128px
+input height, 315 characters, 316 CTC classes) and verified by sha256 after
+download. They are never fetched from `main` — that ref has already moved under
+this package once, replacing a 64px / 225-class network with the current one.
+
+The cache lives at `~/.monocr/models/<revision>/`, so bumping the pin misses the
+cache rather than silently reusing old weights.
+
+If you installed 0.1.0, a stale `~/.monocr/models/monocr.onnx` may still be on
+disk. Nothing reads it any more; `monocr download` will point it out and it is
+safe to delete.
 
 ## Requirements
 

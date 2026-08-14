@@ -42,15 +42,27 @@ def pdf(pdf_path, model, charset):
 def download(force):
     """Download model files to local cache."""
     manager = ModelManager()
-    if force and (manager.cache_dir / manager.MODEL_FILENAME).exists():
-        (manager.cache_dir / manager.MODEL_FILENAME).unlink()
-        
+    if force:
+        manager.clear_cache()
+
     try:
-        manager.get_model_path() # Triggers download if missing
-        click.echo("Model is ready.")
+        # Both, so the charset always comes from the same revision as the weights.
+        manager.get_model_path()
+        manager.get_charset_path()
+        click.echo(f"Model is ready ({manager.REPO_ID}@{manager.REVISION}): {manager.cache_dir}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         exit(1)
+
+    legacy = manager.legacy_cache_files()
+    if legacy:
+        click.echo(
+            "Note: unpinned files from an older release are still in the cache and "
+            "are no longer read. They may be a different network entirely. Safe to delete:",
+            err=True,
+        )
+        for path in legacy:
+            click.echo(f"  {path}", err=True)
 
 @main.command()
 @click.argument('directory', type=click.Path(exists=True, file_okay=False))

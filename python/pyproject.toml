@@ -25,6 +25,12 @@ dependencies = [
     "pdf2image>=1.16.0",
 ]
 
+[dependency-groups]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.urls]
 Homepage = "https://github.com/MonDevHub/monocr-onnx"
 Repository = "https://github.com/MonDevHub/monocr-onnx"
