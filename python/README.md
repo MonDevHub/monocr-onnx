@@ -84,9 +84,10 @@ safe to delete.
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.11+ — onnxruntime 1.24.1 ships no wheel below cp311 and no sdist, so
+  3.10 and below have nothing to install
 - opencv-python-headless (for robust segmentation)
-- onnxruntime (CPU or GPU)
+- onnxruntime 1.24.1 (CPU or GPU), pinned in `uv.lock`
 
 ## Maintenance
 
