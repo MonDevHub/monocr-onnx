@@ -1,5 +1,16 @@
 name: CI
 
+# Every job in this file used to end `|| echo "No tests yet"`, on all four
+# bindings. That makes the step exit 0 whatever happens, so the workflow could
+# not fail and the badge reported nothing. It stayed green through a published
+# Python package normalising to [0,1] against a model trained on [-1,1], and
+# through all four bindings decoding a 316-class model with a 225-character
+# charset.
+#
+# A suppressed failure is worse than no CI, because no CI does not claim to
+# have checked. If a binding has no tests, the honest state is a red build, not
+# a green one with an echo in the log.
+
 on:
   push:
     branches: [main]
@@ -23,7 +34,7 @@ jobs:
       - name: Run tests
         run: |
           cd python
-          pytest tests/ || echo "No tests yet"
+          pytest tests/
 
   js-test:
     runs-on: ubuntu-latest
@@ -40,7 +51,7 @@ jobs:
       - name: Run tests
         run: |
           cd js
-          npm test || echo "No tests yet"
+          npm test
 
   rust-test:
     runs-on: ubuntu-latest
@@ -51,7 +62,7 @@ jobs:
       - name: Run tests
         run: |
           cd rust
-          cargo test || echo "No tests yet"
+          cargo test
 
   go-test:
     runs-on: ubuntu-latest
@@ -64,4 +75,25 @@ jobs:
       - name: Run tests
         run: |
           cd go
-          go test ./... || echo "No tests yet"
+          go test ./...
+
+  # The charset ships in four copies, one per binding, and every one of them
+  # decodes the model's output indices. They drifted to 225 characters against a
+  # 316-class model, so this asserts the property that failure violated: all four
+  # are byte-identical, and their length matches the model's class count minus
+  # the CTC blank. It needs no toolchain and no network.
+  charset-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: All four bundled charsets are identical
+        run: |
+          set -euo pipefail
+          for f in js/src/charset.txt go/charset.txt rust/src/charset.txt; do
+            cmp python/monocr_onnx/charset.txt "$f"
+          done
+      - name: The charset keeps its leading space
+        # A bare .strip()/.trim() eats U+0020 and shifts every index by one.
+        run: |
+          set -euo pipefail
+          head -c 1 python/monocr_onnx/charset.txt | od -An -tx1 | grep -q '20'
