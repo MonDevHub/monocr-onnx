@@ -19,35 +19,63 @@ import (
 //go:embed charset.txt
 var embeddedCharset string
 
+// NormalizeCharset strips only line terminators.
+//
+// The charset's first character really is U+0020 — a space is one of the
+// classes the model emits. strings.TrimSpace eats it, which drops the charset
+// from 315 characters to 314 and shifts every index in the decode by one, so
+// every character comes back as its neighbour. Trim newlines and nothing else.
+func NormalizeCharset(charset string) string {
+	return strings.Trim(charset, "\r\n")
+}
+
+// DefaultCharset is the charset compiled into this package. Every entry point
+// resolves through here so no two of them can disagree.
+func DefaultCharset() string {
+	return NormalizeCharset(embeddedCharset)
+}
+
+// resolveModel returns the cached model path and the charset that belongs to
+// it. The charset published alongside the pinned revision wins; the embedded
+// copy is the offline fallback. Either way predictor.NewPredictor checks both
+// against the graph before running anything.
+func resolveModel() (modelPath, charset string, err error) {
+	manager, err := model.NewManager()
+	if err != nil {
+		return "", "", err
+	}
+
+	modelPath, err = manager.GetModelPath()
+	if err != nil {
+		return "", "", err
+	}
+
+	charset = DefaultCharset()
+	if published, err := manager.GetCharset(); err == nil {
+		charset = NormalizeCharset(published)
+	}
+	return modelPath, charset, nil
+}
+
 // ReadImage recognizes text from an image file.
 // It automatically downloads the model if not present.
 func ReadImage(imagePath string) (string, error) {
-	manager, err := model.NewManager()
+	modelPath, charset, err := resolveModel()
 	if err != nil {
 		return "", err
 	}
 
-	modelPath, err := manager.GetModelPath()
-	if err != nil {
-		return "", err
-	}
-
-	return ReadImageWithModel(imagePath, modelPath, strings.TrimSpace(embeddedCharset))
+	return ReadImageWithModel(imagePath, modelPath, charset)
 }
 
 // ReadImages recognizes text from multiple image files.
 func ReadImages(imagePaths []string) ([]string, error) {
-	manager, err := model.NewManager()
+	modelPath, charset, err := resolveModel()
 	if err != nil {
 		return nil, err
 	}
 
-	modelPath, err := manager.GetModelPath()
-	if err != nil {
-		return nil, err
-	}
-
-	pred, err := predictor.NewPredictor(modelPath, embeddedCharset)
+	pred, err := predictor.NewPredictor(modelPath, charset)
 	if err != nil {
 		return nil, err
 	}
@@ -74,9 +102,13 @@ func ReadImageWithAccuracy(imagePath, groundTruth string) (string, float64, erro
 	return text, accuracy, nil
 }
 
-// ReadImageWithModel allows specifying custom model and charset paths.
+// ReadImageWithModel allows specifying a custom model path and charset.
+//
+// The charset is normalized for line terminators only; it must otherwise be
+// exactly the charset the model was trained with. A mismatch against the
+// model's classifier width is refused rather than decoded.
 func ReadImageWithModel(imagePath, modelPath, charset string) (string, error) {
-	pred, err := predictor.NewPredictor(modelPath, charset)
+	pred, err := predictor.NewPredictor(modelPath, NormalizeCharset(charset))
 	if err != nil {
 		return "", err
 	}
@@ -108,17 +140,12 @@ func ReadPDF(pdfPath string) ([]string, error) {
 		return nil, fmt.Errorf("pdftoppm not found: please install poppler-utils")
 	}
 
-	manager, err := model.NewManager()
+	modelPath, charset, err := resolveModel()
 	if err != nil {
 		return nil, err
 	}
 
-	modelPath, err := manager.GetModelPath()
-	if err != nil {
-		return nil, err
-	}
-
-	return readPDFWithModel(pdfPath, modelPath, strings.TrimSpace(embeddedCharset))
+	return readPDFWithModel(pdfPath, modelPath, charset)
 }
 
 // ReadPDFs recognizes text from multiple PDF files.
@@ -129,19 +156,14 @@ func ReadPDFs(pdfPaths []string) ([][]string, error) {
 		return nil, fmt.Errorf("pdftoppm not found: please install poppler-utils")
 	}
 
-	manager, err := model.NewManager()
-	if err != nil {
-		return nil, err
-	}
-
-	modelPath, err := manager.GetModelPath()
+	modelPath, charset, err := resolveModel()
 	if err != nil {
 		return nil, err
 	}
 
 	var results [][]string
 	for _, path := range pdfPaths {
-		pages, err := readPDFWithModel(path, modelPath, strings.TrimSpace(embeddedCharset))
+		pages, err := readPDFWithModel(path, modelPath, charset)
 		if err != nil {
 			return nil, err
 		}

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "monocr")]
-#[command(about = "Mongolian OCR CLI - Convert images/PDFs with Mongolian characters to text", long_about = None)]
+#[command(about = "Mon OCR CLI - Convert images/PDFs containing Mon text to plain text", long_about = None)]
 struct Args {
     /// Input file (image: PNG, JPG, BMP, etc. or PDF)
     #[arg(value_name = "INPUT")]

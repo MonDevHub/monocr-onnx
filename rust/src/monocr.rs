@@ -7,6 +7,7 @@ use anyhow::Result;
 use image::{imageops::FilterType, GrayImage};
 use ndarray::Array4;
 use ort::session::{builder::GraphOptimizationLevel, Session};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::model_manager::ModelManager;
@@ -16,10 +17,102 @@ use crate::OcrResult;
 
 /// Default embedded charset
 ///
-/// This constant includes the default character set for Mongolian OCR,
-/// embedded from the charset.txt file at compile time. It contains all
-/// supported characters that the model can recognize.
+/// This constant includes the default character set for Mon OCR, embedded from
+/// the charset.txt file at compile time. It contains all supported characters
+/// that the model can recognize, in the order the classifier emits them.
 const DEFAULT_CHARSET: &str = include_str!("charset.txt");
+
+/// Input height this binding preprocesses for.
+///
+/// The charset, the input height and the classifier width are one contract. If
+/// they drift apart the model still runs and still returns text — it is just
+/// the wrong text, with no error anywhere. So this is declared here, checked
+/// against the graph in [`MonOcr::new`], and a disagreement refuses to load.
+pub const EXPECTED_INPUT_HEIGHT: u32 = 128;
+
+/// Padded canvas width fed to the model. The model's width axis is dynamic;
+/// this is the binding's choice, not a model constraint.
+pub const DEFAULT_INPUT_WIDTH: u32 = 1024;
+
+/// A model artifact that disagrees with the charset or the input geometry this
+/// binding was built for.
+///
+/// Returned instead of running, because running would produce confident
+/// nonsense rather than an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelContractError(pub String);
+
+impl fmt::Display for ModelContractError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "model contract violation: {}", self.0)
+    }
+}
+
+impl std::error::Error for ModelContractError {}
+
+/// Strip line terminators, and nothing else.
+///
+/// The charset's first character really is U+0020 — a space is one of the
+/// classes the model emits. A bare `.trim()` eats it, which drops the charset
+/// from 315 characters to 314 and shifts every index in the decode by one, so
+/// every character comes back as its neighbour.
+pub fn normalize_charset(charset: &str) -> &str {
+    charset
+        .trim_start_matches(['\n', '\r'])
+        .trim_end_matches(['\n', '\r'])
+}
+
+/// Read `shape[axis]` when it is a fixed positive size.
+///
+/// ONNX reports dynamic axes as -1; those return `None` because there is
+/// nothing to compare them against.
+fn static_dim(shape: &[i64], axis: usize) -> Option<usize> {
+    match shape.get(axis) {
+        Some(&d) if d > 0 => Some(d as usize),
+        _ => None,
+    }
+}
+
+/// Compare the charset and geometry this binding holds against what the ONNX
+/// graph actually declares.
+///
+/// `model_classes` and `model_height` are `None` when the graph leaves that axis
+/// dynamic, in which case there is nothing to compare and the check passes —
+/// decoding re-derives the class count from the real output tensor and fails
+/// there instead.
+fn check_contract(
+    charset_len: usize,
+    model_classes: Option<usize>,
+    model_height: Option<usize>,
+    source: &str,
+) -> Result<(), ModelContractError> {
+    if charset_len == 0 {
+        return Err(ModelContractError(
+            "no charset available; cannot decode model output".to_string(),
+        ));
+    }
+    if let Some(classes) = model_classes {
+        let expected = charset_len + 1;
+        if classes != expected {
+            return Err(ModelContractError(format!(
+                "charset/model mismatch.\n  \
+                 charset: {charset_len} characters -> expects {expected} classes \
+                 ({charset_len} + CTC blank)\n  \
+                 model ({source}): {classes} classes\n\
+                 Every index above the first divergence would decode to the wrong character."
+            )));
+        }
+    }
+    if let Some(height) = model_height {
+        if height != EXPECTED_INPUT_HEIGHT as usize {
+            return Err(ModelContractError(format!(
+                "input height mismatch: this binding preprocesses to height {EXPECTED_INPUT_HEIGHT} \
+                 but {source} expects {height}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Builder for configuring and creating MonOcr instances
 ///
@@ -29,23 +122,25 @@ const DEFAULT_CHARSET: &str = include_str!("charset.txt");
 /// # Configuration Options
 ///
 /// - `model_path`: Custom path to the ONNX model file (default: download from HuggingFace)
-/// - `charset`: Custom character set for OCR (default: built-in Mongolian charset)
+/// - `charset`: Custom character set for OCR (default: built-in Mon charset)
 /// - `min_line_height`: Minimum height for line segmentation (default: 10 pixels)
 /// - `smooth_window`: Window size for smoothing projection profile (default: 3)
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::MonOcr;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let ocr = MonOcr::builder()
+///     let mut ocr = MonOcr::builder()
 ///         .min_line_height(15)
 ///         .smooth_window(5)
 ///         .build()
 ///         .await?;
-///     
+///
 ///     let text = ocr.read_image("document.png").await?;
+///     println!("{text}");
 ///     Ok(())
 /// }
 /// ```
@@ -65,7 +160,8 @@ impl Default for MonOcrBuilder {
     ///
     /// Default values:
     /// - model_path: None (will download from HuggingFace)
-    /// - charset: None (uses built-in Mongolian charset)
+    /// - charset: None (uses the charset published with the pinned model,
+    ///   falling back to the built-in Mon charset)
     /// - min_line_height: 10 pixels
     /// - smooth_window: 3
     fn default() -> Self {
@@ -89,7 +185,9 @@ impl MonOcrBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// use monocr_onnx::MonOcrBuilder;
+    ///
     /// let builder = MonOcrBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -111,11 +209,17 @@ impl MonOcrBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let ocr = MonOcr::builder()
-    ///     .model_path("./models/monocr.onnx")
-    ///     .build()
-    ///     .await?;
+    /// ```no_run
+    /// use monocr_onnx::MonOcr;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let ocr = MonOcr::builder()
+    ///         .model_path("./models/monocr.onnx")
+    ///         .build()
+    ///         .await?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn model_path(mut self, path: impl AsRef<Path>) -> Self {
         self.model_path = Some(path.as_ref().to_path_buf());
@@ -138,7 +242,7 @@ impl MonOcrBuilder {
     /// # Note
     ///
     /// The charset must match the one used during model training.
-    /// The default charset is built-in and suitable for Mongolian text.
+    /// The default charset is built-in and suitable for Mon text.
     pub fn charset(mut self, charset: impl Into<String>) -> Self {
         self.charset = Some(charset.into());
         self
@@ -221,9 +325,10 @@ impl MonOcrBuilder {
 ///
 /// Typically, you would create a `MonOcr` instance using the builder:
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::MonOcr;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let mut ocr = MonOcr::builder().build().await?;
 ///     let text = ocr.read_image("document.png").await?;
@@ -241,9 +346,10 @@ pub struct MonOcr {
     charset: Vec<char>,
     /// Line segmenter for page layout analysis
     segmenter: LineSegmenter,
-    /// Target height for model input (fixed at 64)
+    /// Target height for model input, taken from the model graph once the
+    /// contract check has confirmed it matches [`EXPECTED_INPUT_HEIGHT`]
     target_height: u32,
-    /// Target width for model input (fixed at 1024)
+    /// Target width for model input (the model's width axis is dynamic)
     target_width: u32,
 }
 
@@ -286,9 +392,10 @@ impl MonOcr {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use monocr_onnx::MonOcr;
     ///
+    /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut ocr = MonOcr::builder()
     ///         .min_line_height(15)
@@ -319,23 +426,62 @@ impl MonOcr {
         min_line_height: u32,
         smooth_window: u32,
     ) -> Result<Self> {
-        // Get or download model
-        let model_path = match model_path {
-            Some(path) => path,
+        // Get or download model. When the model comes from the manager, its
+        // charset comes from the same pinned revision, so the two agree by
+        // construction; the embedded copy is the offline fallback.
+        let (model_path, published_charset) = match model_path {
+            Some(path) => (path, None),
             None => {
                 let manager = ModelManager::new();
-                manager.get_model_path()?
+                let path = manager.get_model_path()?;
+                let published = manager.get_charset().ok();
+                (path, published)
             }
         };
 
         // Get charset
-        let charset_str = charset.unwrap_or_else(|| DEFAULT_CHARSET.to_string());
-        let charset: Vec<char> = charset_str.trim().chars().collect();
+        let charset_str = charset
+            .or(published_charset)
+            .unwrap_or_else(|| DEFAULT_CHARSET.to_string());
+        let charset: Vec<char> = normalize_charset(&charset_str).chars().collect();
 
         // Create ONNX session
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .commit_from_file(&model_path)?;
+
+        // Read the real graph rather than assuming the input height or the
+        // class count. Both have changed under this SDK before.
+        let source = model_path.display().to_string();
+        let in_shape = session
+            .inputs()
+            .first()
+            .and_then(|i| i.dtype().tensor_shape())
+            .ok_or_else(|| ModelContractError(format!("{source} has no tensor input")))?
+            .to_vec();
+        let out_shape = session
+            .outputs()
+            .first()
+            .and_then(|o| o.dtype().tensor_shape())
+            .ok_or_else(|| ModelContractError(format!("{source} has no tensor output")))?
+            .to_vec();
+
+        if in_shape.len() != 4 {
+            return Err(ModelContractError(format!(
+                "expected a 4-D [batch, channel, height, width] input, {source} declares {in_shape:?}"
+            ))
+            .into());
+        }
+        if out_shape.len() != 3 {
+            return Err(ModelContractError(format!(
+                "expected a 3-D [batch, sequence, classes] output, {source} declares {out_shape:?}"
+            ))
+            .into());
+        }
+
+        let model_height = static_dim(&in_shape, 2);
+        let model_classes = static_dim(&out_shape, 2);
+        check_contract(charset.len(), model_classes, model_height, &source)?;
 
         let segmenter = LineSegmenter::new(min_line_height, smooth_window);
 
@@ -343,8 +489,10 @@ impl MonOcr {
             session,
             charset,
             segmenter,
-            target_height: 64,
-            target_width: 1024,
+            target_height: model_height
+                .map(|h| h as u32)
+                .unwrap_or(EXPECTED_INPUT_HEIGHT),
+            target_width: DEFAULT_INPUT_WIDTH,
         })
     }
 
@@ -364,9 +512,10 @@ impl MonOcr {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use monocr_onnx::MonOcr;
     ///
+    /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut ocr = MonOcr::builder().build().await?;
     ///     let text = ocr.read_image("document.png").await?;
@@ -396,9 +545,10 @@ impl MonOcr {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use monocr_onnx::MonOcr;
     ///
+    /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut ocr = MonOcr::builder().build().await?;
     ///     let paths = vec!["page1.png", "page2.png", "page3.png"];
@@ -573,8 +723,7 @@ impl MonOcr {
         drop(outputs);
 
         // Decode
-        let text = self.decode_owned(&output_data, &output_shape);
-        Ok(text)
+        self.decode_owned(&output_data, &output_shape)
     }
 
     /// Predict text from a full page image
@@ -627,7 +776,8 @@ impl MonOcr {
     ///
     /// # Processing Steps
     ///
-    /// 1. **Scaling**: Scale the image to fit within target dimensions (64x1024)
+    /// 1. **Scaling**: Scale the image to fit the model's input height (128) by
+    ///    [`DEFAULT_INPUT_WIDTH`] (1024)
     ///    while maintaining aspect ratio
     /// 2. **Resizing**: Resize using Triangle filter for quality
     /// 3. **Normalization**: Convert pixel values from [0, 255] to [-1, 1]
@@ -639,7 +789,7 @@ impl MonOcr {
     ///
     /// # Returns
     ///
-    /// * `Ok(Array4<f32>)` - 4D tensor with shape [1, 1, 64, 1024]
+    /// * `Ok(Array4<f32>)` - 4D tensor with shape [1, 1, target_height, target_width]
     /// * `Err(anyhow::Error)` - If preprocessing fails
     fn preprocess(&self, image: &GrayImage) -> Result<Array4<f32>> {
         let (width, height) = image.dimensions();
@@ -678,101 +828,234 @@ impl MonOcr {
 
     /// CTC Greedy Decoding
     ///
-    /// Converts model output tensor to text using CTC (Connectionist Temporal
-    /// Classification) greedy decoding.
+    /// Converts the model output tensor to text using CTC (Connectionist
+    /// Temporal Classification) greedy decoding.
     ///
     /// # CTC Decoding Process
     ///
-    /// 1. For each timestep (column in the output), find the class with highest probability
-    /// 2. Skip the blank class (index 0) - represents CTC blank
-    /// 3. Skip repeated characters - only keep first occurrence of consecutive same chars
-    /// 4. Map class indices to characters using the charset
-    ///
-    /// # Arguments
-    ///
-    /// * `output` - Model output tensor view with shape [batch, sequence_length, num_classes]
-    ///
-    /// # Returns
-    ///
-    /// Decoded text string
-    fn decode(&self, output: &ndarray::ArrayViewD<f32>) -> String {
-        let dims = output.shape();
-        let _batch_size = dims[0];
-        let sequence_length = dims[1];
-        let num_classes = dims[2];
-
-        let mut decoded = String::new();
-        let mut prev_idx: i32 = -1;
-
-        // Process first batch only (batch_size should be 1)
-        for t in 0..sequence_length {
-            // Find argmax for this timestep
-            let mut max_val = f32::NEG_INFINITY;
-            let mut max_idx = 0;
-
-            for c in 0..num_classes {
-                let val = output[[0, t, c]];
-                if val > max_val {
-                    max_val = val;
-                    max_idx = c;
-                }
-            }
-
-            // CTC: 0 is blank, skip repeats
-            if max_idx != 0 && max_idx as i32 != prev_idx {
-                if max_idx > 0 && max_idx <= self.charset.len() {
-                    decoded.push(self.charset[max_idx - 1]);
-                }
-            }
-            prev_idx = max_idx as i32;
-        }
-
-        decoded
-    }
-
-    /// CTC Greedy Decoding for owned data
-    ///
-    /// This is a variant of [`decode`](Self::decode) that works with owned
-    /// data (Vec<f32>) instead of array views. It performs the same CTC
-    /// greedy decoding algorithm.
+    /// 1. For each timestep, find the class with the highest score
+    /// 2. Skip the blank class (index 0)
+    /// 3. Skip repeated characters - only keep the first of consecutive same chars
+    /// 4. Map class index `n` to `charset[n - 1]`
     ///
     /// # Arguments
     ///
     /// * `data` - Flattened output data in row-major order
     /// * `shape` - Tensor shape [batch, sequence_length, num_classes]
     ///
-    /// # Returns
+    /// # Contract
     ///
-    /// Decoded text string
-    fn decode_owned(&self, data: &[f32], shape: &[usize]) -> String {
-        let _batch_size = shape[0];
-        let sequence_length = shape[1];
-        let num_classes = shape[2];
+    /// The stride comes from the output tensor's own shape, never from the
+    /// charset. A charset that disagrees with the tensor is refused here rather
+    /// than silently decoding every index to its neighbour.
+    fn decode_owned(&self, data: &[f32], shape: &[usize]) -> Result<String> {
+        decode_ctc(&self.charset, data, shape)
+    }
+}
 
-        let mut decoded = String::new();
-        let mut prev_idx: i32 = -1;
+/// CTC greedy decode of a flat logits buffer.
+///
+/// Free-standing so it can be exercised without an ONNX session.
+fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String> {
+    if shape.len() != 3 {
+        return Err(ModelContractError(format!(
+            "expected a 3-D [batch, sequence, classes] output tensor, got shape {shape:?}"
+        ))
+        .into());
+    }
+    let sequence_length = shape[1];
+    let num_classes = shape[2];
+    if sequence_length == 0 || num_classes == 0 {
+        return Err(ModelContractError(format!(
+            "output tensor has an empty axis: shape {shape:?}"
+        ))
+        .into());
+    }
 
-        for t in 0..sequence_length {
-            let mut max_val = f32::NEG_INFINITY;
-            let mut max_idx = 0;
+    let expected = charset.len() + 1;
+    if num_classes != expected {
+        return Err(ModelContractError(format!(
+            "charset/model mismatch at decode time: charset has {} characters -> \
+             expects {expected} classes, tensor has {num_classes}",
+            charset.len()
+        ))
+        .into());
+    }
+    if data.len() < sequence_length * num_classes {
+        return Err(ModelContractError(format!(
+            "output tensor holds {} values, shape {shape:?} needs {}",
+            data.len(),
+            sequence_length * num_classes
+        ))
+        .into());
+    }
 
-            for c in 0..num_classes {
-                let idx = t * num_classes + c;
-                let val = data[idx];
-                if val > max_val {
-                    max_val = val;
-                    max_idx = c;
-                }
+    let mut decoded = String::new();
+    let mut prev_idx: i32 = -1;
+
+    for t in 0..sequence_length {
+        let mut max_val = f32::NEG_INFINITY;
+        let mut max_idx = 0;
+
+        let base = t * num_classes;
+        for c in 0..num_classes {
+            let val = data[base + c];
+            if val > max_val {
+                max_val = val;
+                max_idx = c;
             }
-
-            if max_idx != 0 && max_idx as i32 != prev_idx {
-                if max_idx > 0 && max_idx <= self.charset.len() {
-                    decoded.push(self.charset[max_idx - 1]);
-                }
-            }
-            prev_idx = max_idx as i32;
         }
 
-        decoded
+        // Index 0 is the CTC blank; 1..=N map onto charset[0..N-1].
+        if max_idx != 0 && max_idx as i32 != prev_idx {
+            decoded.push(charset[max_idx - 1]);
+        }
+        prev_idx = max_idx as i32;
+    }
+
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pinned model: input [1, 1, 128, width], output [1, sequence, 316].
+    const PINNED_CLASSES: usize = 316;
+    const PINNED_CHAR_LEN: usize = 315;
+
+    fn charset_of_len(n: usize) -> Vec<char> {
+        // Leading U+0020, as the real charset has.
+        std::iter::once(' ')
+            .chain(std::iter::repeat('x').take(n - 1))
+            .collect()
+    }
+
+    #[test]
+    fn contract_accepts_the_pinned_model() {
+        check_contract(
+            PINNED_CHAR_LEN,
+            Some(PINNED_CLASSES),
+            Some(EXPECTED_INPUT_HEIGHT as usize),
+            "model.onnx",
+        )
+        .expect("the pinned pair should pass");
+    }
+
+    /// The bundled charset used to be 225 characters against a 316-class model.
+    #[test]
+    fn contract_rejects_charset_mismatch() {
+        let err = check_contract(
+            225,
+            Some(PINNED_CLASSES),
+            Some(EXPECTED_INPUT_HEIGHT as usize),
+            "model.onnx",
+        )
+        .expect_err("225 characters vs 316 classes must be refused");
+        assert!(err.0.contains("226") && err.0.contains("316"), "{err}");
+    }
+
+    /// `.trim()` eating the leading space is a one-character mismatch, and one
+    /// character is enough to shift the whole decode.
+    #[test]
+    fn contract_rejects_off_by_one_charset() {
+        check_contract(
+            PINNED_CHAR_LEN - 1,
+            Some(PINNED_CLASSES),
+            Some(EXPECTED_INPUT_HEIGHT as usize),
+            "model.onnx",
+        )
+        .expect_err("314 characters vs 316 classes must be refused");
+    }
+
+    /// This binding hard-coded `target_height: 64` while the pinned model's
+    /// input is a static 128.
+    #[test]
+    fn contract_rejects_height_mismatch() {
+        check_contract(
+            PINNED_CHAR_LEN,
+            Some(PINNED_CLASSES),
+            Some(64),
+            "stale.onnx",
+        )
+        .expect_err("a 64-pixel input must be refused");
+    }
+
+    #[test]
+    fn contract_rejects_empty_charset() {
+        check_contract(0, Some(PINNED_CLASSES), Some(128), "model.onnx")
+            .expect_err("an empty charset must be refused");
+    }
+
+    /// A dynamic axis reports as -1; there is nothing to compare at load time,
+    /// so the load passes and decoding re-checks the real output tensor.
+    #[test]
+    fn contract_skips_dynamic_axes() {
+        check_contract(PINNED_CHAR_LEN, None, None, "dynamic.onnx")
+            .expect("dynamic axes should defer the check");
+    }
+
+    #[test]
+    fn static_dim_reads_only_fixed_axes() {
+        let shape = [1i64, 1, 128, -1];
+        assert_eq!(static_dim(&shape, 2), Some(128));
+        assert_eq!(static_dim(&shape, 3), None, "dynamic axis");
+        assert_eq!(static_dim(&shape, 9), None, "out of range");
+    }
+
+    fn synthetic_logits(seq_len: usize, num_classes: usize) -> Vec<f32> {
+        (0..seq_len * num_classes)
+            .map(|i| (i as f32 * 0.37).sin())
+            .collect()
+    }
+
+    /// The decode stride must come from the output tensor, never from the
+    /// charset. A charset that disagrees is refused outright rather than
+    /// reinterpreting the whole buffer.
+    #[test]
+    fn decode_stride_comes_from_the_tensor() {
+        let seq_len = 128;
+        let data = synthetic_logits(seq_len, PINNED_CLASSES);
+        let shape = [1, seq_len, PINNED_CLASSES];
+
+        let text = decode_ctc(&charset_of_len(PINNED_CHAR_LEN), &data, &shape)
+            .expect("the matching charset should decode");
+        assert!(!text.is_empty());
+
+        // The `.trim()` victim: one character short.
+        decode_ctc(&charset_of_len(PINNED_CHAR_LEN - 1), &data, &shape)
+            .expect_err("a 314-character charset against a 316-class tensor must be refused");
+
+        // The old bundled charset.
+        decode_ctc(&charset_of_len(225), &data, &shape)
+            .expect_err("a 225-character charset against a 316-class tensor must be refused");
+    }
+
+    #[test]
+    fn decode_rejects_unexpected_shapes() {
+        let charset = charset_of_len(PINNED_CHAR_LEN);
+        let data = synthetic_logits(8, PINNED_CLASSES);
+
+        decode_ctc(&charset, &data, &[8, PINNED_CLASSES]).expect_err("2-D output");
+        decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
+        decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
+            .expect_err("shape larger than the buffer");
+    }
+
+    /// CTC: index 0 is blank, repeats collapse, index n maps to charset[n - 1].
+    #[test]
+    fn decode_ctc_semantics() {
+        let charset: Vec<char> = "abc".chars().collect();
+        let num_classes = charset.len() + 1;
+
+        // Timesteps: a, a, blank, a, b, c
+        let argmax = [1usize, 1, 0, 1, 2, 3];
+        let mut data = vec![0.0f32; argmax.len() * num_classes];
+        for (t, &want) in argmax.iter().enumerate() {
+            data[t * num_classes + want] = 1.0;
+        }
+
+        let got = decode_ctc(&charset, &data, &[1, argmax.len(), num_classes]).unwrap();
+        assert_eq!(got, "aabc");
     }
 }

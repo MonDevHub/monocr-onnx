@@ -1,0 +1,9 @@
+# The root .gitignore has a bare `model/` rule for the top-level dev directory.
+# A bare rule matches at every depth, so it also swallowed `go/pkg/model/` — the
+# package holding the download/cache manager was never committed, and a fresh
+# clone could not build the Go SDK at all. Re-include it here.
+!pkg/model/
+!pkg/model/**
+
+# Build output. `go/monocr` and `go/lib/*.so` are currently tracked; they should
+# not be, but removing tracked files is a separate change.

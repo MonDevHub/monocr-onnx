@@ -30,8 +30,8 @@
 ///
 /// # Example
 ///
-/// ```ignore
-/// use monocr_onnx::utils::calculate_accuracy;
+/// ```
+/// use monocr_onnx::calculate_accuracy;
 ///
 /// let accuracy = calculate_accuracy("hello", "hello");
 /// assert_eq!(accuracy, 100.0);
