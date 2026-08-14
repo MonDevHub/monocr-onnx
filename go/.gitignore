@@ -5,5 +5,13 @@
 !pkg/model/
 !pkg/model/**
 
-# Build output. `go/monocr` and `go/lib/*.so` are currently tracked; they should
-# not be, but removing tracked files is a separate change.
+# Build output. `go/lib/` held two committed symlinks into a `/home/janakh/...`
+# node_modules path that existed on exactly one machine; both were dangling
+# everywhere else and nothing in the Go code read them, so they are gone. Do not
+# vendor the runtime here — see the ONNX Runtime section of README.md for how the
+# shared library is located.
+lib/
+*.so
+*.dylib
+
+# The `go/monocr` binary is still tracked; untracking it is a separate change.

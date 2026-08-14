@@ -158,3 +158,84 @@ func TestDecodeCTCSemantics(t *testing.T) {
 		t.Fatalf("decode = %q, want %q", got, "aabc")
 	}
 }
+
+// The ONNX Runtime is a host shared library that no Go manifest can pin, so the
+// only controls are: choose it explicitly, and record what actually loaded.
+// These cover the choosing; RuntimeVersion covers the recording and needs a real
+// library, so it is not exercised here.
+
+func envReturning(pairs map[string]string) func(string) string {
+	return func(k string) string { return pairs[k] }
+}
+
+func existsAmong(paths ...string) func(string) bool {
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		set[p] = true
+	}
+	return func(p string) bool { return set[p] }
+}
+
+func TestResolveSharedLibraryPathPrefersTheEnvironment(t *testing.T) {
+	const custom = "/opt/ort-1.24.1/lib/libonnxruntime.dylib"
+	got, err := resolveSharedLibraryPath(
+		"darwin",
+		envReturning(map[string]string{SharedLibraryPathEnv: custom}),
+		existsAmong(custom, homebrewLibPath),
+	)
+	if err != nil {
+		t.Fatalf("resolveSharedLibraryPath: %v", err)
+	}
+	if got != custom {
+		t.Errorf("an explicit %s must win over the Homebrew default, got %q", SharedLibraryPathEnv, got)
+	}
+}
+
+// Silently loading a different runtime than the one asked for is exactly the
+// host-determined-version failure this is meant to prevent, so a set-but-missing
+// path is an error rather than a fallthrough.
+func TestResolveSharedLibraryPathRefusesAMissingExplicitPath(t *testing.T) {
+	_, err := resolveSharedLibraryPath(
+		"darwin",
+		envReturning(map[string]string{SharedLibraryPathEnv: "/nope/libonnxruntime.dylib"}),
+		existsAmong(homebrewLibPath),
+	)
+	if err == nil {
+		t.Fatal("expected an error when the requested library does not exist")
+	}
+	if !strings.Contains(err.Error(), SharedLibraryPathEnv) {
+		t.Errorf("error should name the variable, got: %v", err)
+	}
+}
+
+func TestResolveSharedLibraryPathFallsBackToHomebrewOnDarwin(t *testing.T) {
+	got, err := resolveSharedLibraryPath("darwin", envReturning(nil), existsAmong(homebrewLibPath))
+	if err != nil {
+		t.Fatalf("resolveSharedLibraryPath: %v", err)
+	}
+	if got != homebrewLibPath {
+		t.Errorf("got %q, want the Homebrew fallback %q", got, homebrewLibPath)
+	}
+}
+
+// Empty means "say nothing, let the platform loader search" — which is how
+// Linux finds the library via LD_LIBRARY_PATH.
+func TestResolveSharedLibraryPathDefersToTheLoader(t *testing.T) {
+	got, err := resolveSharedLibraryPath("linux", envReturning(nil), existsAmong(homebrewLibPath))
+	if err != nil {
+		t.Fatalf("resolveSharedLibraryPath: %v", err)
+	}
+	if got != "" {
+		t.Errorf("on linux with no override the loader should decide, got %q", got)
+	}
+}
+
+func TestResolveSharedLibraryPathDefersWhenHomebrewIsAbsent(t *testing.T) {
+	got, err := resolveSharedLibraryPath("darwin", envReturning(nil), existsAmong())
+	if err != nil {
+		t.Fatalf("resolveSharedLibraryPath: %v", err)
+	}
+	if got != "" {
+		t.Errorf("with no Homebrew install the loader should decide, got %q", got)
+	}
+}

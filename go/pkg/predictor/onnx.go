@@ -77,23 +77,135 @@ func checkContract(charsetLen, modelClasses, modelHeight int, modelPath string) 
 	return nil
 }
 
-// initEnvironment brings up the ONNX Runtime environment once per process.
+// ONNX Runtime version facts for this binding.
+//
+// go.mod pins github.com/yalue/onnxruntime_go, but that is the cgo *wrapper* —
+// the runtime itself is a shared library the host supplies, and no Go manifest
+// can pin it. The three constants below are what can be said about it, and
+// RuntimeVersion reports what was actually loaded.
+const (
+	// ORTAPIVersion is the C API revision the wrapper requests via
+	// OrtGetApiBase()->GetApi(). onnxruntime_go v1.11.0 vendors headers with
+	// ORT_API_VERSION 18. ONNX Runtime keeps GetApi backward compatible, so a
+	// newer library serves this request fine; an older one returns NULL and
+	// initialisation fails.
+	ORTAPIVersion = 18
+
+	// MinORTVersion is the oldest runtime that can answer GetApi(18) — the
+	// release that introduced API 18. Below this, loading fails outright.
+	MinORTVersion = "1.18.0"
+
+	// TestedORTVersion is what this binding is developed and tested against.
+	// It matches the Python and JS bindings, which pin onnxruntime 1.24.1.
+	TestedORTVersion = "1.24.1"
+)
+
+// SharedLibraryPathEnv names the shared library to load, overriding every
+// default. Set it to an absolute path to choose the runtime deliberately rather
+// than inheriting whatever the host happens to have.
+const SharedLibraryPathEnv = "MONOCR_ONNXRUNTIME_PATH"
+
+// homebrewLibPath is the Apple-silicon Homebrew install location, used as a
+// fallback on darwin when the environment variable is unset.
+const homebrewLibPath = "/opt/homebrew/lib/libonnxruntime.dylib"
+
+// loadedVersion is the version string of the ONNX Runtime that initEnvironment
+// actually loaded, recorded once so errors and reports can name it. Empty until
+// initialisation has been attempted.
+var loadedVersion string
+
+// RuntimeVersion returns the version of the ONNX Runtime shared library loaded
+// into this process, or "" if no attempt has been made yet.
+//
+// This is the only pin available to a Go binding: the version cannot be
+// declared up front, so it is read back and recorded. Include it in any report
+// of a result — it identifies the runtime that produced it.
+func RuntimeVersion() string { return loadedVersion }
+
+// resolveSharedLibraryPath picks the shared library to hand to the wrapper.
+// It returns "" to mean "say nothing and let the platform loader decide".
+//
+// Precedence is explicit request, then platform default, then the loader. An
+// explicit request that does not exist is an error rather than a silent
+// fallthrough: someone who set the variable is choosing a runtime, and quietly
+// loading a different one is the failure this whole change exists to prevent.
+func resolveSharedLibraryPath(goos string, getenv func(string) string, exists func(string) bool) (string, error) {
+	if p := getenv(SharedLibraryPathEnv); p != "" {
+		if !exists(p) {
+			return "", fmt.Errorf("%s is set to %q but no file is there", SharedLibraryPathEnv, p)
+		}
+		return p, nil
+	}
+	if goos == "darwin" && exists(homebrewLibPath) {
+		return homebrewLibPath, nil
+	}
+	return "", nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// initEnvironment brings up the ONNX Runtime environment once per process and
+// records which runtime version answered.
 func initEnvironment() error {
 	if onnxruntime_go.IsInitialized() {
+		// Something else in the process brought the runtime up — possibly with a
+		// different library than we would have chosen. Record what is actually
+		// loaded rather than reporting nothing.
+		if loadedVersion == "" {
+			loadedVersion = onnxruntime_go.GetVersion()
+		}
 		return nil
 	}
-	if runtime.GOOS == "darwin" {
-		// Homebrew's install location; harmless if absent, the runtime then
-		// falls back to whatever the loader can find.
-		libPath := "/opt/homebrew/lib/libonnxruntime.dylib"
-		if _, err := os.Stat(libPath); err == nil {
-			onnxruntime_go.SetSharedLibraryPath(libPath)
-		}
+
+	libPath, err := resolveSharedLibraryPath(runtime.GOOS, os.Getenv, fileExists)
+	if err != nil {
+		return err
 	}
+	if libPath != "" {
+		onnxruntime_go.SetSharedLibraryPath(libPath)
+	}
+
 	if err := onnxruntime_go.InitializeEnvironment(); err != nil {
-		return fmt.Errorf("failed to initialize ONNX Runtime: %v. Make sure libonnxruntime.dylib (macOS) or libonnxruntime.so (Linux) is in your library path", err)
+		// The wrapper records the library's version string before it checks
+		// whether GetApi succeeded, so on a too-old runtime this names the
+		// version that was rejected rather than leaving a bare error code.
+		if v := onnxruntime_go.GetVersion(); v != "" {
+			loadedVersion = v
+			return fmt.Errorf(
+				"failed to initialize ONNX Runtime: %v.\n"+
+					"  loaded: %s (from %s)\n"+
+					"  needed: >= %s, because this binding requests C API version %d\n"+
+					"  tested against: %s\n"+
+					"Set %s to an absolute path to choose a different library.",
+				err, v, describeSource(libPath), MinORTVersion, ORTAPIVersion,
+				TestedORTVersion, SharedLibraryPathEnv)
+		}
+		return fmt.Errorf(
+			"failed to initialize ONNX Runtime: %v.\n"+
+				"  looked for: %s\n"+
+				"Install ONNX Runtime %s (macOS: `brew install onnxruntime`), or set %s "+
+				"to the absolute path of libonnxruntime.dylib (macOS) / libonnxruntime.so (Linux).",
+			err, describeSource(libPath), TestedORTVersion, SharedLibraryPathEnv)
 	}
+
+	loadedVersion = onnxruntime_go.GetVersion()
 	return nil
+}
+
+// InitRuntime loads the ONNX Runtime shared library if it is not already
+// loaded, so RuntimeVersion can report which one answered. NewPredictor does
+// this itself; call it directly only to probe the runtime.
+func InitRuntime() error { return initEnvironment() }
+
+// describeSource names where the runtime was loaded from, for error messages.
+func describeSource(libPath string) string {
+	if libPath == "" {
+		return "the system library path"
+	}
+	return libPath
 }
 
 // staticDim returns d[i] when it is a fixed positive size, and 0 when the axis

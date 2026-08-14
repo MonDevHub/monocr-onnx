@@ -19,6 +19,19 @@ import (
 //go:embed charset.txt
 var embeddedCharset string
 
+// RuntimeVersion loads the ONNX Runtime shared library if it is not already
+// loaded and reports its version.
+//
+// go.mod pins the cgo wrapper, not the runtime — the shared library comes from
+// the host, so the version cannot be declared, only read back. Name it in any
+// report of a result: it identifies the runtime that produced the text.
+func RuntimeVersion() (string, error) {
+	if err := predictor.InitRuntime(); err != nil {
+		return "", err
+	}
+	return predictor.RuntimeVersion(), nil
+}
+
 // NormalizeCharset strips only line terminators.
 //
 // The charset's first character really is U+0020 — a space is one of the

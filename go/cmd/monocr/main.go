@@ -7,6 +7,7 @@ import (
 
 	"github.com/MonDevHub/monocr-onnx/go"
 	"github.com/MonDevHub/monocr-onnx/go/pkg/model"
+	"github.com/MonDevHub/monocr-onnx/go/pkg/predictor"
 	"github.com/spf13/cobra"
 )
 
@@ -93,7 +94,25 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(imageCmd, pdfCmd, downloadCmd, batchCmd)
+	var runtimeCmd = &cobra.Command{
+		Use:   "runtime",
+		Short: "Report the ONNX Runtime version this binding loaded",
+		Long: "Load the ONNX Runtime shared library and print its version.\n\n" +
+			"The runtime is supplied by the host, not by go.mod, so this is the only\n" +
+			"way to know which one a result came from. Set " + predictor.SharedLibraryPathEnv +
+			"\nto an absolute path to choose a specific library.",
+		Run: func(cmd *cobra.Command, args []string) {
+			version, err := monocr.RuntimeVersion()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("onnxruntime %s (tested against %s, requires >= %s)\n",
+				version, predictor.TestedORTVersion, predictor.MinORTVersion)
+		},
+	}
+
+	rootCmd.AddCommand(imageCmd, pdfCmd, downloadCmd, batchCmd, runtimeCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

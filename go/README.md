@@ -83,12 +83,64 @@ The charset compiled into the package, normalized. Its first character is
 U+0020 — a space is one of the classes the model emits, so trimming it with
 `strings.TrimSpace` shifts every index in the decode by one.
 
-## Prerequisites
+## ONNX Runtime
 
-The Go SDK requires the ONNX Runtime shared library (`libonnxruntime.so` or
-equivalent) to be present in the system's library path.
-- **macOS**: `brew install onnxruntime`
-- **Linux**: Download and add to `LD_LIBRARY_PATH`.
+The SDK needs the ONNX Runtime **shared library** at run time. `go.mod` pins
+`github.com/yalue/onnxruntime_go`, but that is the cgo wrapper — the runtime
+itself comes from the host, and no Go manifest can pin it. So the version is
+stated here and read back at load time instead.
+
+| | version |
+|---|---|
+| Developed and tested against | **1.24.1** — same version the Python and JS bindings pin |
+| Minimum | **1.18.0** |
+| C API version requested | 18 (`ORT_API_VERSION` vendored by `onnxruntime_go` v1.11.0) |
+
+The wrapper asks the library for C API version 18. ONNX Runtime keeps that call
+backward compatible, so anything from 1.18.0 up answers it; older libraries
+return nothing and the load fails. Newer libraries work but expose no more than
+API 18 to this binding.
+
+### Installing it
+
+- **macOS**: `brew install onnxruntime` — installs to
+  `/opt/homebrew/lib/libonnxruntime.dylib`, which the SDK finds on its own.
+- **Linux**: download the release matching the table above and put it on
+  `LD_LIBRARY_PATH`.
+
+### Choosing a specific library
+
+Set `MONOCR_ONNXRUNTIME_PATH` to an absolute path to override every default:
+
+```bash
+MONOCR_ONNXRUNTIME_PATH=/opt/onnxruntime-1.24.1/lib/libonnxruntime.dylib monocr image page.jpg
+```
+
+Resolution order is: `MONOCR_ONNXRUNTIME_PATH`, then the Homebrew path on macOS,
+then the platform loader. If the variable is set but no file is there, the SDK
+fails with that message rather than quietly loading something else — the point
+of setting it is to choose, and a silent substitution defeats that.
+
+### Knowing what actually ran
+
+The loaded version is recorded at initialisation and readable, so a result can
+name the runtime that produced it:
+
+```bash
+$ monocr runtime
+onnxruntime 1.24.1 (tested against 1.24.1, requires >= 1.18.0)
+```
+
+```go
+version, err := monocr.RuntimeVersion()
+```
+
+An initialisation failure reports the same detail — which library was loaded,
+from where, and what was required — instead of a bare error code.
+
+### PDF support
+
+`ReadPDF` also needs `pdftoppm` from poppler-utils.
 
 ## Maintenance
 
