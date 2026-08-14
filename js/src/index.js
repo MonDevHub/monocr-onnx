@@ -1,8 +1,17 @@
 const MonOCR = require('./monocr');
+const { ModelContractError } = require('./monocr');
+const ModelManager = require('./model-manager');
+const { MODEL_REVISION } = require('./model-manager');
 const { calculateAccuracy } = require('./utils');
 
 module.exports = {
     MonOCR,
+    ModelManager,
+    // Thrown at load when the model and the charset disagree. Catch it if you
+    // would rather degrade than decode with a mismatched vocabulary; do not
+    // swallow it, because what it prevents is confident wrong text.
+    ModelContractError,
+    MODEL_REVISION,
     calculateAccuracy,
     read_image,
     read_images,

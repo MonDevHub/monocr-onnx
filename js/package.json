@@ -6,6 +6,13 @@
   "bin": {
     "monocr": "bin/monocr.js"
   },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "download": "node bin/monocr.js download"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MonDevHub/monocr-onnx.git",
