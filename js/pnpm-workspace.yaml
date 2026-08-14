@@ -1,3 +1,5 @@
+allowBuilds:
+  onnxruntime-node: true
 onlyBuiltDependencies:
   - canvas
   - onnxruntime-node
