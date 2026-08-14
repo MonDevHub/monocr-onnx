@@ -11,7 +11,7 @@
     "download": "node bin/monocr.js download"
   },
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=20.3.0"
   },
   "repository": {
     "type": "git",
