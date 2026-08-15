@@ -3,30 +3,77 @@
 [![MonDevHub](https://img.shields.io/badge/Maintained%20by-MonDevHub-blue.svg)](https://github.com/MonDevHub)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**MonOCR** is a high-performance, production-ready Optical Character Recognition (OCR) engine specifically optimized for the Mon language (mnw). Built on **ONNX Runtime**, it provides a lightning-fast, unified API for text recognition across any platform.
+On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
+(mnw), running on ONNX Runtime. Images never leave the machine.
 
-## Why MonOCR?
+> [!NOTE]
+> Mon is classified as **vulnerable** in [UNESCO's Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
+>
+> This project digitises the Mon script, so that later work — system
+> integrations, corpora, language models — has something to build on.
 
-- **Production Accuracy**: Aligned with the latest high-precision models (128px vertical resolution).
-- **Universal SDK**: Native, high-performance implementations for JavaScript, Python, Go, and Rust.
-- **Robust Segmentation**: Intelligent line-detection with adaptive thresholding and relative padding for varied document layouts.
-- **Smart Model Management**: Zero-config setup; models are automatically fetched and cached from [Hugging Face](https://huggingface.co/janakhpon/monocr).
+## Overview
 
-## Supported Platforms
+This repository is the engine and its four bindings: Python, JavaScript
+(Node.js), Go, and Rust. Each loads the same ONNX graph and the same 315-character
+charset, pinned to one Hugging Face revision, and each decodes CTC output the same
+way.
 
-| SDK                      | Directory            | Registry/Source                                            | Status        |
-| :----------------------- | :------------------- | :--------------------------------------------------------- | :------------ |
-| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | Production    |
-| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Production    |
-| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | Production    |
-| **Rust**                 | [`rust/`](rust/)     | [monocr-onnx](rust/)                                       | Production    |
+They are checked against each other rather than assumed to agree. The current
+result is in [docs/CROSS_BINDING_PARITY.md](docs/CROSS_BINDING_PARITY.md):
+**identical text on 5 of 7 images**, with both disagreements a single trailing
+character traceable to a difference in image resampling. That is agreement, not
+accuracy — no binding has been scored against ground truth here.
 
-## Quick Installation
+> [!TIP]
+> The web and mobile apps cap uploads at 50 MB and 20 MB. This SDK has no such
+> limit; use it directly for larger files.
+
+## Architecture
+
+```
+Image (File/Buffer)
+  LineSegmenter      → horizontal projection profile → List<LineSegment>
+  ImagePreprocessor  → crop + scale + normalize [-1.0, 1.0]
+  MonOcrEngine       → ONNX Runtime Session (monocr.onnx)
+  CtcDecoder         → greedy CTC decode → String
+```
+
+### Model specification
+
+| Attribute    | Specification                  |
+| ------------ | ------------------------------ |
+| Architecture | MobileNetV3 + BiLSTM-384 + CTC |
+| Precision    | FP32 (ONNX)                    |
+| Parameters   | ~6.6M                          |
+| Input        | 128 × Variable (H × W)         |
+| Charset      | 315 characters, 316 classes    |
+| Asset Size   | ~25 MB                         |
+
+The model is pinned to revision `a51be11` of
+[`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), not to `main`. Each
+binding ships the matching charset and refuses to decode if the two disagree: CTC
+reserves index 0 for the blank, so a model over N characters must emit N + 1
+classes. Without that check a mismatch returns well-formed Mon text that is wrong,
+with no error and no lookup miss.
+
+## Supported platforms
+
+| SDK                      | Directory            | Registry/Source                                            | Status     |
+| :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | Published  |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Published  |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | Published  |
+| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | Source only |
+
+## Installation
 
 ### Python
 
 ```bash
 pip install monocr-onnx
+# or
+uv add monocr-onnx
 ```
 
 ### Node.js
@@ -41,34 +88,48 @@ npm install monocr
 go get github.com/MonDevHub/monocr-onnx/go
 ```
 
-## Usage Example (Python)
+## Usage (Python)
 
 ```python
 from monocr_onnx import MonOCR
 
-# Initialize engine (downloads model automatically on first run)
+# Downloads the pinned model on first run and caches it by revision.
 engine = MonOCR()
 
-# Simple page-level OCR
+# Page-level: segments into lines, then reads each one.
 text = engine.predict("scanned_document.jpg")
-print(f"Recognized Text:\n{text}")
+print(text)
 
-# Or process specific lines if you have your own layout analysis
+# Line-level: skips segmentation, for a crop you have already cut.
 line_text = engine.predict_line("single_line_crop.png")
 ```
 
-## Project Structure
+## Project structure
 
-- `python/`: Source code for the Python package.
-- `js/`: Source code for the Node.js package (uses `sharp` for image processing).
-- `go/`: Source code for the Go module.
-- `rust/`: Source code for the Rust crate.
-- `models/`: (Reference) Model architecture and conversion scripts.
+```
+monocr-onnx/
+├── python/           # Python package & CLI
+├── js/               # Node.js package (uses sharp)
+├── go/               # Go module
+├── rust/             # Rust crate
+├── src/              # shared engine sources
+├── scripts/          # build and conversion scripts
+├── examples/         # runnable per-language examples
+├── data/             # test images and fixtures
+└── docs/             # parity results and design notes
+```
 
-## Model Hub
+## Ecosystem
 
-The underlying weights and multi-format exports (ONNX, MLPackage, PyTorch) are hosted on the [Hugging Face Model Hub](https://huggingface.co/janakhpon/monocr).
+- **[MonOCR Web](https://github.com/MonDevHub/monocr-web)** — in-browser OCR
+- **[MonOCR Android](https://github.com/MonDevHub/ocr-android)** — Jetpack Compose
+- **[MonOCR iOS](https://github.com/MonDevHub/ocr-ios)** — SwiftUI
+
+## Resources
+
+- [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML.
+  The TFLite export was removed at revision `a51be11`.
 
 ## License
 
-MIT License. Developed and maintained by the **MonDevHub** team.
+MIT
