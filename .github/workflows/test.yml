@@ -59,6 +59,11 @@ jobs:
       # postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
         uses: pnpm/action-setup@v4
+        with:
+          # There is no package.json at the repo root — this tree ships four
+          # bindings and the JS one lives in js/. Without this, action-setup
+          # looks for `packageManager` at the root, finds no manifest and fails.
+          package_json_file: js/package.json
       - run: |
           cd js
           pnpm install --frozen-lockfile
