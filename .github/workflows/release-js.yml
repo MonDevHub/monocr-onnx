@@ -49,8 +49,6 @@ jobs:
 
       # The lockfile must resolve before anything is published from this tree.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - name: Install from the committed lockfile
         run: |
           cd js

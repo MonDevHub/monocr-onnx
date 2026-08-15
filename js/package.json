@@ -13,6 +13,7 @@
   "engines": {
     "node": ">=20.9.0"
   },
+  "packageManager": "pnpm@11.20.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MonDevHub/monocr-onnx.git",
@@ -47,9 +48,6 @@
     "sharp": "^0.35.3"
   },
   "pnpm": {
-    "overrides": {
-      "sharp": "^0.35.3"
-    },
     "onlyBuiltDependencies": [
       "sharp",
       "onnxruntime-node"

@@ -59,8 +59,6 @@ jobs:
       # postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - run: |
           cd js
           pnpm install --frozen-lockfile
