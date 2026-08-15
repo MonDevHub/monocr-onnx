@@ -1,0 +1,96 @@
+# Publishes the JS binding to npm on a `js/v*` tag.
+#
+# Trusted publishing (OIDC), so there is no NPM_TOKEN to store, leak or rotate.
+# `id-token: write` is what mints the short-lived credential, and it is also what
+# lets npm attach a provenance attestation linking the published tarball to this
+# workflow run and this commit.
+#
+# The tag is namespaced `js/v*` because this repository ships four bindings from
+# one tree and the Go module already claims `go/v*`. A bare `v*` would be
+# ambiguous about which binding is being released.
+#
+# THE TESTS RUN BEFORE THE PUBLISH, AND THAT IS THE POINT. The sibling `monocr`
+# repository had a release workflow that built and published without running
+# anything, which is how a decoder that mapped every index to the wrong
+# character reached PyPI and sat there.
+name: release-js
+
+on:
+  push:
+    tags:
+      - "js/v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm 11.5.1+ is required for trusted publishing; the runner's bundled npm
+      # can lag. Pin explicitly rather than inheriting whatever the image has.
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@latest
+
+      # No install needed: the suite uses a fake session and src/ requires its
+      # native dependencies lazily. Same reasoning as the CI workflow.
+      - name: Run tests
+        run: |
+          cd js
+          node --test test/*.test.js
+
+      # The lockfile must resolve before anything is published from this tree.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Install from the committed lockfile
+        run: |
+          cd js
+          pnpm install --frozen-lockfile
+
+      # A tag that disagrees with package.json publishes the wrong number under
+      # the right name, and npm has no undo.
+      - name: Verify the tag matches package.json
+        run: |
+          cd js
+          TAG="${GITHUB_REF_NAME#js/v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag js/v$TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
+          echo "tag and package.json agree on $PKG"
+
+      # The charset and the pinned revision are one contract. Publishing a
+      # tarball whose bundled charset does not match the revision it pins is the
+      # defect this whole binding exists to make impossible.
+      - name: Verify the bundled charset matches the pinned revision
+        run: |
+          cd js
+          node -e "
+            const fs = require('fs');
+            const { MODEL_REVISION } = require('./src/model-manager');
+            const charset = fs.readFileSync('src/charset.txt', 'utf-8').replace(/[\r\n]+$/, '');
+            if (charset.length !== 276) {
+              console.error('bundled charset is ' + charset.length + ' characters, expected 276');
+              process.exit(1);
+            }
+            if (charset[0] !== ' ') {
+              console.error('charset must start with U+0020');
+              process.exit(1);
+            }
+            console.log('charset ' + charset.length + ' chars, pinned at ' + MODEL_REVISION);
+          "
+
+      - name: Publish
+        run: |
+          cd js
+          npm publish --provenance --access public
