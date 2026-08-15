@@ -44,14 +44,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install dependencies
-        run: |
-          cd js
-          npm install
+      # Tests first, and with no dependencies installed. They use a fake
+      # session and never run inference, and src/ requires onnxruntime-node
+      # and sharp lazily, so the suite is pure logic. Running it before any
+      # install means a dependency problem cannot be mistaken for a test
+      # failure, and a test failure cannot be masked by one.
       - name: Run tests
         run: |
           cd js
-          npm test
+          node --test test/*.test.js
+      # Separately: the committed lockfile must still resolve. js/ has
+      # pnpm-lock.yaml and no package-lock.json, so `npm install` ignored it,
+      # dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's network
+      # postinstall unsandboxed. That is what failed here on 2026-08-15.
+      - name: Install dependencies from the committed lockfile
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - run: |
+          cd js
+          pnpm install --frozen-lockfile
 
   rust-test:
     runs-on: ubuntu-latest

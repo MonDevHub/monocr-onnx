@@ -1,5 +1,20 @@
-const ort = require('onnxruntime-node');
-const sharp = require('sharp');
+// onnxruntime-node and sharp are native modules: loading them costs a dlopen
+// and, on a fresh install, a postinstall download. They are required lazily so
+// that importing this package -- and running its test suite, which uses a fake
+// session and never touches either -- does not depend on them being built.
+// CI installs no native deps for the js job as a result.
+let ort = null;
+function onnxRuntime() {
+    if (ort === null) ort = require('onnxruntime-node');
+    return ort;
+}
+
+let sharp = null;
+function imaging() {
+    if (sharp === null) sharp = require('sharp');
+    return sharp;
+}
+
 const fs = require('fs');
 const path = require('path');
 const LineSegmenter = require('./segmenter');
@@ -127,7 +142,7 @@ class MonOCR {
      * session without a model file or a network.
      */
     async _loadSession(modelPath) {
-        return ort.InferenceSession.create(modelPath);
+        return onnxRuntime().InferenceSession.create(modelPath);
     }
 
     /**
@@ -185,7 +200,7 @@ class MonOCR {
         if (typeof imageSource.metadata === 'function') {
             sharpImg = imageSource;
         } else {
-            sharpImg = sharp(imageSource);
+            sharpImg = imaging()(imageSource);
         }
         const metadata = await sharpImg.metadata();
 
@@ -224,7 +239,7 @@ class MonOCR {
             }
         }
 
-        return new ort.Tensor('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]);
+        return new (onnxRuntime().Tensor)('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]);
     }
 
     /**
