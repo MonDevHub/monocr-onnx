@@ -71,7 +71,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          # Matches go/go.mod, which requires 1.23. This read "1.21" until
+          # 2026-08-15, so CI compiled against a toolchain the module rejects.
+          go-version: "1.23"
       - name: Run tests
         run: |
           cd go

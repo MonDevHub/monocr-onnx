@@ -248,6 +248,31 @@ class MonOCR:
     def predict_page(self, img_path):
         """
         Segment page into lines and predict each line.
+
+        Each line goes to the model whole. A line wider than the canvas after
+        being scaled to the model height is squeezed horizontally rather than cut
+        into canvas-width tiles — see `preprocess`, and
+        `test_wide_lines_are_squeezed_not_truncated`.
+
+        **This is deliberate, and it is the better path for the model this
+        package downloads.** mon_OCR's page reader tiles instead, and on its
+        unpublished v3.5 network tiling is a large win. It is a loss on v2, which
+        is what revision a51be11 serves and therefore what every install of this
+        package runs. MEASURED 2026-08-15 with one harness over 240 rendered Mon
+        lines wide enough to need the choice, median 3 tiles at the model height,
+        restricted to the 315 characters v2 can emit, swapping only the graph:
+
+            v2     squeezed 0.0676   tiled 0.0758    CER, tiling worse
+            v3.5   squeezed 0.1434   tiled 0.0795    CER, tiling better
+
+        On v2 the paired difference is -0.0082, 95% CI [-0.0132, -0.0034] over
+        20,000 bootstrap resamples; tiling was worse on 104 of 240 lines and
+        better on 59. Rendered lines, not photographed pages, so it is a preview
+        rather than an evaluation — but the two arms differ only in this choice.
+
+        If this package is ever pointed at a v3.5 or later model, re-measure
+        before keeping the squeeze; the direction is a property of the network,
+        not of the method.
         """
         if isinstance(img_path, (str, Path)):
             img = Image.open(img_path)

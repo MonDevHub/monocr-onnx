@@ -71,12 +71,20 @@ with no error and no lookup miss.
 
 ## Supported platforms
 
-| SDK                      | Directory            | Registry/Source                                            | Status     |
-| :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- |
-| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | Published  |
-| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Published  |
-| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | Published  |
-| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | Source only |
+| SDK                      | Directory            | Registry/Source                                            | Published  | In this tree |
+| :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- | :----------- |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.0        |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.0        |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.1.1     | 0.2.0        |
+| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.2.0     |
+
+**0.2.0 is not released.** The table used to read "Published" in every row, which
+was true of the *binding* and not of the version beside it. Registry state
+verified 2026-08-15 against pypi.org, registry.npmjs.org and proxy.golang.org.
+
+This matters more than a version number usually does: the published 0.1.x
+releases are the ones carrying the 225-character charset defect that the commits
+in this tree fix. Installing from a registry today gets the broken charset.
 
 ## Installation
 
@@ -134,9 +142,16 @@ monocr-onnx/
 
 ## Ecosystem
 
-- **[MonOCR Web](https://github.com/MonDevHub/monocr-web)** — in-browser OCR
-- **[MonOCR Android](https://github.com/MonDevHub/ocr-android)** — Jetpack Compose
-- **[MonOCR iOS](https://github.com/MonDevHub/ocr-ios)** — SwiftUI
+All three apps now live in one repository,
+[MonDevHub/monocr](https://github.com/MonDevHub/monocr):
+
+- `apps/web` — in-browser OCR, SvelteKit
+- `apps/android` — Jetpack Compose
+- `apps/ios` — SwiftUI
+
+The former `MonDevHub/ocr-android` and `MonDevHub/ocr-ios` links were listed here
+until 2026-08-15 and both return 404; `MonDevHub/monocr-web` still resolves but
+has not been pushed to since the web app moved into the monorepo.
 
 ## Resources
 
