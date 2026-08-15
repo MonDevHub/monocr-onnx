@@ -15,7 +15,7 @@ On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 ## Overview
 
 This repository is the engine and its four bindings: Python, JavaScript
-(Node.js), Go, and Rust. Each loads the same ONNX graph and the same 315-character
+(Node.js), Go, and Rust. Each loads the same ONNX graph and the same 276-character
 charset, pinned to one Hugging Face revision, and each decodes CTC output the same
 way.
 
@@ -55,14 +55,14 @@ appear nowhere here.
 
 | Attribute    | Specification                  |
 | ------------ | ------------------------------ |
-| Architecture | MobileNetV3 + BiLSTM-384 + CTC |
+| Architecture | MobileNetV3-Large + SE + 2×BiLSTM-512 + attention + CTC |
 | Precision    | FP32 (ONNX)                    |
-| Parameters   | ~6.6M                          |
-| Input        | 128 × Variable (H × W)         |
-| Charset      | 315 characters, 316 classes    |
-| Asset Size   | 26.3 MB                        |
+| Parameters   | 11.55M                         |
+| Input        | 160 × 1024 (H × W), both static |
+| Charset      | 276 characters, 277 classes    |
+| Asset Size   | 46.2 MB                        |
 
-The model is pinned to revision `a51be11` of
+The model is pinned to revision `d3d9d5e` of
 [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), not to `main`. Each
 binding ships the matching charset and refuses to decode if the two disagree: CTC
 reserves index 0 for the blank, so a model over N characters must emit N + 1
@@ -156,7 +156,7 @@ has not been pushed to since the web app moved into the monorepo.
 ## Resources
 
 - [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML.
-  The TFLite export was removed at revision `a51be11`.
+  The TFLite export was removed at revision `d3d9d5e`.
 
 ## License
 

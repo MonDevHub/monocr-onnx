@@ -20,7 +20,7 @@ import (
 // they drift apart the model still runs and still returns text — it is just the
 // wrong text, with no error anywhere. So this is declared here, checked against
 // the graph in NewPredictor, and a disagreement refuses to load.
-const ExpectedInputHeight = 128
+const ExpectedInputHeight = 160
 
 // DefaultInputWidth is the padded canvas width fed to the model. The model's
 // width axis is dynamic; this is the binding's choice, not a model constraint.

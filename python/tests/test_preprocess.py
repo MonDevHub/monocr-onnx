@@ -49,7 +49,7 @@ def test_tensor_is_padded_to_the_full_canvas(make_ocr):
     """
     ocr = make_ocr()
     arr = ocr.preprocess(Image.new("L", (100, 50), color=0))
-    assert arr.shape == (1, 1, 128, 1024)
+    assert arr.shape == (1, 1, 160, 1024)
     assert arr.dtype == np.float32
 
 
@@ -60,7 +60,7 @@ def test_padding_is_white_not_black(make_ocr):
     """
     ocr = make_ocr()
     arr = ocr.preprocess(Image.new("L", (100, 50), color=0))
-    scaled_width = int(100 * (128 / 50))
+    scaled_width = int(100 * (160 / 50))
     assert np.allclose(arr[0, 0, :, scaled_width:], 1.0)
 
 
@@ -68,7 +68,7 @@ def test_aspect_ratio_is_preserved_below_the_canvas_width(make_ocr):
     ocr = make_ocr()
     arr = ocr.preprocess(Image.new("L", (200, 40), color=0))
     ink_columns = int(np.count_nonzero(arr[0, 0, 0, :] < 0))
-    assert ink_columns == pytest.approx(200 * (128 / 40), abs=1)
+    assert ink_columns == pytest.approx(200 * (160 / 40), abs=1)
 
 
 def test_wide_lines_are_squeezed_not_truncated(make_ocr):
@@ -86,13 +86,13 @@ def test_dimensions_come_from_the_graph_not_a_constant(make_ocr):
     """A model traced at a static width must be fed that width."""
     ocr = make_ocr(width=512)
     assert ocr.input_width == 512
-    assert ocr.preprocess(Image.new("L", (100, 50))).shape == (1, 1, 128, 512)
+    assert ocr.preprocess(Image.new("L", (100, 50))).shape == (1, 1, 160, 512)
 
 
 def test_rgb_input_is_converted_to_single_channel(make_ocr):
     ocr = make_ocr()
     arr = ocr.preprocess(Image.new("RGB", (100, 50), color=(255, 255, 255)))
-    assert arr.shape == (1, 1, 128, 1024)
+    assert arr.shape == (1, 1, 160, 1024)
 
 
 def test_degenerate_image_returns_none(make_ocr):

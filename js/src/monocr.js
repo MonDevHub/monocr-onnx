@@ -118,7 +118,7 @@ class MonOCR {
         // Metadata. 128 is the input height of the pinned v2 network
         // (MobileNetV3-Large + BiLSTM + CTC, 315-character charset). It is not a
         // free parameter: `init()` refuses to run if the model disagrees.
-        this.targetHeight = 128;
+        this.targetHeight = 160;
         this.targetWidth = 1024;
     }
 

@@ -7,20 +7,20 @@ const MonOCR = require('../src/monocr');
 /**
  * The pinned artifact these tests describe.
  *
- * Read off the real model at `janakhpon/monocr@a51be11` with:
+ * Read off the real model at `janakhpon/monocr@d3d9d5e` with:
  *
  *   node -e "require('onnxruntime-node').InferenceSession.create('monocr.onnx')
  *     .then(s => console.log(JSON.stringify([s.inputMetadata, s.outputMetadata])))"
  *
- *   input  float32 [1, 1, 128, "width"]
- *   logits float32 [1, "sequence", 316]
+ *   input  float32 [1, 1, 160, 1024]
+ *   logits float32 [1, "sequence", 277]
  */
 const PINNED = {
-    revision: 'a51be11',
-    inputHeight: 128,
-    numClasses: 316,
-    numChars: 315,
-    charsetBytes: 674,
+    revision: 'd3d9d5e',
+    inputHeight: 160,
+    numClasses: 277,
+    numChars: 276,
+    charsetBytes: 556,
 };
 
 /**

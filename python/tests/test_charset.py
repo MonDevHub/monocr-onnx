@@ -2,7 +2,7 @@
 The charset is an index-ordered list, so its identity is its exact bytes.
 
 Two ways it went wrong in 0.1.0, both silent:
-  * the bundled file was a 225-character subset of the model's 315-character
+  * the bundled file was a 225-character subset of the model's then-315-character
     output space, aligned only for the first 95 ASCII entries;
   * it was read with a bare ``.strip()``, which eats the leading U+0020 and
     shifts every index by one.
@@ -34,9 +34,13 @@ def test_bundled_charset_is_byte_identical_to_the_pinned_remote_copy():
     assert digest == ModelManager._SHA256[ModelManager.CHARSET_FILENAME]
 
 
-def test_bundled_charset_has_315_characters():
-    """316 model classes = 315 characters + the CTC blank at index 0."""
-    assert len(_read_charset(bundled_text())) == 315
+def test_bundled_charset_has_276_characters():
+    """277 model classes = 276 characters + the CTC blank at index 0.
+
+    315 until 2026-08-15, when the pinned revision moved from the v2 network
+    to v3.5. The number here and MODEL_REVISION move together or not at all.
+    """
+    assert len(_read_charset(bundled_text())) == 276
 
 
 def test_charset_begins_with_a_space():
@@ -71,8 +75,8 @@ def test_charset_is_not_the_old_225_character_subset():
     assert charset[95] != "က"  # က
 
 
-@pytest.mark.parametrize("index", [0, 94, 95, 314])
+@pytest.mark.parametrize("index", [0, 94, 95, 275])
 def test_charset_indices_are_stable(index):
     """Guards against a re-ordered charset, which would shift every decode."""
-    expected = {0: " ", 94: "~", 95: "£", 314: "−"}
+    expected = {0: " ", 94: "~", 95: "£", 275: "−"}
     assert _read_charset(bundled_text())[index] == expected[index]

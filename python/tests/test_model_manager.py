@@ -4,7 +4,8 @@ revision change.
 
 0.1.0 fetched ``.../resolve/main/onnx/monocr.onnx`` and guarded the cache with
 ``path.exists()``. ``main`` has already moved: the artifact went from a 57.7MB /
-H=64 / 225-class network to a 26.4MB / H=128 / 316-class one under the same
+H=64 / 225-class network to a 26.4MB / H=128 / 316-class one, then to a
+46.2MB / H=160 / 277-class one, all under the same
 filename, so every existing install kept the old weights forever.
 """
 

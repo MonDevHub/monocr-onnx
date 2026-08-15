@@ -15,7 +15,7 @@
 set -euo pipefail
 
 DEST=${1:-"model"}
-REVISION="a51be11"
+REVISION="d3d9d5e"
 BASE_URL="https://huggingface.co/janakhpon/monocr/resolve/$REVISION"
 
 echo "Downloading MonOCR model at $REVISION to $DEST..."
@@ -27,8 +27,8 @@ curl -fL "$BASE_URL/onnx/monocr.onnx"  -o "$DEST/monocr.onnx"
 curl -fL "$BASE_URL/onnx/charset.txt"  -o "$DEST/charset.txt"
 
 chars=$(python3 -c "import sys,pathlib; print(len(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').rstrip('\n')))" "$DEST/charset.txt")
-if [ "$chars" -ne 315 ]; then
-    echo "charset.txt has $chars characters, expected 315 at $REVISION." >&2
+if [ "$chars" -ne 276 ]; then
+    echo "charset.txt has $chars characters, expected 276 at $REVISION." >&2
     echo "The revision moved or the download is truncated. Refusing to continue." >&2
     exit 1
 fi

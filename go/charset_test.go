@@ -10,8 +10,9 @@ import (
 )
 
 // The pinned revision (model.ModelRevision) exports 316 output classes:
-// 315 characters plus the CTC blank at index 0.
-const pinnedCharsetLen = 315
+// 276 characters plus the CTC blank at index 0. Was 315 until revision
+// d3d9d5e moved the pin from the v2 network to v3.5.
+const pinnedCharsetLen = 276
 
 func TestDefaultCharsetMatchesPinnedModel(t *testing.T) {
 	got := len([]rune(DefaultCharset()))
@@ -21,7 +22,7 @@ func TestDefaultCharsetMatchesPinnedModel(t *testing.T) {
 	}
 }
 
-// The charset's first character is U+0020. TrimSpace eats it, dropping 315 to
+// The charset's first character is U+0020. TrimSpace eats it, dropping 276 to
 // 314 and shifting every index in the decode by one — the model still runs and
 // still returns text, just the wrong text.
 func TestDefaultCharsetKeepsLeadingSpace(t *testing.T) {

@@ -14,18 +14,21 @@ from .segmenter import LineSegmenter
 # traced at. It is checked against the ONNX graph at load; the graph wins for
 # preprocessing when it declares a static height.
 #
-# This is the v2 network: H=128, 315 characters, MobileNetV3-Large + BiLSTM +
-# CTC. It is NOT the network in the mon_OCR training repo, which is v3.5 at
-# H=160 with a different charset. Two different models. Copying mon_OCR's
-# numbers here would break this binding, which is why the expectation is
+# This is the v3.5 network: H=160, 276 characters, 277 classes,
+# MobileNetV3-Large + SE + 2xBiLSTM + attention + CTC. It replaced v2 (H=128,
+# 315 characters) at revision d3d9d5e on 2026-08-15. Anything still pinned to
+# a51be11 gets v2 and must keep the old numbers — the two are different
+# networks, not two versions of one, which is why the expectation is
 # cross-checked against the artifact rather than trusted on its own.
-EXPECTED_INPUT_HEIGHT = 128
+EXPECTED_INPUT_HEIGHT = 160
 
-# Width of the training canvas. The exported graph leaves the width axis
-# dynamic, so nothing forces this at runtime — but the model was trained on
-# lines scaled to the input height and right-padded with white to this width,
-# and it is what the JS binding feeds. Used only when the graph does not
-# declare a static width.
+# Width of the training canvas, and — since v3.5 — of the graph itself.
+#
+# v2 left the width axis dynamic, so a crop of any width could be fed directly.
+# v3.5 declares a static 1024 and accepts nothing else: attention fixes the
+# sequence length when the graph is traced, so a wider declaration would be a
+# promise the artifact cannot keep. Resize and pad to this width before calling.
+# Used only when the graph does not declare a static width.
 DEFAULT_INPUT_WIDTH = 1024
 
 
@@ -45,8 +48,10 @@ def _read_charset(text):
 
     ``.strip("\\n\\r")`` and not ``.strip()``. The charset really does begin
     with U+0020 — a space is a character the model predicts — and a bare strip
-    eats it, dropping 315 characters to 314 and shifting every index in
+    eats it, dropping 276 characters to 275 and shifting every index in
     ``idx2char`` by one. Every decoded glyph then comes out as its neighbour.
+    The sibling ``monocr`` package shipped exactly this defect: measured
+    2026-08-15, all 315 of its decodable indices returned the wrong character.
     """
     return text.strip("\n\r")
 
@@ -254,25 +259,23 @@ class MonOCR:
         into canvas-width tiles — see `preprocess`, and
         `test_wide_lines_are_squeezed_not_truncated`.
 
-        **This is deliberate, and it is the better path for the model this
-        package downloads.** mon_OCR's page reader tiles instead, and on its
-        unpublished v3.5 network tiling is a large win. It is a loss on v2, which
-        is what revision a51be11 serves and therefore what every install of this
-        package runs. MEASURED 2026-08-15 with one harness over 240 rendered Mon
-        lines wide enough to need the choice, median 3 tiles at the model height,
-        restricted to the 315 characters v2 can emit, swapping only the graph:
+        **This is now the worse path for the model this package pins, and it
+        is a known gap rather than a decision.** MEASURED 2026-08-15 with one
+        harness over 240 rendered Mon lines wide enough to need the choice,
+        median 3 model windows each, swapping only the graph:
 
-            v2     squeezed 0.0676   tiled 0.0758    CER, tiling worse
+            v2     squeezed 0.0676   tiled 0.0758    CER, squeezing better
             v3.5   squeezed 0.1434   tiled 0.0795    CER, tiling better
 
-        On v2 the paired difference is -0.0082, 95% CI [-0.0132, -0.0034] over
-        20,000 bootstrap resamples; tiling was worse on 104 of 240 lines and
-        better on 59. Rendered lines, not photographed pages, so it is a preview
-        rather than an evaluation — but the two arms differ only in this choice.
+        The direction is a property of the network, not of the method. Squeezing
+        was right while this package pinned v2 at a51be11; since the pin moved to
+        v3.5 at d3d9d5e, **wide lines should be cut into canvas-width tiles at
+        whitespace columns and joined**, which is what mon_OCR's `read_page`
+        does. Until that lands here, a page whose lines exceed 1024px after
+        scaling to height 160 reads worse than it needs to.
 
-        If this package is ever pointed at a v3.5 or later model, re-measure
-        before keeping the squeeze; the direction is a property of the network,
-        not of the method.
+        Rendered lines rather than photographed pages, so this is a preview and
+        not an evaluation; the two arms differ only in the choice under test.
         """
         if isinstance(img_path, (str, Path)):
             img = Image.open(img_path)

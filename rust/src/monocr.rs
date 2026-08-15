@@ -28,7 +28,7 @@ const DEFAULT_CHARSET: &str = include_str!("charset.txt");
 /// they drift apart the model still runs and still returns text — it is just
 /// the wrong text, with no error anywhere. So this is declared here, checked
 /// against the graph in [`MonOcr::new`], and a disagreement refuses to load.
-pub const EXPECTED_INPUT_HEIGHT: u32 = 128;
+pub const EXPECTED_INPUT_HEIGHT: u32 = 160;
 
 /// Padded canvas width fed to the model. The model's width axis is dynamic;
 /// this is the binding's choice, not a model constraint.
@@ -922,7 +922,7 @@ mod tests {
 
     /// The pinned model: input [1, 1, 128, width], output [1, sequence, 316].
     const PINNED_CLASSES: usize = 316;
-    const PINNED_CHAR_LEN: usize = 315;
+    const PINNED_CHAR_LEN: usize = 276;
 
     fn charset_of_len(n: usize) -> Vec<char> {
         // Leading U+0020, as the real charset has.

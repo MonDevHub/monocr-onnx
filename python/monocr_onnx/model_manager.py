@@ -10,9 +10,12 @@ revision and both are checksummed.
 The pin is not cosmetic. This package used to fetch
 ``.../resolve/main/onnx/monocr.onnx`` and ``main`` has already moved under it:
 revision 881d167 published a 57,759,911-byte network with a 64px input height
-and 225 output classes, and revision a51be11 publishes a 26,355,440-byte
-network with a 128px input height and 316 output classes. Anyone who installed
-before the reupload has the old file sitting in the cache under the same name.
+and 225 output classes; a51be11 published a 26,355,440-byte v2 network; and
+revision d3d9d5e publishes the 46,247,040-byte
+v3.5 network with a 160px input height and 277 output classes. Three different
+networks, one filename. Anyone who installed before a reupload has the old file
+sitting in the cache under the same name, which is what the revision-scoped
+cache directory and the sha256 pins below exist to prevent.
 """
 
 import hashlib
@@ -35,7 +38,7 @@ class ModelManager:
     # Pinned revision. Bump REVISION and the two digests together — never one
     # alone. The cache is keyed on this string, so changing it is also what
     # invalidates the cache.
-    REVISION = "a51be11"
+    REVISION = "d3d9d5e"
 
     MODEL_FILENAME = "monocr.onnx"
     CHARSET_FILENAME = "charset.txt"
@@ -50,8 +53,8 @@ class ModelManager:
     # transfer or an HTML error page saved under a .onnx name fails loudly
     # instead of becoming a permanent poisoned cache entry.
     _SHA256 = {
-        MODEL_FILENAME: "f212ab7e76c4dc7f120e600fe60ce3bd99227efa7e5ba402f446daa04b6271db",
-        CHARSET_FILENAME: "0b61abeb13e1e5058c8792582d79cf91fa3b6f37295c1fd502bffdf04ba50cb9",
+        MODEL_FILENAME: "b95de1ea0e3dc99a5c31bea32e220835da801f683ed17091eaec9954c80a4c04",
+        CHARSET_FILENAME: "edfd75f688e4155c64aeee0dbac755da0e7ba45a388a2d178a84190fb3d7e953",
     }
 
     def __init__(self, cache_root=None, revision=None):
