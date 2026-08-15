@@ -3,42 +3,263 @@ package predictor
 import (
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
 	"os"
 	"runtime"
-	"unicode/utf8"
 
 	"github.com/yalue/onnxruntime_go"
 	"golang.org/x/image/draw"
 )
 
+// ExpectedInputHeight is the input height this binding preprocesses for.
+//
+// The charset, the input height and the classifier width are one contract. If
+// they drift apart the model still runs and still returns text — it is just the
+// wrong text, with no error anywhere. So this is declared here, checked against
+// the graph in NewPredictor, and a disagreement refuses to load.
+const ExpectedInputHeight = 128
+
+// DefaultInputWidth is the padded canvas width fed to the model. The model's
+// width axis is dynamic; this is the binding's choice, not a model constraint.
+const DefaultInputWidth = 1024
+
+// ContractError reports a model artifact that disagrees with the charset or the
+// input geometry this binding was built for. It is returned instead of running,
+// because running would produce confident nonsense rather than an error.
+type ContractError struct {
+	Msg string
+}
+
+func (e *ContractError) Error() string { return "model contract violation: " + e.Msg }
+
 type Predictor struct {
 	session *onnxruntime_go.DynamicAdvancedSession
-	charset string
+	charset []rune
+	// targetHeight is taken from the model graph once the contract check has
+	// confirmed it matches ExpectedInputHeight.
+	targetHeight int
+	targetWidth  int
+	// numClasses is the model's classifier width, or 0 when the graph declares
+	// that axis dynamic. Decoding always re-derives it from the output tensor.
+	numClasses int
+}
+
+// checkContract compares the charset and geometry this binding holds against
+// what the ONNX graph actually declares.
+//
+// modelClasses and modelHeight are 0 (or negative) when the graph leaves that
+// axis dynamic, in which case there is nothing to compare and the check passes
+// — decode() re-derives the class count from the real output tensor and fails
+// there instead.
+func checkContract(charsetLen, modelClasses, modelHeight int, modelPath string) error {
+	if charsetLen == 0 {
+		return &ContractError{Msg: "no charset supplied; cannot decode model output"}
+	}
+	if modelClasses > 0 {
+		expected := charsetLen + 1
+		if modelClasses != expected {
+			return &ContractError{Msg: fmt.Sprintf(
+				"charset/model mismatch.\n"+
+					"  charset: %d characters -> expects %d classes (%d + CTC blank)\n"+
+					"  model (%s): %d classes\n"+
+					"Every index above the first divergence would decode to the wrong character.",
+				charsetLen, expected, charsetLen, modelPath, modelClasses)}
+		}
+	}
+	if modelHeight > 0 && modelHeight != ExpectedInputHeight {
+		return &ContractError{Msg: fmt.Sprintf(
+			"input height mismatch: this binding preprocesses to height %d but %s expects %d",
+			ExpectedInputHeight, modelPath, modelHeight)}
+	}
+	return nil
+}
+
+// ONNX Runtime version facts for this binding.
+//
+// go.mod pins github.com/yalue/onnxruntime_go, but that is the cgo *wrapper* —
+// the runtime itself is a shared library the host supplies, and no Go manifest
+// can pin it. The three constants below are what can be said about it, and
+// RuntimeVersion reports what was actually loaded.
+const (
+	// ORTAPIVersion is the C API revision the wrapper requests via
+	// OrtGetApiBase()->GetApi(). onnxruntime_go v1.11.0 vendors headers with
+	// ORT_API_VERSION 18. ONNX Runtime keeps GetApi backward compatible, so a
+	// newer library serves this request fine; an older one returns NULL and
+	// initialisation fails.
+	ORTAPIVersion = 18
+
+	// MinORTVersion is the oldest runtime that can answer GetApi(18) — the
+	// release that introduced API 18. Below this, loading fails outright.
+	MinORTVersion = "1.18.0"
+
+	// TestedORTVersion is what this binding is developed and tested against.
+	// It matches the Python and JS bindings, which pin onnxruntime 1.24.1.
+	TestedORTVersion = "1.24.1"
+)
+
+// SharedLibraryPathEnv names the shared library to load, overriding every
+// default. Set it to an absolute path to choose the runtime deliberately rather
+// than inheriting whatever the host happens to have.
+const SharedLibraryPathEnv = "MONOCR_ONNXRUNTIME_PATH"
+
+// homebrewLibPath is the Apple-silicon Homebrew install location, used as a
+// fallback on darwin when the environment variable is unset.
+const homebrewLibPath = "/opt/homebrew/lib/libonnxruntime.dylib"
+
+// loadedVersion is the version string of the ONNX Runtime that initEnvironment
+// actually loaded, recorded once so errors and reports can name it. Empty until
+// initialisation has been attempted.
+var loadedVersion string
+
+// RuntimeVersion returns the version of the ONNX Runtime shared library loaded
+// into this process, or "" if no attempt has been made yet.
+//
+// This is the only pin available to a Go binding: the version cannot be
+// declared up front, so it is read back and recorded. Include it in any report
+// of a result — it identifies the runtime that produced it.
+func RuntimeVersion() string { return loadedVersion }
+
+// resolveSharedLibraryPath picks the shared library to hand to the wrapper.
+// It returns "" to mean "say nothing and let the platform loader decide".
+//
+// Precedence is explicit request, then platform default, then the loader. An
+// explicit request that does not exist is an error rather than a silent
+// fallthrough: someone who set the variable is choosing a runtime, and quietly
+// loading a different one is the failure this whole change exists to prevent.
+func resolveSharedLibraryPath(goos string, getenv func(string) string, exists func(string) bool) (string, error) {
+	if p := getenv(SharedLibraryPathEnv); p != "" {
+		if !exists(p) {
+			return "", fmt.Errorf("%s is set to %q but no file is there", SharedLibraryPathEnv, p)
+		}
+		return p, nil
+	}
+	if goos == "darwin" && exists(homebrewLibPath) {
+		return homebrewLibPath, nil
+	}
+	return "", nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// initEnvironment brings up the ONNX Runtime environment once per process and
+// records which runtime version answered.
+func initEnvironment() error {
+	if onnxruntime_go.IsInitialized() {
+		// Something else in the process brought the runtime up — possibly with a
+		// different library than we would have chosen. Record what is actually
+		// loaded rather than reporting nothing.
+		if loadedVersion == "" {
+			loadedVersion = onnxruntime_go.GetVersion()
+		}
+		return nil
+	}
+
+	libPath, err := resolveSharedLibraryPath(runtime.GOOS, os.Getenv, fileExists)
+	if err != nil {
+		return err
+	}
+	if libPath != "" {
+		onnxruntime_go.SetSharedLibraryPath(libPath)
+	}
+
+	if err := onnxruntime_go.InitializeEnvironment(); err != nil {
+		// The wrapper records the library's version string before it checks
+		// whether GetApi succeeded, so on a too-old runtime this names the
+		// version that was rejected rather than leaving a bare error code.
+		if v := onnxruntime_go.GetVersion(); v != "" {
+			loadedVersion = v
+			return fmt.Errorf(
+				"failed to initialize ONNX Runtime: %v.\n"+
+					"  loaded: %s (from %s)\n"+
+					"  needed: >= %s, because this binding requests C API version %d\n"+
+					"  tested against: %s\n"+
+					"Set %s to an absolute path to choose a different library.",
+				err, v, describeSource(libPath), MinORTVersion, ORTAPIVersion,
+				TestedORTVersion, SharedLibraryPathEnv)
+		}
+		return fmt.Errorf(
+			"failed to initialize ONNX Runtime: %v.\n"+
+				"  looked for: %s\n"+
+				"Install ONNX Runtime %s (macOS: `brew install onnxruntime`), or set %s "+
+				"to the absolute path of libonnxruntime.dylib (macOS) / libonnxruntime.so (Linux).",
+			err, describeSource(libPath), TestedORTVersion, SharedLibraryPathEnv)
+	}
+
+	loadedVersion = onnxruntime_go.GetVersion()
+	return nil
+}
+
+// InitRuntime loads the ONNX Runtime shared library if it is not already
+// loaded, so RuntimeVersion can report which one answered. NewPredictor does
+// this itself; call it directly only to probe the runtime.
+func InitRuntime() error { return initEnvironment() }
+
+// describeSource names where the runtime was loaded from, for error messages.
+func describeSource(libPath string) string {
+	if libPath == "" {
+		return "the system library path"
+	}
+	return libPath
+}
+
+// staticDim returns d[i] when it is a fixed positive size, and 0 when the axis
+// is dynamic (ONNX reports those as -1) or the index is out of range.
+func staticDim(d onnxruntime_go.Shape, i int) int {
+	if i < 0 || i >= len(d) {
+		return 0
+	}
+	if d[i] <= 0 {
+		return 0
+	}
+	return int(d[i])
 }
 
 func NewPredictor(modelPath, charset string) (*Predictor, error) {
-	// Initialize ONNX Runtime environment if not already initialized
-	// Note: SetSharedLibraryPath might be needed depending on system
-	// For now we assume the default or system library is available
-	if !onnxruntime_go.IsInitialized() {
-		// Try to find libonnxruntime on macOS if not set
-		if runtime.GOOS == "darwin" {
-			// Common Homebrew path
-			libPath := "/opt/homebrew/lib/libonnxruntime.dylib"
-			if _, err := os.Stat(libPath); err == nil {
-				onnxruntime_go.SetSharedLibraryPath(libPath)
-			} else {
-				// Fallback or check another location if needed
-			}
-		}
+	if err := initEnvironment(); err != nil {
+		return nil, err
+	}
 
-		if err := onnxruntime_go.InitializeEnvironment(); err != nil {
-			// Check if we can find the library from JS SDK node_modules as a fallback
-			return nil, fmt.Errorf("failed to initialize ONNX Runtime: %v. Make sure libonnxruntime.dylib (macOS) or libonnxruntime.so (Linux) is in your library path", err)
-		}
+	// Read the real graph rather than assuming the tensor names, the input
+	// height or the class count. All three have changed under this SDK before.
+	inputs, outputs, err := onnxruntime_go.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read model graph from %s: %v", modelPath, err)
+	}
+	if len(inputs) != 1 {
+		return nil, &ContractError{Msg: fmt.Sprintf("expected 1 model input, %s has %d", modelPath, len(inputs))}
+	}
+	if len(outputs) != 1 {
+		return nil, &ContractError{Msg: fmt.Sprintf("expected 1 model output, %s has %d", modelPath, len(outputs))}
+	}
+
+	inShape := inputs[0].Dimensions
+	if len(inShape) != 4 {
+		return nil, &ContractError{Msg: fmt.Sprintf(
+			"expected a 4-D [batch, channel, height, width] input, %s declares %v", modelPath, inShape)}
+	}
+	outShape := outputs[0].Dimensions
+	if len(outShape) != 3 {
+		return nil, &ContractError{Msg: fmt.Sprintf(
+			"expected a 3-D [batch, sequence, classes] output, %s declares %v", modelPath, outShape)}
+	}
+
+	modelHeight := staticDim(inShape, 2)
+	modelClasses := staticDim(outShape, 2)
+	charsetRunes := []rune(charset)
+
+	if err := checkContract(len(charsetRunes), modelClasses, modelHeight, modelPath); err != nil {
+		return nil, err
+	}
+
+	targetHeight := modelHeight
+	if targetHeight == 0 {
+		targetHeight = ExpectedInputHeight
 	}
 
 	options, err := onnxruntime_go.NewSessionOptions()
@@ -47,13 +268,10 @@ func NewPredictor(modelPath, charset string) (*Predictor, error) {
 	}
 	defer options.Destroy()
 
-	inputs := []string{"input"}
-	outputs := []string{"output"}
-
 	session, err := onnxruntime_go.NewDynamicAdvancedSession(
 		modelPath,
-		inputs,
-		outputs,
+		[]string{inputs[0].Name},
+		[]string{outputs[0].Name},
 		options,
 	)
 	if err != nil {
@@ -61,8 +279,11 @@ func NewPredictor(modelPath, charset string) (*Predictor, error) {
 	}
 
 	return &Predictor{
-		session: session,
-		charset: charset,
+		session:      session,
+		charset:      charsetRunes,
+		targetHeight: targetHeight,
+		targetWidth:  DefaultInputWidth,
+		numClasses:   modelClasses,
 	}, nil
 }
 
@@ -79,21 +300,17 @@ func (p *Predictor) Predict(img image.Image) (string, error) {
 		return "", err
 	}
 
-	// Correct usage of NewTensor based on original code and common usage
-	// It seems NewTensor takes shape []int64, then data
-	shape := []int64{1, 1, int64(h), int64(w)}
+	shape := onnxruntime_go.NewShape(1, 1, int64(h), int64(w))
 	inputTensor, err := onnxruntime_go.NewTensor(shape, inputData)
 	if err != nil {
 		return "", fmt.Errorf("failed to create input tensor: %v", err)
 	}
 	defer inputTensor.Destroy()
 
-	// Run expects []Value, so we need to copy inputTensor into a []Value slice
 	inputValues := []onnxruntime_go.Value{inputTensor}
 	outputValues := make([]onnxruntime_go.Value, 1)
 
-	err = p.session.Run(inputValues, outputValues)
-	if err != nil {
+	if err := p.session.Run(inputValues, outputValues); err != nil {
 		return "", fmt.Errorf("inference failed: %v", err)
 	}
 
@@ -101,83 +318,101 @@ func (p *Predictor) Predict(img image.Image) (string, error) {
 	if outputTensor == nil {
 		return "", fmt.Errorf("output tensor is nil")
 	}
-	// outputTensor is a Value, we need to assert it to Tensor to GetData
 	defer outputTensor.Destroy()
 
-	// Assuming output is float32 tensor
-	// We need to type assert or use GetData() on the specific tensor type if generic
-	// Let's assume output[0] is *Tensor[float32] which implements Value?
-	// Actually NewDynamicAdvancedSession.Run returns []Value.
-	// We might need to cast output[0] via interface check or assume it's Tensor[float32]
-
-	// In original code: outputTensor := outputInfo[0]; preds := outputTensor.GetData()
-	// But that was checking return of Run?
-
-	// Let's check the type assertion
 	outTensorFloat, ok := outputTensor.(*onnxruntime_go.Tensor[float32])
 	if !ok {
 		return "", fmt.Errorf("unexpected output tensor type")
 	}
 
-	return p.decode(outTensorFloat.GetData()), nil
+	return p.decode(outTensorFloat.GetData(), outTensorFloat.GetShape())
 }
 
 func (p *Predictor) preprocess(img image.Image) ([]float32, int, int, error) {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, 0, 0, fmt.Errorf("cannot preprocess an empty image")
+	}
 
-	targetHeight := 64
-	aspectRatio := float64(width) / float64(height)
-	targetWidth := int(math.Round(float64(targetHeight) * aspectRatio))
+	targetHeight := p.targetHeight
+	targetWidth := p.targetWidth
+
+	scale := float64(targetHeight) / float64(height)
+	newWidth := int(math.Round(float64(width) * scale))
+	if newWidth > targetWidth {
+		newWidth = targetWidth
+	}
+	if newWidth < 1 {
+		newWidth = 1
+	}
 
 	// Resize using high quality resampling
-	dst := image.NewGray(image.Rect(0, 0, targetWidth, targetHeight))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	resized := image.NewGray(image.Rect(0, 0, newWidth, targetHeight))
+	draw.CatmullRom.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
 
-	// Normalize
+	// Create white background canvas
+	dst := image.NewGray(image.Rect(0, 0, targetWidth, targetHeight))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{color.Gray{255}}, image.Point{}, draw.Src)
+	draw.Draw(dst, image.Rect(0, 0, newWidth, targetHeight), resized, image.Point{}, draw.Over)
+
+	// Normalize to [-1.0, 1.0]
 	inputData := make([]float32, targetWidth*targetHeight)
 	for i, v := range dst.Pix {
-		// 0-255 -> 0.0-1.0
-		inputData[i] = float32(v) / 255.0
+		inputData[i] = float32(v)/127.5 - 1.0
 	}
 
 	return inputData, targetHeight, targetWidth, nil
 }
 
-func (p *Predictor) decode(preds []float32) string {
-	decodedText := ""
+// decode runs CTC greedy decoding over the flat logits.
+//
+// The stride comes from the output tensor's own shape, never from the charset.
+// Deriving it from the charset made any change to the model's class count
+// silently reinterpret the whole buffer — and it made two entry points holding
+// two different charsets return two different strings for the same image.
+func (p *Predictor) decode(preds []float32, shape onnxruntime_go.Shape) (string, error) {
+	if len(shape) != 3 {
+		return "", &ContractError{Msg: fmt.Sprintf(
+			"expected a 3-D [batch, sequence, classes] output tensor, got shape %v", shape)}
+	}
+	numClasses := int(shape[2])
+	seqLen := int(shape[1])
+	if numClasses <= 0 || seqLen <= 0 {
+		return "", &ContractError{Msg: fmt.Sprintf("output tensor has an empty axis: shape %v", shape)}
+	}
+	if expected := len(p.charset) + 1; numClasses != expected {
+		return "", &ContractError{Msg: fmt.Sprintf(
+			"charset/model mismatch at decode time: charset has %d characters -> expects %d classes, tensor has %d",
+			len(p.charset), expected, numClasses)}
+	}
+	if need := seqLen * numClasses; len(preds) < need {
+		return "", &ContractError{Msg: fmt.Sprintf(
+			"output tensor holds %d values, shape %v needs %d", len(preds), shape, need)}
+	}
+
+	var decoded []rune
 	prevIdx := -1
 
-	// numClasses = charset + blank
-	numClasses := utf8.RuneCountInString(p.charset) + 1
-	seqLen := len(preds) / numClasses
-
-	// Charset array for lookup (runes)
-	charsetRunes := []rune(p.charset)
-
 	for t := 0; t < seqLen; t++ {
-		maxVal := float32(-math.MaxFloat32)
+		maxVal := float32(math.Inf(-1))
 		maxIdx := 0
 
+		base := t * numClasses
 		for c := 0; c < numClasses; c++ {
-			val := preds[t*numClasses+c]
-			if val > maxVal {
-				maxVal = val
+			if v := preds[base+c]; v > maxVal {
+				maxVal = v
 				maxIdx = c
 			}
 		}
 
+		// Index 0 is the CTC blank; 1..N map onto charset[0..N-1].
 		if maxIdx != 0 && maxIdx != prevIdx {
-			// maxIdx 0 is blank
-			// maxIdx 1..N maps to charset[0..N-1]
-			charIdx := maxIdx - 1
-			if charIdx < len(charsetRunes) {
-				decodedText += string(charsetRunes[charIdx])
-			}
+			decoded = append(decoded, p.charset[maxIdx-1])
 		}
 		prevIdx = maxIdx
 	}
 
-	return decodedText
+	return string(decoded), nil
 }

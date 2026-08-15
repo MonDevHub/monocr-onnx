@@ -1,6 +1,6 @@
 # MonOCR (JavaScript SDK)
 
-The professional JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
+The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
 
 ## Installation
 
@@ -10,51 +10,82 @@ npm install monocr
 
 ## Features
 
-- **Unified API**: Synchronized with Python and Go equivalents.
-- **Auto-Model Management**: Leverages [MonDevHub/monocr](https://huggingface.co/janakhpon/monocr) for automated model delivery.
-- **PDF Support**: Intelligent document segmentation and multi-page processing.
-- **Zero Dependencies**: Core OCR logic is lean and optimized.
+- **Production Accuracy**: Aligned with v2.0 high-precision models (128px vertical resolution).
+- **Pinned Model**: Weights and charset are fetched from one immutable Hugging Face revision, so two installs of the same version decode with the same network.
+- **Fails Closed**: A model whose class count or input height disagrees with the charset is refused at load rather than decoded into wrong text.
+- **Robust Segmentation**: Intelligent line-detection with adaptive thresholding and relative padding.
 
-## API Reference
-
-### `read_image(imagePath, [options])`
-
-Recognizes text from a single image.
-
-- `imagePath`: String path to the image file.
-- `options`: Optional overrides for model/charset paths.
-- **Returns**: `Promise<string>`
-
-### `read_images(imagePaths, [options])`
-
-Recognizes text from multiple images.
-
-- **Returns**: `Promise<string[]>`
-
-### `read_pdf(pdfPath, [options])`
-
-Converts and recognizes text from all pages of a PDF.
-
-- **Returns**: `Promise<string[]>` (Array of strings per page)
-
-### `read_image_with_accuracy(imagePath, groundTruth, [options])`
-
-Performs OCR and calculates Levenshtein accuracy.
-
-- **Returns**: `Promise<{text: string, accuracy: number}>`
-
-## Usage Example
+## Quick Start
 
 ```javascript
-const { read_image } = require("monocr");
+const { MonOCR } = require("monocr");
 
 async function main() {
-  const text = await read_image("scanned_text.png");
-  console.log(text);
+  const engine = new MonOCR();
+  await engine.init();
+
+  // Recognize a full page: one entry per detected line
+  const lines = await engine.predictPage("scanned_text.png");
+  console.log(lines.map((l) => l.text).join("\n"));
 }
 
 main();
 ```
+
+Or the one-shot helpers:
+
+```javascript
+const { read_image, read_pdf } = require("monocr");
+
+const text = await read_image("scanned_text.png");
+const pages = await read_pdf("document.pdf"); // needs poppler-utils
+```
+
+## API Reference
+
+### `new MonOCR(modelPath?, charsetPath?)`
+
+Initialize the OCR engine. Both arguments are positional and optional.
+
+- `modelPath`: path to a local ONNX model. Omit it to download the pinned model on first use.
+- `charsetPath`: path to a local charset file. Omit it to use the charset that shipped with the model.
+
+### `init()` -> `Promise<void>`
+
+Load the model and charset, and verify they describe the same network. Called automatically by the predict methods.
+
+### `predictPage(imagePath)` -> `Promise<Array<{text: string, bbox: object}>>`
+
+Segment an image into lines and recognize each.
+
+### `predictLine(imageSource)` -> `Promise<string>`
+
+Recognize text from a single cropped text line image.
+
+### `read_image` / `read_images` / `read_pdf` / `read_pdfs` / `read_image_with_accuracy`
+
+Convenience wrappers returning plain strings.
+
+## The model contract
+
+The charset, the model's input height and its classifier width are one contract. If they drift apart the model still runs and still returns text — it is just the wrong text, with no error anywhere.
+
+`init()` reads the class count and input height off the loaded session and compares them to the charset. On a mismatch it throws `ModelContractError` instead of decoding:
+
+```javascript
+const { MonOCR, ModelContractError } = require("monocr");
+
+try {
+  await new MonOCR("./my-model.onnx").init();
+} catch (err) {
+  if (err instanceof ModelContractError) {
+    // This model does not match the bundled charset. Supply the charset it was
+    // trained with, rather than decoding with the wrong vocabulary.
+  }
+}
+```
+
+Models are downloaded from a pinned revision of [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr) — exported as `MODEL_REVISION` — and cached under `~/.monocr/models/<revision>/`. Bumping the revision is a cache miss, not a silent swap.
 
 ## CLI Interface
 
@@ -67,7 +98,24 @@ monocr image input.jpg
 
 # Process a PDF
 monocr pdf document.pdf
+
+# Pre-fetch the model into the cache
+monocr download
 ```
+
+## Development
+
+```bash
+npm install
+npm test     # offline: no model download, no network
+```
+
+## Requirements
+
+- Node.js 18.17+
+- sharp (for image processing)
+- onnxruntime-node
+- poppler-utils, for the PDF entry points only
 
 ## Maintenance
 

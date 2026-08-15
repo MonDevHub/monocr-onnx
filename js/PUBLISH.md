@@ -14,8 +14,11 @@ Quick reference for publishing new versions using `pnpm`.
    ```bash
    pnpm install
    pnpm approve-builds  # Important for sharp/canvas binaries
-   # Run tests if available
+   pnpm test            # Must pass: it checks the model/charset contract
    ```
+
+   If `src/charset.txt` or the pinned `MODEL_REVISION` changed, both move in the
+   same commit. The tests assert they describe one model; do not publish red.
 
 2. **Commit Changes**
 

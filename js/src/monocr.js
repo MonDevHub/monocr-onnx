@@ -5,6 +5,107 @@ const path = require('path');
 const LineSegmenter = require('./segmenter');
 const ModelManager = require('./model-manager');
 
+/**
+ * Raised when a model artifact and the charset used to decode it disagree.
+ *
+ * The charset, the input height and the classifier width are one contract. If
+ * they drift apart the model still runs and still returns text -- it is just
+ * the wrong text, with no error anywhere. Fail closed instead.
+ *
+ * This is not hypothetical here. monocr 0.1.5 shipped a 225-character charset
+ * against a 316-class model: every index above 224 fell off the end of the
+ * lookup and was swallowed by an `|| ""`, and every index below it resolved to
+ * the wrong glyph, because the two charsets share only a 95-character ASCII
+ * prefix before one continues into Latin-1 and the other jumps to Myanmar.
+ */
+class ModelContractError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ModelContractError';
+    }
+}
+
+/**
+ * Read the shape of a session's first input or output.
+ *
+ * onnxruntime-node reports metadata as an array of
+ * `{ name, isTensor, type, shape }`. Dimensions are numbers when static and
+ * strings (the symbolic name, e.g. "width") when dynamic.
+ */
+function firstTensorShape(metadata, role) {
+    const entry = Array.isArray(metadata) ? metadata[0] : undefined;
+    if (!entry || !Array.isArray(entry.shape)) {
+        throw new ModelContractError(
+            `Cannot read the ${role} shape from this session, so the model ` +
+            'contract cannot be checked. Refusing to decode with an unverified model.'
+        );
+    }
+    return entry.shape;
+}
+
+/**
+ * Split a charset into characters by codepoint.
+ *
+ * `String.prototype.length` counts UTF-16 units, so a single astral character
+ * would count as two and shift every class index by one. The shipped charset is
+ * entirely BMP today; counting by codepoint means it does not have to stay that
+ * way for the contract check to stay honest.
+ */
+function charsetChars(charset) {
+    return Array.from(charset);
+}
+
+/**
+ * Verify that a loaded session and the charset about to decode it agree.
+ *
+ * Both numbers are read from the live session, never from a constant. A
+ * constant is just another copy of the claim, and copies are exactly what
+ * drifted: the charset, the sidecar JSON and the weights each stated a
+ * different vocabulary size and nothing compared them.
+ *
+ * @param {object} session An ONNX Runtime InferenceSession (or anything exposing
+ *   the same `inputMetadata` / `outputMetadata` shape).
+ * @param {string} charset The decoding charset, blank excluded.
+ * @param {number} targetHeight The input height this code preprocesses to.
+ * @param {string} [modelPath] Included in the error message when known.
+ */
+function assertModelContract(session, charset, targetHeight, modelPath) {
+    const where = modelPath ? `\n  model: ${modelPath}` : '';
+    const numChars = charsetChars(charset).length;
+
+    // Classifier width: [batch, time, classes]. CTC reserves index 0 for the
+    // blank label, so an N-character charset needs exactly N + 1 classes.
+    const outShape = firstTensorShape(session.outputMetadata, 'output');
+    const numClasses = outShape[outShape.length - 1];
+    if (typeof numClasses === 'number' && numClasses !== numChars + 1) {
+        throw new ModelContractError(
+            `Charset/model mismatch: the model has ${numClasses} output classes ` +
+            `but the charset has ${numChars} characters, which needs ` +
+            `${numChars + 1} (one CTC blank + one per character).${where}\n` +
+            '  Decoding anyway would return confident, well-formed, wrong text. ' +
+            'Pass a charsetPath matching this model, or delete the cached model ' +
+            'so the pinned one is fetched again.'
+        );
+    }
+
+    // Input height: [batch, channels, height, width], NCHW.
+    const inShape = firstTensorShape(session.inputMetadata, 'input');
+    if (inShape.length === 4) {
+        const modelHeight = inShape[2];
+        if (typeof modelHeight === 'number' && modelHeight !== targetHeight) {
+            throw new ModelContractError(
+                `Input height mismatch: the model expects height ${modelHeight} ` +
+                `but preprocessing produces ${targetHeight}.${where}\n` +
+                '  A model fed the wrong vertical resolution still runs and still ' +
+                'returns text. Fail closed instead.'
+            );
+        }
+    }
+
+    // A dynamic class axis is not checkable here; `decode()` re-checks it against
+    // the real dims of every output tensor, which are always concrete.
+}
+
 class MonOCR {
     constructor(modelPath = null, charsetPath = null) {
         this.modelPath = modelPath;
@@ -13,32 +114,69 @@ class MonOCR {
         this.charset = "";
         this.segmenter = new LineSegmenter();
         this.modelManager = new ModelManager();
-        
-        // Metadata
-        this.targetHeight = 64;
+
+        // Metadata. 128 is the input height of the pinned v2 network
+        // (MobileNetV3-Large + BiLSTM + CTC, 315-character charset). It is not a
+        // free parameter: `init()` refuses to run if the model disagrees.
+        this.targetHeight = 128;
         this.targetWidth = 1024;
+    }
+
+    /**
+     * Create the ONNX Runtime session. Split out so tests can substitute a
+     * session without a model file or a network.
+     */
+    async _loadSession(modelPath) {
+        return ort.InferenceSession.create(modelPath);
+    }
+
+    /**
+     * Read a charset file.
+     *
+     * Strips newlines only. A bare `.trim()` also eats the charset's leading
+     * U+0020 -- the file really does start with a space -- which drops it from
+     * 315 characters to 314 and shifts every index in the lookup by one. That is
+     * not a hypothetical: 0.1.5 called `.trim()` here.
+     */
+    static readCharset(charsetPath) {
+        return fs
+            .readFileSync(charsetPath, 'utf-8')
+            .replace(/^[\r\n]+/, '')
+            .replace(/[\r\n]+$/, '');
     }
 
     async init() {
         if (this.session) return;
-        
-        // Ensure model exists
+
+        // Ensure model exists. The download also brings the charset from the same
+        // pinned revision, so weights and vocabulary cannot come from different
+        // versions of the repository.
+        let downloadedCharsetPath = null;
         if (!this.modelPath) {
-            this.modelPath = await this.modelManager.ensureModel();
+            const artifacts = await this.modelManager.ensureModel();
+            this.modelPath = artifacts.modelPath;
+            downloadedCharsetPath = artifacts.charsetPath;
         }
-        
-        // Use bundled charset if not provided
+
         if (!this.charsetPath) {
-            this.charsetPath = path.join(__dirname, 'charset.txt');
+            // Prefer the charset that shipped with these exact weights; fall back
+            // to the bundled copy when the caller supplied their own model.
+            this.charsetPath = downloadedCharsetPath || path.join(__dirname, 'charset.txt');
         }
-        
-        this.session = await ort.InferenceSession.create(this.modelPath);
-        this.charset = fs.readFileSync(this.charsetPath, 'utf-8').trim();
+
+        const session = await this._loadSession(this.modelPath);
+        const charset = MonOCR.readCharset(this.charsetPath);
+
+        assertModelContract(session, charset, this.targetHeight, this.modelPath);
+
+        this.session = session;
+        this.charset = charset;
     }
 
     /**
      * Replicates Python's resize_and_pad:
-     * 1. Resize height to 64, maintain aspect ratio.
+     * 1. Resize height to `targetHeight` (128 for the pinned model), maintain
+     *    aspect ratio.
      * 2. Pad width to 1024 (white background).
      * 3. Normalize to [-1, 1].
      */
@@ -50,7 +188,8 @@ class MonOCR {
             sharpImg = sharp(imageSource);
         }
         const metadata = await sharpImg.metadata();
-        
+
+        // Scale to target height
         const scale = this.targetHeight / metadata.height;
         const newWidth = Math.min(this.targetWidth, Math.round(metadata.width * scale));
 
@@ -67,13 +206,10 @@ class MonOCR {
 
         // Create target canvas (1024 width, white background = 255)
         const totalSize = this.targetHeight * this.targetWidth;
-        const canvas = new Float32Array(totalSize).fill(1.0);
+        const canvas = new Float32Array(totalSize);
 
-        // Fill canvas with resized image and normalize
-        // Python: canvas = canvas.astype(np.float32) / 127.5 - 1.0
-        // 255 -> 1.0
-        // 0 -> -1.0
-        
+        // Fill canvas with resized image and normalize to [-1.0, 1.0]
+        // (pix / 127.5) - 1.0
         for (let y = 0; y < this.targetHeight; y++) {
             for (let x = 0; x < this.targetWidth; x++) {
                 const canvasIdx = y * this.targetWidth + x;
@@ -82,13 +218,31 @@ class MonOCR {
                     const pixelValue = resizedBuffer[imgIdx];
                     canvas[canvasIdx] = (pixelValue / 127.5) - 1.0;
                 } else {
-                    // Padding is white
+                    // Padding is white (255)
                     canvas[canvasIdx] = (255 / 127.5) - 1.0; // 1.0
                 }
             }
         }
-        
-        return new ort.Tensor('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]); 
+
+        return new ort.Tensor('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]);
+    }
+
+    /**
+     * Build the class-index -> character lookup, memoized on the charset it was
+     * built from. Index 0 is the CTC blank and stays empty.
+     */
+    _idx2char() {
+        if (this._idx2charCache && this._idx2charFor === this.charset) {
+            return this._idx2charCache;
+        }
+        const chars = charsetChars(this.charset);
+        const map = new Array(chars.length + 1);
+        for (let i = 0; i < chars.length; i++) {
+            map[i + 1] = chars[i];
+        }
+        this._idx2charCache = map;
+        this._idx2charFor = this.charset;
+        return map;
     }
 
     /**
@@ -98,12 +252,20 @@ class MonOCR {
     decode(outputTensor) {
         const data = outputTensor.data;
         const dims = outputTensor.dims; // [Batch, Time, Classes]
-        const numClasses = dims[2];
-        const sequenceLength = dims[1];
+        const numClasses = dims[dims.length - 1];
+        const sequenceLength = dims[dims.length - 2];
 
-        const idx2char = {};
-        for (let i = 0; i < this.charset.length; i++) {
-            idx2char[i + 1] = this.charset[i];
+        const idx2char = this._idx2char();
+
+        // The same contract as `init()`, re-checked against the real dims of this
+        // tensor. `init()` cannot check a dynamic class axis; these dims are
+        // always concrete, so nothing gets through unverified.
+        if (numClasses !== idx2char.length) {
+            throw new ModelContractError(
+                `Charset/model mismatch at decode: the model produced ${numClasses} ` +
+                `classes but the charset covers ${idx2char.length - 1} characters ` +
+                `(+ 1 CTC blank = ${idx2char.length}).`
+            );
         }
 
         let decodedText = "";
@@ -119,10 +281,13 @@ class MonOCR {
                      maxIdx = c;
                  }
              }
-             
-             // CTC logic: 0 is blank, ignore repeats
+
+             // CTC logic: 0 is blank, ignore repeats.
+             // No `|| ""` fallback: the check above makes an out-of-range index
+             // impossible, and that fallback is what turned a whole broken
+             // vocabulary into quietly missing characters.
              if (maxIdx !== 0 && maxIdx !== prevIdx) {
-                 decodedText += idx2char[maxIdx] || "";
+                 decodedText += idx2char[maxIdx];
              }
              prevIdx = maxIdx;
         }
@@ -132,14 +297,14 @@ class MonOCR {
 
     async predictLine(imageSource) {
         if (!this.session) await this.init();
-        
+
         const inputTensor = await this.preprocess(imageSource);
         const feeds = {};
         feeds[this.session.inputNames[0]] = inputTensor;
-        
+
         const results = await this.session.run(feeds);
         const outputTensor = results[this.session.outputNames[0]];
-        
+
         return this.decode(outputTensor);
     }
 
@@ -147,9 +312,11 @@ class MonOCR {
      * Processes full page: segments into lines and predicts each.
      */
     async predictPage(imagePath) {
+        if (!this.session) await this.init();
+
         const lines = await this.segmenter.segment(imagePath);
         const results = [];
-        
+
         for (const line of lines) {
             const text = await this.predictLine(line.img);
             results.push({
@@ -157,9 +324,11 @@ class MonOCR {
                 bbox: line.bbox
             });
         }
-        
+
         return results;
     }
 }
 
 module.exports = MonOCR;
+module.exports.ModelContractError = ModelContractError;
+module.exports.assertModelContract = assertModelContract;

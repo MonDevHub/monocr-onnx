@@ -1,0 +1,17 @@
+# The root .gitignore has a bare `model/` rule for the top-level dev directory.
+# A bare rule matches at every depth, so it also swallowed `go/pkg/model/` — the
+# package holding the download/cache manager was never committed, and a fresh
+# clone could not build the Go SDK at all. Re-include it here.
+!pkg/model/
+!pkg/model/**
+
+# Build output. `go/lib/` held two committed symlinks into a `/home/janakh/...`
+# node_modules path that existed on exactly one machine; both were dangling
+# everywhere else and nothing in the Go code read them, so they are gone. Do not
+# vendor the runtime here — see the ONNX Runtime section of README.md for how the
+# shared library is located.
+lib/
+*.so
+*.dylib
+
+# The `go/monocr` binary is still tracked; untracking it is a separate change.

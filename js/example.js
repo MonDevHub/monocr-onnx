@@ -1,17 +1,24 @@
-const MonOCR = require('./index');
+// Smoke script: run the OCR over the sample images in this repository.
+//
+//   node example.js
+//
+// The model is fetched from the pinned Hugging Face revision on first run and
+// cached under ~/.monocr/models/<revision>/.
+
+const { MonOCR, MODEL_REVISION } = require('./src/index');
 const path = require('path');
 const fs = require('fs');
 
 async function runExample() {
-    const modelPath = path.join(__dirname, '../model/monocr.onnx');
-    const charsetPath = path.join(__dirname, '../model/charset.txt');
-    const imagesDir = path.join(__dirname, '../../preview_monocr/data/images');
+    const imagesDir = path.join(__dirname, '..', 'data', 'images');
 
     console.log('--- MonOCR JavaScript Example ---');
-    console.log(`Loading model: ${modelPath}`);
-    
-    const monocr = new MonOCR(modelPath, charsetPath);
+    console.log(`Model revision: ${MODEL_REVISION}`);
+
+    const monocr = new MonOCR();
     await monocr.init();
+    console.log(`Model: ${monocr.modelPath}`);
+    console.log(`Charset: ${[...monocr.charset].length} characters\n`);
 
     if (!fs.existsSync(imagesDir)) {
         console.error(`Images directory not found: ${imagesDir}`);
@@ -27,11 +34,11 @@ async function runExample() {
     for (const file of files) {
         const filePath = path.join(imagesDir, file);
         console.log(`Processing: ${file}...`);
-        
+
         try {
             // For general images, we use predictPage which handles multiple lines
             const results = await monocr.predictPage(filePath);
-            
+
             if (results.length === 0) {
                 console.log('  [No text detected]');
             } else {
@@ -48,4 +55,5 @@ async function runExample() {
 
 runExample().catch(err => {
     console.error('Fatal Error:', err);
+    process.exitCode = 1;
 });

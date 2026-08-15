@@ -1,14 +1,30 @@
-//! MonOcr - Mongolian OCR library using ONNX models
+//! MonOcr - Mon language OCR library using ONNX models
 //!
-//! This library provides OCR (Optical Character Recognition) functionality for Mongolian text
+//! This library provides OCR (Optical Character Recognition) functionality for Mon text
 //! using deep learning models. It supports reading text from images and PDFs, with optional
 //! accuracy measurement against ground truth text.
 //!
+//! Mon (`mnw`) is a Mon-Khmer language of Myanmar and Thailand, written in a
+//! Myanmar-script orthography. It is unrelated to Mongolian.
+//!
+//! # The model
+//!
+//! Weights are downloaded from [janakhpon/monocr](https://huggingface.co/janakhpon/monocr),
+//! pinned to revision [`model_manager::MODEL_REVISION`]. That artifact takes a
+//! `[1, 1, 128, width]` input and emits `[1, sequence, 316]` logits: 315
+//! characters plus the CTC blank.
+//!
+//! The charset, the input height and the classifier width are one contract. If
+//! they drift apart the model still runs and still returns text — it is just the
+//! wrong text, with no error anywhere. So the graph is read on load and a
+//! disagreement yields [`ModelContractError`] instead of a result.
+//!
 //! # Quick Start
 //!
-//! ```ignore
+//! ```no_run
 //! use monocr_onnx::read_image;
 //!
+//! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let text = read_image("path/to/image.png").await?;
 //!     println!("Recognized text: {}", text);
@@ -28,12 +44,16 @@
 use anyhow::Result;
 use std::path::Path;
 
-mod model_manager;
+pub mod model_manager;
 mod monocr;
 mod segmenter;
 mod utils;
 
-pub use monocr::{LineResult, MonOcr, MonOcrBuilder};
+pub use model_manager::ModelManager;
+pub use monocr::{
+    normalize_charset, LineResult, ModelContractError, MonOcr, MonOcrBuilder, DEFAULT_INPUT_WIDTH,
+    EXPECTED_INPUT_HEIGHT,
+};
 pub use utils::calculate_accuracy;
 
 /// Read text from a single image file
@@ -52,9 +72,10 @@ pub use utils::calculate_accuracy;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::read_image;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let text = read_image("document.png").await?;
 ///     println!("Recognized: {}", text);
@@ -82,9 +103,10 @@ pub async fn read_image(image_path: impl AsRef<Path>) -> Result<String> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::read_images;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let paths = vec!["page1.png", "page2.png", "page3.png"];
 ///     let results = read_images(&paths).await?;
@@ -122,9 +144,10 @@ pub async fn read_images(image_paths: &[impl AsRef<Path>]) -> Result<Vec<String>
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::read_pdf;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let pages = read_pdf("document.pdf").await?;
 ///     for (i, text) in pages.iter().enumerate() {
@@ -163,11 +186,12 @@ pub async fn read_pdf(pdf_path: impl AsRef<Path>) -> Result<Vec<String>> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::read_image_with_accuracy;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let result = read_image_with_accuracy("image.png", "Монгол бичг").await?;
+///     let result = read_image_with_accuracy("image.png", "ဘာသာမန်").await?;
 ///     println!("Recognized: {}", result.text);
 ///     println!("Accuracy: {:.2}%", result.accuracy);
 ///     Ok(())
@@ -194,9 +218,10 @@ pub async fn read_image_with_accuracy(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use monocr_onnx::read_image_with_accuracy;
 ///
+/// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let result = read_image_with_accuracy("test.png", "Hello World").await?;
 ///     if result.accuracy >= 90.0 {
@@ -218,6 +243,52 @@ pub struct OcrResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pinned model (`model_manager::MODEL_REVISION`) emits 316 classes:
+    /// 315 characters plus the CTC blank at index 0.
+    const PINNED_CHARSET_LEN: usize = 315;
+
+    const EMBEDDED_CHARSET: &str = include_str!("charset.txt");
+
+    #[test]
+    fn embedded_charset_matches_the_pinned_model() {
+        let n = normalize_charset(EMBEDDED_CHARSET).chars().count();
+        assert_eq!(
+            n,
+            PINNED_CHARSET_LEN,
+            "bundled charset has {n} characters, the pinned model expects {PINNED_CHARSET_LEN} \
+             ({} classes minus the CTC blank)",
+            PINNED_CHARSET_LEN + 1
+        );
+    }
+
+    /// The charset's first character is U+0020. A bare `.trim()` eats it,
+    /// dropping 315 to 314 and shifting every index in the decode by one — the
+    /// model still runs and still returns text, just the wrong text.
+    #[test]
+    fn embedded_charset_keeps_its_leading_space() {
+        let charset = normalize_charset(EMBEDDED_CHARSET);
+        assert_eq!(
+            charset.chars().next(),
+            Some(' '),
+            "charset must start with U+0020"
+        );
+        assert_eq!(
+            charset.trim().chars().count(),
+            PINNED_CHARSET_LEN - 1,
+            "expected .trim() to drop exactly the leading space"
+        );
+    }
+
+    #[test]
+    fn normalize_charset_trims_only_line_terminators() {
+        assert_eq!(normalize_charset(" abc"), " abc");
+        assert_eq!(normalize_charset(" abc\n"), " abc");
+        assert_eq!(normalize_charset(" abc\r\n"), " abc");
+        assert_eq!(normalize_charset("\n abc\n"), " abc");
+        // A trailing space is a class too.
+        assert_eq!(normalize_charset(" abc "), " abc ");
+    }
 
     #[tokio::test]
     #[ignore = "requires network access to download model from HuggingFace"]

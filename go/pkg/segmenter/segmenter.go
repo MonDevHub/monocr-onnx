@@ -165,12 +165,16 @@ func (s *LineSegmenter) extractLine(img image.Image, bounds image.Rectangle, rSt
 		return
 	}
 
-	// Add padding
-	pad := 4
-	y1 := int(math.Max(0, float64(rStart-pad)))
-	y2 := int(math.Min(float64(bounds.Dy()), float64(rEnd+pad)))
-	x1 := int(math.Max(0, float64(xMin-pad)))
-	x2 := int(math.Min(float64(width), float64(xMax+pad)))
+	// Add generous padding to avoid cutting off diacritics
+	// Add relative padding based on line height
+	hRaw := rEnd - rStart
+	padY := int(math.Ceil(float64(hRaw) * 0.20))
+	padX := int(math.Ceil(float64(hRaw) * 0.15))
+	
+	y1 := int(math.Max(0, float64(rStart-padY)))
+	y2 := int(math.Min(float64(bounds.Dy()), float64(rEnd+padY)))
+	x1 := int(math.Max(0, float64(xMin-padX)))
+	x2 := int(math.Min(float64(width), float64(xMax+padX)))
 
 	// Crop
 	rect := image.Rect(bounds.Min.X+x1, bounds.Min.Y+y1, bounds.Min.X+x2, bounds.Min.Y+y2)

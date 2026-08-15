@@ -3,7 +3,15 @@ name = "monocr-onnx"
 version = "0.1.0"
 description = "Universal MonOCR package with ONNX bindings"
 readme = "README.md"
-requires-python = ">=3.9"
+# 3.11, not 3.9. onnxruntime publishes wheels only — no sdist — and 1.24.1 ships
+# cp311/cp312/cp313/cp314 and nothing else. Its metadata still claims
+# `requires_python >= 3.10`, so a 3.10 resolve selected it and then found no
+# artifact to install at all. The `>=3.9` floor also forked the lock three ways
+# and left 3.9 on onnxruntime 1.20.1 (November 2024) decoding a graph exported
+# by 1.28.0. Nothing was being served by the lower floor: this repo's
+# .python-version is 3.11 and mon_OCR, which exports the model, requires >=3.11.
+# Lowering this again re-forks the lock — check for a cp310 wheel first.
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Janakh", email = "janakh@example.com" }]
 classifiers = [
@@ -18,11 +26,18 @@ dependencies = [
     "onnxruntime>=1.15.0",
     "Pillow>=9.0.0",
     "numpy>=1.21.0",
+    "opencv-python-headless>=4.5.0",
     "requests>=2.25.0",
     "tqdm>=4.60.0",
     "click>=8.0.0",
     "pdf2image>=1.16.0",
 ]
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.urls]
 Homepage = "https://github.com/MonDevHub/monocr-onnx"

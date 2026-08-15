@@ -9,26 +9,42 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The Hugging Face repository holding the ONNX artifact.
+pub const MODEL_REPO: &str = "janakhpon/monocr";
+
+/// The pinned revision.
+///
+/// `main` is a moving ref and the artifact has already changed under it: the
+/// model served at one point had a 64-pixel input and 225 output classes, the
+/// one served now has 128 and 316. A cache that gates on "the file exists"
+/// cannot tell those apart, so the revision is part of the cache path.
+pub const MODEL_REVISION: &str = "a51be11";
+
+/// Filename of the ONNX model within the repository's `onnx/` directory.
+pub const MODEL_FILENAME: &str = "monocr.onnx";
+
+/// Filename of the charset that belongs to the same revision.
+pub const CHARSET_FILENAME: &str = "charset.txt";
+
 /// Manages downloading and caching of OCR models
 ///
 /// This struct handles the lifecycle of the ONNX model file, including:
-/// - Determining the cache location (~/.monocr/models/)
-/// - Downloading the model from HuggingFace if not present
+/// - Determining the cache location (`~/.monocr/models/<revision>/`)
+/// - Downloading the model and its charset from HuggingFace if not present
 /// - Providing the path to the model file for loading
-///
-/// # Default Behavior
-///
-/// By default, models are downloaded from:
-/// `https://huggingface.co/janakhpon/monocr/resolve/main/onnx/monocr.onnx`
-///
-/// The model is cached in `~/.monocr/models/` on Unix-like systems.
 pub struct ModelManager {
-    /// Directory where models are cached
+    /// Directory where this revision's files are cached
     cache_dir: PathBuf,
-    /// Base URL for downloading models
+    /// Base URL for downloading, already pinned to a revision
     base_url: String,
     /// Filename of the model file
     model_filename: String,
+}
+
+impl Default for ModelManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ModelManager {
@@ -36,132 +52,96 @@ impl ModelManager {
     ///
     /// # Default Values
     ///
-    /// - Cache directory: `~/.monocr/models/` (where `~` is the user's home directory)
-    /// - Base URL: `https://huggingface.co/janakhpon/monocr/resolve/main`
+    /// - Cache directory: `~/.monocr/models/<revision>/`
+    /// - Base URL: `https://huggingface.co/janakhpon/monocr/resolve/<revision>`
     /// - Model filename: `monocr.onnx`
-    ///
-    /// # Returns
-    ///
-    /// A new `ModelManager` instance configured with default settings
     ///
     /// # Panics
     ///
     /// Panics if the user's home directory cannot be determined
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use monocr_onnx::model_manager::ModelManager;
-    ///
-    /// let manager = ModelManager::new();
-    /// let model_path = manager.get_model_path().expect("Failed to get model");
-    /// ```
     pub fn new() -> Self {
         let home = dirs::home_dir().expect("Failed to get home directory");
-        let cache_dir = home.join(".monocr").join("models");
+        // Revision-scoped: re-pinning MODEL_REVISION is a cache miss rather
+        // than a silent reuse of whatever was downloaded last time.
+        let cache_dir = home.join(".monocr").join("models").join(MODEL_REVISION);
 
         Self {
             cache_dir,
-            base_url: "https://huggingface.co/janakhpon/monocr/resolve/main".to_string(),
-            model_filename: "monocr.onnx".to_string(),
+            base_url: format!("https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}"),
+            model_filename: MODEL_FILENAME.to_string(),
         }
     }
 
-    /// Get the path to the ONNX model file
+    /// The directory this manager downloads into.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// The pinned download URL for the ONNX model.
+    pub fn model_url(&self) -> String {
+        format!("{}/onnx/{}", self.base_url, self.model_filename)
+    }
+
+    /// The pinned download URL for the charset.
     ///
-    /// This method checks if the model file exists in the cache directory.
-    /// If the model does not exist, it automatically downloads it from HuggingFace.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(PathBuf)` - Path to the model file if successful
-    /// * `Err(io::Error)` - If the model cannot be downloaded or the path cannot be determined
-    ///
-    /// # Behavior
-    ///
-    /// 1. Constructs the expected model path from cache_dir and model_filename
-    /// 2. Checks if the file exists
-    /// 3. If not found, calls [`download_model`](Self::download_model) to download it
-    /// 4. Returns the path to the existing/downloaded model
-    ///
-    /// # Download Process
-    ///
-    /// When downloading:
-    /// - Creates the cache directory if it doesn't exist
-    /// - Shows a progress bar during download
-    /// - Uses HTTP GET request to download from HuggingFace
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use monocr_onnx::model_manager::ModelManager;
-    ///
-    /// async fn main() {
-    ///     let manager = ModelManager::new();
-    ///     match manager.get_model_path() {
-    ///         Ok(path) => println!("Model loaded from: {:?}", path),
-    ///         Err(e) => eprintln!("Error: {}", e),
-    ///     }
-    /// }
-    /// ```
+    /// Same revision as the weights — that is the only way to be sure the two
+    /// agree.
+    pub fn charset_url(&self) -> String {
+        format!("{}/onnx/{}", self.base_url, CHARSET_FILENAME)
+    }
+
+    /// Get the path to the ONNX model file, downloading it if the cache for
+    /// this revision is empty.
     pub fn get_model_path(&self) -> io::Result<PathBuf> {
         let model_path = self.cache_dir.join(&self.model_filename);
 
         if !model_path.exists() {
-            println!("Model not found at {:?}. Downloading...", model_path);
-            self.download_model(&model_path)?;
+            println!(
+                "Model {MODEL_REVISION} not found at {:?}. Downloading...",
+                model_path
+            );
+            self.download(&self.model_url(), &model_path)?;
+            println!("Download complete");
         }
 
         Ok(model_path)
     }
 
-    /// Download the ONNX model from HuggingFace
+    /// Get the charset published alongside the pinned model.
     ///
-    /// This is an internal method called by [`get_model_path`](Self::get_model_path)
-    /// when the model is not found in the cache.
+    /// Preferred over the embedded copy because it comes from the same revision
+    /// as the weights.
+    pub fn get_charset(&self) -> io::Result<String> {
+        let charset_path = self.cache_dir.join(CHARSET_FILENAME);
+
+        if !charset_path.exists() {
+            self.download(&self.charset_url(), &charset_path)?;
+        }
+
+        fs::read_to_string(&charset_path)
+    }
+
+    /// Download `url` to `dest` via a temporary file.
     ///
-    /// # Arguments
-    ///
-    /// * `dest` - The destination path where the model should be saved
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the download completes successfully
-    /// * `Err(io::Error)` - If the download fails or the HTTP response indicates an error
-    ///
-    /// # Process
-    ///
-    /// 1. Creates parent directories if they don't exist
-    /// 2. Constructs the download URL: `{base_url}/onnx/{model_filename}`
-    /// 3. Makes an HTTP GET request
-    /// 4. Validates the response status (checks for 2xx success)
-    /// 5. Displays a progress bar during download
-    /// 6. Writes the response body to the destination file
-    ///
-    /// # Requirements
-    ///
-    /// - Requires network access to HuggingFace
-    /// - Requires `reqwest` HTTP client
-    /// - Shows progress using `indicatif` crate
-    fn download_model(&self, dest: &Path) -> io::Result<()> {
+    /// The rename is the last step, so an interrupted transfer never leaves a
+    /// truncated artifact behind for the existence check to accept.
+    fn download(&self, url: &str, dest: &Path) -> io::Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let url = format!("{}/onnx/{}", self.base_url, self.model_filename);
         let client = Client::new();
-        let mut response = client.get(&url).send().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to download from {}: {}", url, e),
-            )
-        })?;
+        let mut response = client
+            .get(url)
+            .send()
+            .map_err(|e| io::Error::other(format!("Failed to download from {}: {}", url, e)))?;
 
         if !response.status().is_success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to download model: {}", response.status()),
-            ));
+            return Err(io::Error::other(format!(
+                "Failed to download {}: {}",
+                url,
+                response.status()
+            )));
         }
 
         let total_size = response.content_length().unwrap_or(0);
@@ -171,11 +151,64 @@ impl ModelManager {
             .unwrap()
             .progress_chars(">-"));
 
-        let mut file = fs::File::create(dest)?;
+        let tmp_path = dest.with_extension("part");
+        let mut file = fs::File::create(&tmp_path)?;
+        let copied = io::copy(&mut response, &mut file);
+        drop(file);
 
-        io::copy(&mut response, &mut file)?;
+        if let Err(e) = copied {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
 
-        pb.finish_with_message("Download complete");
+        fs::rename(&tmp_path, dest)?;
+        pb.finish_and_clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `main` is a moving ref and the artifact has already changed under it.
+    #[test]
+    fn download_urls_are_pinned() {
+        let m = ModelManager::new();
+        for url in [m.model_url(), m.charset_url()] {
+            assert!(
+                !url.contains("/resolve/main/"),
+                "still tracking the moving ref `main`: {url}"
+            );
+            assert!(
+                url.contains(&format!("/resolve/{MODEL_REVISION}/")),
+                "not pinned to {MODEL_REVISION}: {url}"
+            );
+        }
+    }
+
+    /// The charset has to come from the same revision as the weights.
+    #[test]
+    fn charset_is_fetched_from_the_model_revision() {
+        let m = ModelManager::new();
+        let model_dir = m.model_url().trim_end_matches(MODEL_FILENAME).to_string();
+        let charset_dir = m
+            .charset_url()
+            .trim_end_matches(CHARSET_FILENAME)
+            .to_string();
+        assert_eq!(model_dir, charset_dir);
+    }
+
+    /// The cache used to gate on file existence alone, so an artifact from an
+    /// older revision was reused forever.
+    #[test]
+    fn cache_dir_is_scoped_by_revision() {
+        let m = ModelManager::new();
+        assert_eq!(
+            m.cache_dir().file_name().and_then(|s| s.to_str()),
+            Some(MODEL_REVISION),
+            "cache directory {:?} is not revision-scoped",
+            m.cache_dir()
+        );
     }
 }
