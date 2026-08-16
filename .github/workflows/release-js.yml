@@ -35,10 +35,14 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      # npm 11.5.1+ is required for trusted publishing; the runner's bundled npm
-      # can lag. Pin explicitly rather than inheriting whatever the image has.
+      # Trusted publishing needs npm >= 11.5.1 and the runner's bundled npm lags.
+      #
+      # npm@11, not npm@latest: latest is 12.x, which requires Node ^22.22 and
+      # cannot run on the Node 20 this job uses. Node 20 is deliberate — it is
+      # the floor package.json declares, and publishing from the floor is the
+      # honest thing to do. npm 11 supports ^20.17.0 || >=22.9.0.
       - name: Use an npm that supports trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       # No install needed: the suite uses a fake session and src/ requires its
       # native dependencies lazily. Same reasoning as the CI workflow.
