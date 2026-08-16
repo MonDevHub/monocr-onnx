@@ -30,10 +30,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `registry-url:` here, deliberately. It makes setup-node write an
+      # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
+      # and with no such secret set — which is the whole point of trusted
+      # publishing — npm still counts that line as a configured credential and
+      # skips the OIDC exchange. It then PUTs the tarball unauthenticated and
+      # the registry answers 404, which npm returns instead of 403 so a refused
+      # publish cannot be used to probe whether a package exists.
+      #
+      # Four runs failed that way and read exactly like a missing trusted
+      # publisher. What separated them was the auth trail: uv's PyPI publish in
+      # release-python.yml attempts the exchange and reports a specific 422,
+      # while npm's output had no OIDC line at all — it never tried. The
+      # registry default is npmjs.org, so nothing is lost by omitting this.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://registry.npmjs.org"
 
       # Trusted publishing needs npm >= 11.5.1 and the runner's bundled npm lags.
       #
@@ -108,6 +120,26 @@ jobs:
             exit 1
           fi
           echo "OIDC token endpoint present"
+
+      # A configured credential — even one expanding to an empty string — makes
+      # npm skip trusted publishing silently. Having the token endpoint above is
+      # not enough; nothing must shadow it. This is the regression guard for the
+      # setup-node change explained at the top of this job.
+      - name: No stale credential may shadow the OIDC exchange
+        run: |
+          set -euo pipefail
+          found=""
+          for f in "$HOME/.npmrc" "$GITHUB_WORKSPACE/.npmrc" "$GITHUB_WORKSPACE/js/.npmrc"; do
+            [ -f "$f" ] || continue
+            if grep -q '_authToken' "$f"; then
+              found="$found $f"
+            fi
+          done
+          if [ -n "$found" ]; then
+            echo "::error title=A credential is configured::${found} sets _authToken, so npm will skip the OIDC exchange and publish unauthenticated"
+            exit 1
+          fi
+          echo "no _authToken configured; npm will take the OIDC path"
 
       # The runner annotates a failed step with nothing but "Process completed
       # with exit code 1", and reading the full log needs admin rights on the
