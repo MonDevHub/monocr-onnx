@@ -9,8 +9,8 @@ On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 > [!NOTE]
 > Mon is classified as **vulnerable** in [UNESCO's Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
 >
-> This project digitises the Mon script, so that later work — system
-> integrations, corpora, language models — has something to build on.
+> This project digitises the Mon script, so that later work has something to
+> build on: system integrations, corpora, language models.
 
 ## Overview
 
@@ -75,12 +75,15 @@ with no error and no lookup miss.
 | :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- | :----------- |
 | **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.1        |
 | **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.1        |
-| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.1.1     | 0.2.0        |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.2.0     | 0.2.0        |
 | **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.2.0     |
 
-**0.2.1 is not released yet on npm; PyPI and the Go module lag further.** The table used to read "Published" in every row, which
-was true of the *binding* and not of the version beside it. Registry state
-verified 2026-08-15 against pypi.org, registry.npmjs.org and proxy.golang.org.
+**0.2.1 is not released yet on npm or PyPI. Go is current.** The table used to
+read "Published" in every row, which was true of the *binding* and not of the
+version beside it. Registry state verified 2026-08-16 against pypi.org,
+registry.npmjs.org and proxy.golang.org; the Go row still said v0.1.1 that
+morning, eleven hours after `go/v0.2.0` was pushed, which sent readers to the
+one release carrying the charset defect.
 
 This matters more than a version number usually does: the published 0.1.x
 releases are the ones carrying the 225-character charset defect that the commits

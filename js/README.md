@@ -10,10 +10,13 @@ npm install monocr
 
 ## Features
 
-- **Production Accuracy**: Aligned with v2.0 high-precision models (128px vertical resolution).
+- **Pinned to one network**: the v3.5 recogniser at revision `d3d9d5e`, with 160px input
+  height, 276 characters, 277 CTC classes. No accuracy figure is claimed here; see
+  the [model card](https://huggingface.co/janakhpon/monocr) for the held-out result
+  and its caveats.
 - **Pinned Model**: Weights and charset are fetched from one immutable Hugging Face revision, so two installs of the same version decode with the same network.
 - **Fails Closed**: A model whose class count or input height disagrees with the charset is refused at load rather than decoded into wrong text.
-- **Robust Segmentation**: Intelligent line-detection with adaptive thresholding and relative padding.
+- **Line segmentation**: adaptive thresholding, with padding relative to each line's height.
 
 ## Quick Start
 
@@ -85,7 +88,7 @@ try {
 }
 ```
 
-Models are downloaded from a pinned revision of [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr) — exported as `MODEL_REVISION` — and cached under `~/.monocr/models/<revision>/`. Bumping the revision is a cache miss, not a silent swap.
+Models are downloaded from a pinned revision of [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), exported as `MODEL_REVISION`, and cached under `~/.monocr/models/<revision>/`. Bumping the revision is a cache miss, not a silent swap.
 
 ## CLI Interface
 

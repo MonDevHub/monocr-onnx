@@ -15,8 +15,8 @@ go get github.com/MonDevHub/monocr-onnx/go
 
 The SDK downloads its ONNX weights from
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr), pinned to revision
-`a51be11` (`model.ModelRevision`). That artifact takes a `[1, 1, 128, width]`
-input and emits `[1, sequence, 316]` logits: 315 characters plus the CTC blank.
+`d3d9d5e` (`model.ModelRevision`). That artifact takes a `[1, 1, 160, width]`
+input and emits `[1, sequence, 277]` logits: 276 characters plus the CTC blank.
 
 The charset, the input height and the classifier width are one contract. If they
 drift apart the model still runs and still returns text — it is just the wrong
@@ -25,7 +25,7 @@ refuses to run when it disagrees with the charset it holds:
 
 ```
 model contract violation: charset/model mismatch.
-  charset: 315 characters -> expects 316 classes (315 + CTC blank)
+  charset: 276 characters -> expects 277 classes (276 + CTC blank)
   model (/…/monocr.onnx): 225 classes
 ```
 
@@ -86,7 +86,7 @@ U+0020 — a space is one of the classes the model emits, so trimming it with
 ## ONNX Runtime
 
 The SDK needs the ONNX Runtime **shared library** at run time. `go.mod` pins
-`github.com/yalue/onnxruntime_go`, but that is the cgo wrapper — the runtime
+`github.com/yalue/onnxruntime_go`, but that is the cgo wrapper. The runtime
 itself comes from the host, and no Go manifest can pin it. So the version is
 stated here and read back at load time instead.
 
@@ -135,8 +135,8 @@ onnxruntime 1.24.1 (tested against 1.24.1, requires >= 1.18.0)
 version, err := monocr.RuntimeVersion()
 ```
 
-An initialisation failure reports the same detail — which library was loaded,
-from where, and what was required — instead of a bare error code.
+An initialisation failure reports the same detail instead of a bare error code:
+which library was loaded, from where, and what was required.
 
 ### PDF support
 
