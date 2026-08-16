@@ -1,6 +1,6 @@
 [project]
 name = "monocr-onnx"
-version = "0.2.0"
+version = "0.2.1"
 description = "Universal MonOCR package with ONNX bindings"
 readme = "README.md"
 # 3.11, not 3.9. onnxruntime publishes wheels only — no sdist — and 1.24.1 ships

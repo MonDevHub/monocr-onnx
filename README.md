@@ -73,12 +73,12 @@ with no error and no lookup miss.
 
 | SDK                      | Directory            | Registry/Source                                            | Published  | In this tree |
 | :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.0        |
-| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.0        |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.1        |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.1        |
 | **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.1.1     | 0.2.0        |
 | **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.2.0     |
 
-**0.2.0 is not released.** The table used to read "Published" in every row, which
+**0.2.1 is not released yet on npm; PyPI and the Go module lag further.** The table used to read "Published" in every row, which
 was true of the *binding* and not of the version beside it. Registry state
 verified 2026-08-15 against pypi.org, registry.npmjs.org and proxy.golang.org.
 
