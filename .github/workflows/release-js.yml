@@ -147,6 +147,38 @@ jobs:
       # stalls, so npm's own message is echoed back as an `::error::` — those
       # land in the run's annotations, which are readable by anyone who can see
       # the repository.
+      # npm's own OIDC attempt is silent at default verbosity: a failed exchange
+      # falls through to ENEEDAUTH, which reads like "this runner has no
+      # credentials" rather than "the registry declined the exchange". Those
+      # need different fixes and npm will not tell them apart, so ask the
+      # registry directly and let it answer — the way uv's PyPI publish reports
+      # its 422 invalid-publisher.
+      #
+      # The success body carries a live publishing token, so only the status
+      # code is printed unless the exchange is refused.
+      - name: Ask the registry whether a trusted publisher is configured
+        run: |
+          set -euo pipefail
+          id_token="$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          echo "minted an OIDC token for audience npm:registry.npmjs.org"
+
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' -X POST \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/monocr" \
+            -H "Authorization: Bearer $id_token" \
+            -H "Content-Type: application/json")"
+          echo "exchange returned HTTP $code"
+
+          if [ "$code" != "200" ]; then
+            detail="$(sed 's/%/%25/g; s/\r//g' "$body" | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=npm refused the token exchange (HTTP ${code})::${detail}"
+            exit 1
+          fi
+          echo "the registry issued a publishing token, so a trusted publisher is configured"
+
       - name: Publish
         run: |
           cd js
