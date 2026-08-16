@@ -97,7 +97,35 @@ jobs:
             console.log('charset ' + charset.length + ' chars, pinned at ' + MODEL_REVISION);
           "
 
+      # Two causes of a refused publish look identical from outside the job: the
+      # workflow having no `id-token: write`, and the registry declining the
+      # exchange because no trusted publisher is configured for the package.
+      # Checking the token endpoint first separates them.
+      - name: Verify the runner can mint an OIDC token
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error title=No OIDC token::ACTIONS_ID_TOKEN_REQUEST_URL is unset, so this job has no id-token: write permission and trusted publishing cannot work."
+            exit 1
+          fi
+          echo "OIDC token endpoint present"
+
+      # The runner annotates a failed step with nothing but "Process completed
+      # with exit code 1", and reading the full log needs admin rights on the
+      # repository. A release that only an admin can diagnose is a release that
+      # stalls, so npm's own message is echoed back as an `::error::` — those
+      # land in the run's annotations, which are readable by anyone who can see
+      # the repository.
       - name: Publish
         run: |
           cd js
-          npm publish --provenance --access public
+          set +e
+          output="$(npm publish --provenance --access public 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(printf '%s\n' "$output" | tail -30 \
+              | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=npm publish failed::${detail}"
+            exit "$status"
+          fi
