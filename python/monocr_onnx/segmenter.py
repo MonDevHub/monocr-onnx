@@ -109,3 +109,81 @@ class LineSegmenter:
             'img': crop,
             'bbox': (int(x1), int(y1), int(w), int(h))
         })
+
+
+# Where a tile may be cut, as a fraction of the tile width, searching backwards
+# from the ideal boundary. 0.12 of a 1024px window is ~123px, roughly two Mon
+# glyphs — wide enough to find a gap, narrow enough that tiles stay near full
+# width.
+_CUT_SEARCH_FRACTION = 0.12
+
+# A column counts as carrying ink below this grayscale value.
+_CUT_INK_THRESHOLD = 250
+
+
+def cut_column(crop, x0, ideal, crop_w):
+    """Where to end a tile that starts at ``x0`` and may not pass ``ideal``.
+
+    Cutting at exactly ``ideal`` lands wherever the arithmetic falls, which is
+    usually the middle of a glyph. Both halves keep their pixels, so a coverage
+    check still passes, but the model reads each half as a whole character and
+    one glyph becomes two. Measured upstream on 120 drawn lines this showed up
+    as ``ဗော်`` read back as ``ဗေဗိာ်``.
+
+    So search backwards from ``ideal`` for a column of white. A tile may only
+    get narrower, never wider, or it stops fitting the model window. Returns
+    ``ideal`` unchanged when there is no gap to cut at, which is the honest
+    outcome for a continuous script: a known-bad seam beats an overflowing tile.
+
+    Ported from mon_OCR ``segmenter._cut_column``; the constants are the same,
+    so the two produce the same cuts on the same input.
+    """
+    if ideal >= crop_w:
+        return crop_w
+
+    window = max(1, int((ideal - x0) * _CUT_SEARCH_FRACTION))
+    lo = max(x0 + 1, ideal - window)
+    if lo >= ideal:
+        return ideal
+
+    band = crop.crop((lo, 0, ideal, crop.height))
+    if band.mode != "L":
+        # The column sum below is silently wrong on a 3-channel array: it would
+        # produce a (W, 3) profile and an argmin over a flattened index.
+        band = band.convert("L")
+    ink = (np.asarray(band, dtype=np.uint8) < _CUT_INK_THRESHOLD).sum(axis=0)
+
+    # Prefer a truly empty column, and the rightmost one, so tiles stay as wide
+    # as the window allows. Fall back to the lightest column present.
+    blank = np.flatnonzero(ink == 0)
+    offset = int(blank[-1]) if blank.size else int(np.argmin(ink))
+    return lo + offset
+
+
+def tile_line(crop, target_h, target_w):
+    """Split one line crop into pieces that each fit the model window.
+
+    Returns ``[crop]`` unchanged when the line already fits after being scaled
+    to ``target_h``. Otherwise cuts at whitespace columns and returns the pieces
+    left to right, to be read separately and joined with no separator.
+    """
+    crop_w, crop_h = crop.size
+    if crop_h <= 0 or crop_w <= 0:
+        return [crop]
+
+    scale = target_h / crop_h
+    if int(crop_w * scale) <= target_w:
+        return [crop]
+
+    tile_w_src = max(1, int(target_w / scale))
+    tiles, x0 = [], 0
+    while x0 < crop_w:
+        ideal = min(x0 + tile_w_src, crop_w)
+        x1 = cut_column(crop, x0, ideal, crop_w)
+        # Structural guard, not a tuning knob: cut_column can only return a
+        # value in (x0, ideal], but if it ever returned x0 this loop would spin
+        # forever on a page. One pixel of forced progress bounds it.
+        x1 = max(x1, x0 + 1)
+        tiles.append(crop.crop((x0, 0, x1, crop_h)))
+        x0 = x1
+    return tiles

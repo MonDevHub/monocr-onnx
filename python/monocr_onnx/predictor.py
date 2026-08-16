@@ -8,7 +8,7 @@ import onnxruntime as ort
 from PIL import Image
 
 from .model_manager import ModelManager
-from .segmenter import LineSegmenter
+from .segmenter import LineSegmenter, tile_line
 
 # The input height this binding targets, and the height the pinned artifact was
 # traced at. It is checked against the ONNX graph at load; the graph wins for
@@ -254,25 +254,22 @@ class MonOCR:
         """
         Segment page into lines and predict each line.
 
-        Each line goes to the model whole. A line wider than the canvas after
-        being scaled to the model height is squeezed horizontally rather than cut
-        into canvas-width tiles — see `preprocess`, and
-        `test_wide_lines_are_squeezed_not_truncated`.
+        A line wider than the canvas after being scaled to the model height is
+        cut into canvas-width tiles at whitespace columns, read separately, and
+        rejoined with no separator. Squeezing it into the canvas instead breaks
+        the aspect ratio the model was trained on.
 
-        **This is now the worse path for the model this package pins, and it
-        is a known gap rather than a decision.** MEASURED 2026-08-15 with one
-        harness over 240 rendered Mon lines wide enough to need the choice,
-        median 3 model windows each, swapping only the graph:
+        Which of the two is better is a property of the network, not of the
+        method. MEASURED 2026-08-15 with one harness over 240 rendered Mon lines
+        wide enough to need the choice, median 3 model windows each, swapping
+        only the graph:
 
             v2     squeezed 0.0676   tiled 0.0758    CER, squeezing better
             v3.5   squeezed 0.1434   tiled 0.0795    CER, tiling better
 
-        The direction is a property of the network, not of the method. Squeezing
-        was right while this package pinned v2 at a51be11; since the pin moved to
-        v3.5 at d3d9d5e, **wide lines should be cut into canvas-width tiles at
-        whitespace columns and joined**, which is what mon_OCR's `read_page`
-        does. Until that lands here, a page whose lines exceed 1024px after
-        scaling to height 160 reads worse than it needs to.
+        This package pins v3.5, so it tiles. Anything repinned to v2 at a51be11
+        should not: re-measure before changing the pin, because the direction
+        flips.
 
         Rendered lines rather than photographed pages, so this is a preview and
         not an evaluation; the two arms differ only in the choice under test.
@@ -290,7 +287,19 @@ class MonOCR:
             # try it as one line before giving up.
             return self.predict_line(img)
 
-        return "\n".join(self.predict_line(line["img"]) for line in lines)
+        return "\n".join(self._read_line_tiled(line["img"]) for line in lines)
+
+    def _read_line_tiled(self, crop):
+        """Read one line, tiling it first if it will not fit the model window.
+
+        Tiles join with no separator: the cut falls inside a word by
+        construction, since cut_column searches for the *quietest* column rather
+        than a word boundary. A space here would insert one that is not there.
+        """
+        tiles = tile_line(crop, self.input_height, self.input_width)
+        if len(tiles) == 1:
+            return self.predict_line(tiles[0])
+        return "".join(self.predict_line(tile) for tile in tiles)
 
     def predict(self, img_path):
         # Alias for backward compatibility or ease of use
