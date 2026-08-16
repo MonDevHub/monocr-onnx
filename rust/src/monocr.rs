@@ -748,6 +748,13 @@ impl MonOcr {
     ///    - Run inference with the ONNX model
     ///    - Decode CTC output to text
     /// 3. Return results with text and bounding boxes
+    // NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
+    // canvas; the Python binding tiles at whitespace columns instead. MEASURED
+    // over 240 rendered Mon lines wide enough to need the choice:
+    //     v2     squeezed 0.0676   tiled 0.0758   CER
+    //     v3.5   squeezed 0.1434   tiled 0.0795   CER
+    // This binding pins v3.5, so it is on the worse side. The port is
+    // tile_line/cut_column in python/monocr_onnx/segmenter.py.
     pub async fn predict_page(&mut self, image_path: impl AsRef<Path>) -> Result<Vec<LineResult>> {
         let image_path = image_path.as_ref();
         let lines = self.segmenter.segment(image_path)?;

@@ -325,6 +325,19 @@ class MonOCR {
 
     /**
      * Processes full page: segments into lines and predicts each.
+
+     * NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
+     * canvas. The Python binding tiles instead, cutting at whitespace columns.
+     * On the pinned v3.5 network tiling is better; on v2 squeezing was.
+     * MEASURED over 240 rendered Mon lines wide enough to need the choice:
+     *
+     *     v2     squeezed 0.0676   tiled 0.0758   CER
+     *     v3.5   squeezed 0.1434   tiled 0.0795   CER
+     *
+     * This binding pins v3.5, so it is on the worse side of that. Porting
+     * `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py closes
+     * it. Deferred because the four bindings already disagree on output
+     * (docs/CROSS_BINDING_PARITY.md) and cut positions would be a second axis.
      */
     async predictPage(imagePath) {
         if (!this.session) await this.init();

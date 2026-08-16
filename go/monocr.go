@@ -72,6 +72,19 @@ func resolveModel() (modelPath, charset string, err error) {
 
 // ReadImage recognizes text from an image file.
 // It automatically downloads the model if not present.
+// NOTE (2026-08-16): two gaps here, the second larger than the first.
+//
+//  1. Wide lines are SQUEEZED into the model canvas rather than cut into tiles
+//     at whitespace columns, which is what the Python binding does. MEASURED
+//     over 240 rendered Mon lines wide enough to need the choice:
+//     v2     squeezed 0.0676   tiled 0.0758   CER
+//     v3.5   squeezed 0.1434   tiled 0.0795   CER
+//     This binding pins v3.5, so it is on the worse side of that.
+//
+//  2. ReadImage does not segment at all. It feeds the whole image to the model
+//     as one line, so a multi-line image is compressed into a single strip and
+//     decoded as one line. Only the PDF path segments. That is a functional
+//     hole rather than a tuning choice, and it is the one to close first.
 func ReadImage(imagePath string) (string, error) {
 	modelPath, charset, err := resolveModel()
 	if err != nil {
