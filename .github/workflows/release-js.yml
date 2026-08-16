@@ -124,8 +124,18 @@ jobs:
           set -e
           printf '%s\n' "$output"
           if [ "$status" -ne 0 ]; then
-            detail="$(printf '%s\n' "$output" | tail -30 \
-              | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
-            echo "::error title=npm publish failed::${detail}"
+            annotate() {
+              printf '%s\n' "$2" | sed 's/%/%25/g; s/\r//g' \
+                | awk -v t="$1" 'BEGIN{printf "::error title=%s::", t} {printf "%s%%0A", $0}'
+              echo
+            }
+            # Whether npm attempted the OIDC exchange at all is the one thing
+            # that separates "no trusted publisher is configured for this
+            # package" from "one is configured and the registry declined it".
+            # It is printed near the start of the output, so a tail misses it.
+            auth="$(printf '%s\n' "$output" \
+              | grep -iE 'oidc|trusted|provenance|auth|401|403|404|E404' || true)"
+            annotate "npm auth trail" "${auth:-no OIDC or auth line in npm output — the exchange was never attempted}"
+            annotate "npm publish failed" "$(printf '%s\n' "$output" | tail -20)"
             exit "$status"
           fi
