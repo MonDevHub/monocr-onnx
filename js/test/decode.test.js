@@ -63,10 +63,15 @@ test('the real charset decodes real Mon codepoints, not Latin ones', async () =>
     const chars = [...ocr.charset];
     // Every Mon/Myanmar character in the charset must round-trip through its
     // own index. With the 225-character charset these all landed elsewhere.
+    //
+    // 89 at revision d3d9d5e, down from 130 at a51be11. The v3.5 charset is
+    // deliberately narrower — 276 characters against v2's 315 — so this floor
+    // moved with it. It is a floor, not the count: raising it to exactly 89
+    // would make a charset addition fail for no reason.
     const myanmar = chars
         .map((ch, i) => ({ ch, idx: i + 1 }))
         .filter(({ ch }) => ch.codePointAt(0) >= 0x1000 && ch.codePointAt(0) <= 0x109f);
-    assert.ok(myanmar.length > 100, `expected a Myanmar block, found ${myanmar.length}`);
+    assert.ok(myanmar.length > 80, `expected a Myanmar block, found ${myanmar.length}`);
     for (const { ch, idx } of myanmar) {
         assert.equal(ocr.decode(logitsFor([idx], PINNED.numClasses)), ch);
     }

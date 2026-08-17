@@ -1,4 +1,4 @@
-# Cross-binding parity — measured 2026-08-14
+# Cross-binding parity — measured 2026-08-14 against v2, not re-run since
 
 Four bindings run the same ONNX graph with the same charset. They do **not** produce
 identical text.
@@ -7,10 +7,28 @@ This file records the measurement rather than the intention, because "the bindin
 aligned" was asserted in several READMEs and had never been run across more than one
 image.
 
+> **Every number below is stale.** It was measured against `a51be11`, which had 316
+> classes at H=128. On 2026-08-15 all four bindings moved to `d3d9d5e`: 277 classes,
+> H=160, a 276-character charset. The network changed underneath this file and the run has
+> not been repeated. Treat the agreement counts, the per-image character counts and
+> the specific `U+1060` / `U+102F` / `U+1046` diagnoses as history.
+>
+> The causal claim below, that the divergence comes from four different resampling
+> kernels, is an argument about the code rather than about the artifact, so it
+> plausibly survives the model change. It has not been re-checked either.
+>
+> There is also a **second axis this file never covered**: Python tiles a wide line
+> into canvas-width pieces, while JS, Go and Rust squeeze it into the window. On v3.5
+> that gap was measured upstream at CER 0.1434 squeezed against 0.0795 tiled — larger
+> than any disagreement recorded here. Go's `ReadImage` goes further and does not
+> segment at all, so a multi-line page is read as one strip; only its PDF path
+> segments. See the notes in `go/monocr.go` and `python/monocr_onnx/predictor.py`.
+
 ## What was measured
 
 All four bindings, on all seven images in `data/images/`, against the revision-pinned
-model `a51be11` (316 classes, H=128) with the 315-character charset all four now share.
+model `a51be11` (316 classes, H=128) with the 315-character charset they shared at the
+time.
 
 There is **no ground truth** for these images. They carry no labels, and the two whose
 filenames match mon_OCR's generator (`000028.jpg`, `000029.jpg`) are *not* the same
@@ -22,13 +40,13 @@ is consistent; it is not evidence that the text is right.
 
 | Image | Python | JS | Go |
 |---|---|---|---|
-| `000028.jpg` | — identical — | | |
-| `000029.jpg` | — identical — | | |
-| `pdf_screenshot.png` | — identical — | | |
-| `test_0006_h61.png` | — identical — | | |
-| `test_0011_h30.png` | — identical — | | |
-| `test_0005_h71.png` | 78 chars | 78 chars | **77 — drops the final `U+1060`** |
-| `test_0012_h86.png` | 78 chars | **77** | **77 — both drop the final `U+102F`** |
+| `000028.jpg` | identical | identical | identical |
+| `000029.jpg` | identical | identical | identical |
+| `pdf_screenshot.png` | identical | identical | identical |
+| `test_0006_h61.png` | identical | identical | identical |
+| `test_0011_h30.png` | identical | identical | identical |
+| `test_0005_h71.png` | 78 chars | 78 chars | **77, drops the final `U+1060`** |
+| `test_0012_h86.png` | 78 chars | **77** | **77**, both dropping the final `U+102F` |
 
 Rust additionally reads `U+1046` (Myanmar digit six) on `test_0011_h30.png` where the
 other three read `U+0030` (ASCII zero).

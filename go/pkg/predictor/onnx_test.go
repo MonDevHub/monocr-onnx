@@ -9,10 +9,10 @@ import (
 	"github.com/yalue/onnxruntime_go"
 )
 
-// The pinned model: input [1, 1, 128, width], output [1, sequence, 316].
+// The pinned model: input [1, 1, 160, 1024], output [1, sequence, 277].
 const (
-	pinnedClasses = 316
-	pinnedCharLen = 315
+	pinnedClasses = 277
+	pinnedCharLen = 276
 )
 
 func charsetOfLen(n int) string {
@@ -31,9 +31,9 @@ func TestCheckContractRejectsCharsetMismatch(t *testing.T) {
 	err := checkContract(225, pinnedClasses, ExpectedInputHeight, "model.onnx")
 	var ce *ContractError
 	if !errors.As(err, &ce) {
-		t.Fatalf("expected a ContractError for 225 characters vs 316 classes, got %v", err)
+		t.Fatalf("expected a ContractError for 225 characters vs 277 classes, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "226") || !strings.Contains(err.Error(), "316") {
+	if !strings.Contains(err.Error(), "226") || !strings.Contains(err.Error(), "277") {
 		t.Errorf("error should name both sides, got: %v", err)
 	}
 }
@@ -42,7 +42,7 @@ func TestCheckContractRejectsCharsetMismatch(t *testing.T) {
 // character is enough to shift the whole decode.
 func TestCheckContractRejectsOffByOneCharset(t *testing.T) {
 	if err := checkContract(pinnedCharLen-1, pinnedClasses, ExpectedInputHeight, "model.onnx"); err == nil {
-		t.Fatal("expected 314 characters vs 316 classes to be refused")
+		t.Fatal("expected 275 characters vs 277 classes to be refused")
 	}
 }
 
@@ -70,9 +70,9 @@ func TestCheckContractSkipsDynamicAxes(t *testing.T) {
 }
 
 func TestStaticDim(t *testing.T) {
-	shape := onnxruntime_go.NewShape(1, 1, 128, -1)
-	if got := staticDim(shape, 2); got != 128 {
-		t.Errorf("staticDim(shape, 2) = %d, want 128", got)
+	shape := onnxruntime_go.NewShape(1, 1, 160, -1)
+	if got := staticDim(shape, 2); got != 160 {
+		t.Errorf("staticDim(shape, 2) = %d, want 160", got)
 	}
 	if got := staticDim(shape, 3); got != 0 {
 		t.Errorf("dynamic axis should report 0, got %d", got)
@@ -111,13 +111,13 @@ func TestDecodeStrideComesFromTheTensor(t *testing.T) {
 	// The TrimSpace victim: one character short.
 	trimmed := &Predictor{charset: []rune(charsetOfLen(pinnedCharLen - 1))}
 	if _, err := trimmed.decode(preds, shape); err == nil {
-		t.Fatal("a 314-character charset against a 316-class tensor must be refused, not decoded")
+		t.Fatal("a 275-character charset against a 277-class tensor must be refused, not decoded")
 	}
 
 	// The old bundled charset.
 	stale := &Predictor{charset: []rune(charsetOfLen(225))}
 	if _, err := stale.decode(preds, shape); err == nil {
-		t.Fatal("a 225-character charset against a 316-class tensor must be refused, not decoded")
+		t.Fatal("a 225-character charset against a 277-class tensor must be refused, not decoded")
 	}
 }
 

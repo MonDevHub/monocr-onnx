@@ -1,5 +1,20 @@
-const ort = require('onnxruntime-node');
-const sharp = require('sharp');
+// onnxruntime-node and sharp are native modules: loading them costs a dlopen
+// and, on a fresh install, a postinstall download. They are required lazily so
+// that importing this package -- and running its test suite, which uses a fake
+// session and never touches either -- does not depend on them being built.
+// CI installs no native deps for the js job as a result.
+let ort = null;
+function onnxRuntime() {
+    if (ort === null) ort = require('onnxruntime-node');
+    return ort;
+}
+
+let sharp = null;
+function imaging() {
+    if (sharp === null) sharp = require('sharp');
+    return sharp;
+}
+
 const fs = require('fs');
 const path = require('path');
 const LineSegmenter = require('./segmenter');
@@ -118,7 +133,7 @@ class MonOCR {
         // Metadata. 128 is the input height of the pinned v2 network
         // (MobileNetV3-Large + BiLSTM + CTC, 315-character charset). It is not a
         // free parameter: `init()` refuses to run if the model disagrees.
-        this.targetHeight = 128;
+        this.targetHeight = 160;
         this.targetWidth = 1024;
     }
 
@@ -127,7 +142,7 @@ class MonOCR {
      * session without a model file or a network.
      */
     async _loadSession(modelPath) {
-        return ort.InferenceSession.create(modelPath);
+        return onnxRuntime().InferenceSession.create(modelPath);
     }
 
     /**
@@ -185,7 +200,7 @@ class MonOCR {
         if (typeof imageSource.metadata === 'function') {
             sharpImg = imageSource;
         } else {
-            sharpImg = sharp(imageSource);
+            sharpImg = imaging()(imageSource);
         }
         const metadata = await sharpImg.metadata();
 
@@ -224,7 +239,7 @@ class MonOCR {
             }
         }
 
-        return new ort.Tensor('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]);
+        return new (onnxRuntime().Tensor)('float32', canvas, [1, 1, this.targetHeight, this.targetWidth]);
     }
 
     /**
@@ -310,6 +325,19 @@ class MonOCR {
 
     /**
      * Processes full page: segments into lines and predicts each.
+
+     * NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
+     * canvas. The Python binding tiles instead, cutting at whitespace columns.
+     * On the pinned v3.5 network tiling is better; on v2 squeezing was.
+     * MEASURED over 240 rendered Mon lines wide enough to need the choice:
+     *
+     *     v2     squeezed 0.0676   tiled 0.0758   CER
+     *     v3.5   squeezed 0.1434   tiled 0.0795   CER
+     *
+     * This binding pins v3.5, so it is on the worse side of that. Porting
+     * `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py closes
+     * it. Deferred because the four bindings already disagree on output
+     * (docs/CROSS_BINDING_PARITY.md) and cut positions would be a second axis.
      */
     async predictPage(imagePath) {
         if (!this.session) await this.init();

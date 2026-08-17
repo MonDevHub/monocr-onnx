@@ -10,11 +10,14 @@ pip install monocr-onnx
 
 ## Features
 
-- **Production Accuracy**: Aligned with v2.0 high-precision models (128px vertical resolution).
+- **Pinned to one network**: the v3.5 recogniser at revision `d3d9d5e`, with 160px input
+  height, 276 characters, 277 CTC classes. No accuracy figure is claimed here; see
+  the [model card](https://huggingface.co/janakhpon/monocr) for the held-out result
+  and its caveats.
 - **Parallel Processing**: Native support for multithreaded batch OCR.
 - **Pinned Model**: Weights and charset are fetched from one immutable [Hugging Face](https://huggingface.co/janakhpon/monocr) revision, checksummed, and cached per revision.
-- **Comprehensive API**: Unified methods for images, PDFs, and accuracy benchmarking.
-- **Robust Segmentation**: Advanced line-detection with adaptive thresholding and relative padding.
+- **One API for images and PDFs**: the same call shape for a line, a page and a document.
+- **Line segmentation**: adaptive thresholding, with padding relative to each line's height.
 
 ## Quick Start
 
@@ -70,8 +73,8 @@ monocr download
 
 ## Model artifact
 
-The model and its charset are pinned to `janakhpon/monocr@a51be11` (v2.0: 128px
-input height, 315 characters, 316 CTC classes) and verified by sha256 after
+The model and its charset are pinned to `janakhpon/monocr@d3d9d5e` (v3.5: 160px
+input height, 276 characters, 277 CTC classes) and verified by sha256 after
 download. They are never fetched from `main` — that ref has already moved under
 this package once, replacing a 64px / 225-class network with the current one.
 
@@ -86,7 +89,7 @@ safe to delete.
 
 - Python 3.11+ — onnxruntime 1.24.1 ships no wheel below cp311 and no sdist, so
   3.10 and below have nothing to install
-- opencv-python-headless (for robust segmentation)
+- opencv-python-headless (line segmentation)
 - onnxruntime 1.24.1 (CPU or GPU), pinned in `uv.lock`
 
 ## Maintenance

@@ -14,10 +14,10 @@ from monocr_onnx.predictor import MonOCR, ModelContractError
 
 
 def test_matching_artifact_loads(make_ocr):
-    ocr = make_ocr(num_classes=316, height=128)
-    assert len(ocr.charset) == 315
-    assert ocr.num_classes == 316
-    assert ocr.input_height == 128
+    ocr = make_ocr(num_classes=277, height=160)
+    assert len(ocr.charset) == 276
+    assert ocr.num_classes == 277
+    assert ocr.input_height == 160
 
 
 def test_too_few_classes_is_refused(patched_session):
@@ -25,7 +25,7 @@ def test_too_few_classes_is_refused(patched_session):
     patched_session(num_classes=226)
     with pytest.raises(ModelContractError) as exc:
         MonOCR(model_path="fake.onnx")
-    assert "316" in str(exc.value) or "226" in str(exc.value)
+    assert "277" in str(exc.value) or "226" in str(exc.value)
 
 
 def test_too_many_classes_is_refused(patched_session):
@@ -36,11 +36,11 @@ def test_too_many_classes_is_refused(patched_session):
 
 def test_off_by_one_class_count_is_refused(patched_session):
     """
-    315 classes against a 315-character charset is the CTC blank going missing,
+    276 classes against a 276-character charset is the CTC blank going missing,
     or the charset's leading space being stripped. One character of drift
     corrupts every glyph past it, so it has to be an error and not a warning.
     """
-    patched_session(num_classes=315)
+    patched_session(num_classes=276)
     with pytest.raises(ModelContractError):
         MonOCR(model_path="fake.onnx")
 
@@ -50,7 +50,7 @@ def test_wrong_input_height_is_refused(patched_session):
     A 64px model is the artifact that used to live at this URL. It is a
     different network, not something to resize into.
     """
-    patched_session(num_classes=316, height=64)
+    patched_session(num_classes=277, height=64)
     with pytest.raises(ModelContractError) as exc:
         MonOCR(model_path="fake.onnx")
     assert "height" in str(exc.value).lower()

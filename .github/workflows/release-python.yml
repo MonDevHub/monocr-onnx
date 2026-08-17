@@ -1,0 +1,110 @@
+# Publishes the Python binding to PyPI on a `python/v*` tag.
+#
+# Trusted publishing (OIDC), so there is no PYPI_TOKEN to store, leak or rotate.
+# This needs a one-time setup on pypi.org before the first run:
+#   Project `monocr-onnx` -> Publishing -> Add a GitHub publisher
+#     owner: MonDevHub   repository: monocr-onnx
+#     workflow: release-python.yml   environment: (blank)
+# Without it the upload is refused, and PyPI's message says so plainly.
+#
+# The tag is namespaced `python/v*` because this repository ships four bindings
+# from one tree: Go already claims `go/v*` and npm `js/v*`. A bare `v*` would be
+# ambiguous about which binding is being released.
+#
+# THE TESTS RUN BEFORE THE PUBLISH. The sibling `monocr` repository had a
+# release workflow that built and published without running anything, which is
+# how a decoder that mapped every index to the wrong character reached PyPI and
+# sat there for three releases.
+name: release-python
+
+on:
+  push:
+    tags:
+      - "python/v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v4
+
+      # A tag that disagrees with pyproject.toml publishes the wrong number
+      # under the right name, and PyPI has no undo.
+      - name: Verify the tag matches pyproject.toml
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#python/v}"
+          PKG="$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml","rb"))["project"]["version"])')"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error title=Tag/version mismatch::tag python/v$TAG does not match pyproject version $PKG"
+            exit 1
+          fi
+          echo "tag and pyproject agree on $PKG"
+
+      # The charset and the model revision are one contract. Publishing a
+      # package whose bundled charset does not match the class count of the
+      # model it downloads is the defect this binding exists to make impossible.
+      - name: Verify the bundled charset matches the pinned model
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          raw = Path("python/monocr_onnx/charset.txt").read_text(encoding="utf-8")
+          charset = raw.rstrip("\r\n")
+          assert len(charset) == 276, f"charset is {len(charset)} characters, expected 276"
+          assert charset[0] == " ", "the first class is U+0020 and a bare strip() removes it"
+          print(f"charset {len(charset)} chars, leading U+0020 intact")
+          PY
+
+      - name: Install and test
+        run: |
+          cd python
+          uv sync
+          uv run pytest tests/ -q
+
+      - name: Build
+        run: |
+          cd python
+          uv build --no-sources
+
+      # The distribution must carry no model weights: they are downloaded at
+      # the pinned revision, and a copy in the package is dead weight and a
+      # licensing surface.
+      - name: The distribution must ship no model weights
+        run: |
+          set -euo pipefail
+          found="$(unzip -Z1 python/dist/*.whl \
+            | grep -iE '\.(ckpt|pt|pth|safetensors|onnx|tflite|mlmodel)$' || true)"
+          if [ -n "$found" ]; then
+            echo "::error title=Weights in the wheel::$(printf '%s' "$found" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "wheel carries no model weights"
+
+      - name: Publish
+        run: |
+          cd python
+          set +e
+          output="$(uv publish --trusted-publishing always 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            # The runner annotates only "Process completed with exit code 1",
+            # and reading the log needs repository admin. Echo the reason back
+            # as an ::error::, which lands in the run's public annotations.
+            detail="$(printf '%s\n' "$output" | tail -25 \
+              | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=uv publish failed::${detail}"
+            exit "$status"
+          fi

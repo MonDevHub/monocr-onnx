@@ -44,14 +44,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install dependencies
-        run: |
-          cd js
-          npm install
+      # Tests first, and with no dependencies installed. They use a fake
+      # session and never run inference, and src/ requires onnxruntime-node
+      # and sharp lazily, so the suite is pure logic. Running it before any
+      # install means a dependency problem cannot be mistaken for a test
+      # failure, and a test failure cannot be masked by one.
       - name: Run tests
         run: |
           cd js
-          npm test
+          node --test test/*.test.js
+      # Separately: the committed lockfile must still resolve. js/ has
+      # pnpm-lock.yaml and no package-lock.json, so `npm install` ignored it,
+      # dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's network
+      # postinstall unsandboxed. That is what failed here on 2026-08-15.
+      - name: Install dependencies from the committed lockfile
+        uses: pnpm/action-setup@v4
+        with:
+          # There is no package.json at the repo root — this tree ships four
+          # bindings and the JS one lives in js/. Without this, action-setup
+          # looks for `packageManager` at the root, finds no manifest and fails.
+          package_json_file: js/package.json
+      - run: |
+          cd js
+          pnpm install --frozen-lockfile
 
   rust-test:
     runs-on: ubuntu-latest
@@ -71,7 +86,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          # Matches go/go.mod, which requires 1.23. This read "1.21" until
+          # 2026-08-15, so CI compiled against a toolchain the module rejects.
+          go-version: "1.23"
       - name: Run tests
         run: |
           cd go

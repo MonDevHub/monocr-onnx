@@ -9,21 +9,28 @@ On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 > [!NOTE]
 > Mon is classified as **vulnerable** in [UNESCO's Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
 >
-> This project digitises the Mon script, so that later work — system
-> integrations, corpora, language models — has something to build on.
+> This project digitises the Mon script, so that later work has something to
+> build on: system integrations, corpora, language models.
 
 ## Overview
 
 This repository is the engine and its four bindings: Python, JavaScript
-(Node.js), Go, and Rust. Each loads the same ONNX graph and the same 315-character
+(Node.js), Go, and Rust. Each loads the same ONNX graph and the same 276-character
 charset, pinned to one Hugging Face revision, and each decodes CTC output the same
 way.
 
-They are checked against each other rather than assumed to agree. The current
-result is in [docs/CROSS_BINDING_PARITY.md](docs/CROSS_BINDING_PARITY.md):
-**identical text on 5 of 7 images**, with both disagreements a single trailing
-character traceable to a difference in image resampling. That is agreement, not
-accuracy — no binding has been scored against ground truth here.
+They are checked against each other rather than assumed to agree, and the
+current result is not full agreement. From
+[docs/CROSS_BINDING_PARITY.md](docs/CROSS_BINDING_PARITY.md): Python, JS and Go
+produce identical text on **5 of 7** images, and Rust differs on a sixth, so
+across all four bindings it is **4 of 7**. Two disagreements drop a trailing Mon
+character; Rust's reads a Myanmar digit six where the others read an ASCII zero.
+The cause is four different image-resampling kernels, two of them the wrong
+family.
+
+That is agreement, not accuracy. No binding has been scored against ground truth
+here, and four implementations reading the same wrong thing would agree
+perfectly.
 
 > [!TIP]
 > The web and mobile apps cap uploads at 50 MB and 20 MB. This SDK has no such
@@ -33,24 +40,29 @@ accuracy — no binding has been scored against ground truth here.
 
 ```
 Image (File/Buffer)
-  LineSegmenter      → horizontal projection profile → List<LineSegment>
-  ImagePreprocessor  → crop + scale + normalize [-1.0, 1.0]
-  MonOcrEngine       → ONNX Runtime Session (monocr.onnx)
-  CtcDecoder         → greedy CTC decode → String
+  ModelManager    → fetch + cache monocr.onnx at the pinned revision
+  LineSegmenter   → horizontal projection profile → line boxes
+  MonOCR.predict  → crop + scale + normalize to [-1.0, 1.0]
+                  → ONNX Runtime session → greedy CTC decode → String
 ```
+
+`ModelManager`, `LineSegmenter` and `MonOCR` are the names in this repository, in
+each of the four languages. The block above previously named `ImagePreprocessor`,
+`MonOcrEngine` and `CtcDecoder`, which are classes in the Android and iOS apps and
+appear nowhere here.
 
 ### Model specification
 
 | Attribute    | Specification                  |
 | ------------ | ------------------------------ |
-| Architecture | MobileNetV3 + BiLSTM-384 + CTC |
+| Architecture | MobileNetV3-Large + SE + 2×BiLSTM-512 + attention + CTC |
 | Precision    | FP32 (ONNX)                    |
-| Parameters   | ~6.6M                          |
-| Input        | 128 × Variable (H × W)         |
-| Charset      | 315 characters, 316 classes    |
-| Asset Size   | ~25 MB                         |
+| Parameters   | 11.55M                         |
+| Input        | 160 × 1024 (H × W), both static |
+| Charset      | 276 characters, 277 classes    |
+| Asset Size   | 46.2 MB                        |
 
-The model is pinned to revision `a51be11` of
+The model is pinned to revision `d3d9d5e` of
 [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), not to `main`. Each
 binding ships the matching charset and refuses to decode if the two disagree: CTC
 reserves index 0 for the blank, so a model over N characters must emit N + 1
@@ -59,12 +71,23 @@ with no error and no lookup miss.
 
 ## Supported platforms
 
-| SDK                      | Directory            | Registry/Source                                            | Status     |
-| :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- |
-| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | Published  |
-| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Published  |
-| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | Published  |
-| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | Source only |
+| SDK                      | Directory            | Registry/Source                                            | Published  | In this tree |
+| :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- | :----------- |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.1        |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.1        |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.2.0     | 0.2.0        |
+| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.2.0     |
+
+**0.2.1 is not released yet on npm or PyPI. Go is current.** The table used to
+read "Published" in every row, which was true of the *binding* and not of the
+version beside it. Registry state verified 2026-08-16 against pypi.org,
+registry.npmjs.org and proxy.golang.org; the Go row still said v0.1.1 that
+morning, eleven hours after `go/v0.2.0` was pushed, which sent readers to the
+one release carrying the charset defect.
+
+This matters more than a version number usually does: the published 0.1.x
+releases are the ones carrying the 225-character charset defect that the commits
+in this tree fix. Installing from a registry today gets the broken charset.
 
 ## Installation
 
@@ -112,23 +135,31 @@ monocr-onnx/
 ├── js/               # Node.js package (uses sharp)
 ├── go/               # Go module
 ├── rust/             # Rust crate
-├── src/              # shared engine sources
-├── scripts/          # build and conversion scripts
-├── examples/         # runnable per-language examples
+├── src/              # monocr_full.js — an early single-file prototype,
+│                     #   imported by nothing and pinned to a 64px input
+├── scripts/          # download_models.sh — fetch the pinned model
+├── examples/         # runnable examples: python, js, go (no rust yet)
 ├── data/             # test images and fixtures
 └── docs/             # parity results and design notes
 ```
 
 ## Ecosystem
 
-- **[MonOCR Web](https://github.com/MonDevHub/monocr-web)** — in-browser OCR
-- **[MonOCR Android](https://github.com/MonDevHub/ocr-android)** — Jetpack Compose
-- **[MonOCR iOS](https://github.com/MonDevHub/ocr-ios)** — SwiftUI
+All three apps now live in one repository,
+[MonDevHub/monocr](https://github.com/MonDevHub/monocr):
+
+- `apps/web` — in-browser OCR, SvelteKit
+- `apps/android` — Jetpack Compose
+- `apps/ios` — SwiftUI
+
+The former `MonDevHub/ocr-android` and `MonDevHub/ocr-ios` links were listed here
+until 2026-08-15 and both return 404; `MonDevHub/monocr-web` still resolves but
+has not been pushed to since the web app moved into the monorepo.
 
 ## Resources
 
 - [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML.
-  The TFLite export was removed at revision `a51be11`.
+  The TFLite export was removed at revision `d3d9d5e`.
 
 ## License
 

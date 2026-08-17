@@ -1,0 +1,205 @@
+# Publishes the JS binding to npm on a `js/v*` tag.
+#
+# Trusted publishing (OIDC), so there is no NPM_TOKEN to store, leak or rotate.
+# `id-token: write` is what mints the short-lived credential, and it is also what
+# lets npm attach a provenance attestation linking the published tarball to this
+# workflow run and this commit.
+#
+# The tag is namespaced `js/v*` because this repository ships four bindings from
+# one tree and the Go module already claims `go/v*`. A bare `v*` would be
+# ambiguous about which binding is being released.
+#
+# THE TESTS RUN BEFORE THE PUBLISH, AND THAT IS THE POINT. The sibling `monocr`
+# repository had a release workflow that built and published without running
+# anything, which is how a decoder that mapped every index to the wrong
+# character reached PyPI and sat there.
+name: release-js
+
+on:
+  push:
+    tags:
+      - "js/v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `registry-url:` here, deliberately. It makes setup-node write an
+      # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
+      # and with no such secret set — which is the whole point of trusted
+      # publishing — npm still counts that line as a configured credential and
+      # skips the OIDC exchange. It then PUTs the tarball unauthenticated and
+      # the registry answers 404, which npm returns instead of 403 so a refused
+      # publish cannot be used to probe whether a package exists.
+      #
+      # Four runs failed that way and read exactly like a missing trusted
+      # publisher. What separated them was the auth trail: uv's PyPI publish in
+      # release-python.yml attempts the exchange and reports a specific 422,
+      # while npm's output had no OIDC line at all — it never tried. The
+      # registry default is npmjs.org, so nothing is lost by omitting this.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Trusted publishing needs npm >= 11.5.1 and the runner's bundled npm lags.
+      #
+      # npm@11, not npm@latest: latest is 12.x, which requires Node ^22.22 and
+      # cannot run on the Node 20 this job uses. Node 20 is deliberate — it is
+      # the floor package.json declares, and publishing from the floor is the
+      # honest thing to do. npm 11 supports ^20.17.0 || >=22.9.0.
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@11
+
+      # No install needed: the suite uses a fake session and src/ requires its
+      # native dependencies lazily. Same reasoning as the CI workflow.
+      - name: Run tests
+        run: |
+          cd js
+          node --test test/*.test.js
+
+      # The lockfile must resolve before anything is published from this tree.
+      - uses: pnpm/action-setup@v4
+        with:
+          # There is no package.json at the repo root — this tree ships four
+          # bindings and the JS one lives in js/. Without this, action-setup
+          # looks for `packageManager` at the root, finds no manifest and fails.
+          package_json_file: js/package.json
+      - name: Install from the committed lockfile
+        run: |
+          cd js
+          pnpm install --frozen-lockfile
+
+      # A tag that disagrees with package.json publishes the wrong number under
+      # the right name, and npm has no undo.
+      - name: Verify the tag matches package.json
+        run: |
+          cd js
+          TAG="${GITHUB_REF_NAME#js/v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag js/v$TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
+          echo "tag and package.json agree on $PKG"
+
+      # The charset and the pinned revision are one contract. Publishing a
+      # tarball whose bundled charset does not match the revision it pins is the
+      # defect this whole binding exists to make impossible.
+      - name: Verify the bundled charset matches the pinned revision
+        run: |
+          cd js
+          node -e "
+            const fs = require('fs');
+            const { MODEL_REVISION } = require('./src/model-manager');
+            const charset = fs.readFileSync('src/charset.txt', 'utf-8').replace(/[\r\n]+$/, '');
+            if (charset.length !== 276) {
+              console.error('bundled charset is ' + charset.length + ' characters, expected 276');
+              process.exit(1);
+            }
+            if (charset[0] !== ' ') {
+              console.error('charset must start with U+0020');
+              process.exit(1);
+            }
+            console.log('charset ' + charset.length + ' chars, pinned at ' + MODEL_REVISION);
+          "
+
+      # Two causes of a refused publish look identical from outside the job: the
+      # workflow having no `id-token: write`, and the registry declining the
+      # exchange because no trusted publisher is configured for the package.
+      # Checking the token endpoint first separates them.
+      - name: Verify the runner can mint an OIDC token
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error title=No OIDC token::ACTIONS_ID_TOKEN_REQUEST_URL is unset, so this job has no id-token: write permission and trusted publishing cannot work."
+            exit 1
+          fi
+          echo "OIDC token endpoint present"
+
+      # A configured credential — even one expanding to an empty string — makes
+      # npm skip trusted publishing silently. Having the token endpoint above is
+      # not enough; nothing must shadow it. This is the regression guard for the
+      # setup-node change explained at the top of this job.
+      - name: No stale credential may shadow the OIDC exchange
+        run: |
+          set -euo pipefail
+          found=""
+          for f in "$HOME/.npmrc" "$GITHUB_WORKSPACE/.npmrc" "$GITHUB_WORKSPACE/js/.npmrc"; do
+            [ -f "$f" ] || continue
+            if grep -q '_authToken' "$f"; then
+              found="$found $f"
+            fi
+          done
+          if [ -n "$found" ]; then
+            echo "::error title=A credential is configured::${found} sets _authToken, so npm will skip the OIDC exchange and publish unauthenticated"
+            exit 1
+          fi
+          echo "no _authToken configured; npm will take the OIDC path"
+
+      # The runner annotates a failed step with nothing but "Process completed
+      # with exit code 1", and reading the full log needs admin rights on the
+      # repository. A release that only an admin can diagnose is a release that
+      # stalls, so npm's own message is echoed back as an `::error::` — those
+      # land in the run's annotations, which are readable by anyone who can see
+      # the repository.
+      # npm's own OIDC attempt is silent at default verbosity: a failed exchange
+      # falls through to ENEEDAUTH, which reads like "this runner has no
+      # credentials" rather than "the registry declined the exchange". Those
+      # need different fixes and npm will not tell them apart, so ask the
+      # registry directly and let it answer — the way uv's PyPI publish reports
+      # its 422 invalid-publisher.
+      #
+      # The success body carries a live publishing token, so only the status
+      # code is printed unless the exchange is refused.
+      - name: Ask the registry whether a trusted publisher is configured
+        run: |
+          set -euo pipefail
+          id_token="$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          echo "minted an OIDC token for audience npm:registry.npmjs.org"
+
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' -X POST \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/monocr" \
+            -H "Authorization: Bearer $id_token" \
+            -H "Content-Type: application/json")"
+          echo "exchange returned HTTP $code"
+
+          if [ "$code" != "200" ]; then
+            detail="$(sed 's/%/%25/g; s/\r//g' "$body" | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=npm refused the token exchange (HTTP ${code})::${detail}"
+            exit 1
+          fi
+          echo "the registry issued a publishing token, so a trusted publisher is configured"
+
+      - name: Publish
+        run: |
+          cd js
+          set +e
+          output="$(npm publish --provenance --access public 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            annotate() {
+              printf '%s\n' "$2" | sed 's/%/%25/g; s/\r//g' \
+                | awk -v t="$1" 'BEGIN{printf "::error title=%s::", t} {printf "%s%%0A", $0}'
+              echo
+            }
+            # Whether npm attempted the OIDC exchange at all is the one thing
+            # that separates "no trusted publisher is configured for this
+            # package" from "one is configured and the registry declined it".
+            # It is printed near the start of the output, so a tail misses it.
+            auth="$(printf '%s\n' "$output" \
+              | grep -iE 'oidc|trusted|provenance|auth|401|403|404|E404' || true)"
+            annotate "npm auth trail" "${auth:-no OIDC or auth line in npm output — the exchange was never attempted}"
+            annotate "npm publish failed" "$(printf '%s\n' "$output" | tail -20)"
+            exit "$status"
+          fi

@@ -8,24 +8,27 @@ import onnxruntime as ort
 from PIL import Image
 
 from .model_manager import ModelManager
-from .segmenter import LineSegmenter
+from .segmenter import LineSegmenter, tile_line
 
 # The input height this binding targets, and the height the pinned artifact was
 # traced at. It is checked against the ONNX graph at load; the graph wins for
 # preprocessing when it declares a static height.
 #
-# This is the v2 network: H=128, 315 characters, MobileNetV3-Large + BiLSTM +
-# CTC. It is NOT the network in the mon_OCR training repo, which is v3.5 at
-# H=160 with a different charset. Two different models. Copying mon_OCR's
-# numbers here would break this binding, which is why the expectation is
+# This is the v3.5 network: H=160, 276 characters, 277 classes,
+# MobileNetV3-Large + SE + 2xBiLSTM + attention + CTC. It replaced v2 (H=128,
+# 315 characters) at revision d3d9d5e on 2026-08-15. Anything still pinned to
+# a51be11 gets v2 and must keep the old numbers — the two are different
+# networks, not two versions of one, which is why the expectation is
 # cross-checked against the artifact rather than trusted on its own.
-EXPECTED_INPUT_HEIGHT = 128
+EXPECTED_INPUT_HEIGHT = 160
 
-# Width of the training canvas. The exported graph leaves the width axis
-# dynamic, so nothing forces this at runtime — but the model was trained on
-# lines scaled to the input height and right-padded with white to this width,
-# and it is what the JS binding feeds. Used only when the graph does not
-# declare a static width.
+# Width of the training canvas, and — since v3.5 — of the graph itself.
+#
+# v2 left the width axis dynamic, so a crop of any width could be fed directly.
+# v3.5 declares a static 1024 and accepts nothing else: attention fixes the
+# sequence length when the graph is traced, so a wider declaration would be a
+# promise the artifact cannot keep. Resize and pad to this width before calling.
+# Used only when the graph does not declare a static width.
 DEFAULT_INPUT_WIDTH = 1024
 
 
@@ -45,8 +48,10 @@ def _read_charset(text):
 
     ``.strip("\\n\\r")`` and not ``.strip()``. The charset really does begin
     with U+0020 — a space is a character the model predicts — and a bare strip
-    eats it, dropping 315 characters to 314 and shifting every index in
+    eats it, dropping 276 characters to 275 and shifting every index in
     ``idx2char`` by one. Every decoded glyph then comes out as its neighbour.
+    The sibling ``monocr`` package shipped exactly this defect: measured
+    2026-08-15, all 315 of its decodable indices returned the wrong character.
     """
     return text.strip("\n\r")
 
@@ -248,6 +253,26 @@ class MonOCR:
     def predict_page(self, img_path):
         """
         Segment page into lines and predict each line.
+
+        A line wider than the canvas after being scaled to the model height is
+        cut into canvas-width tiles at whitespace columns, read separately, and
+        rejoined with no separator. Squeezing it into the canvas instead breaks
+        the aspect ratio the model was trained on.
+
+        Which of the two is better is a property of the network, not of the
+        method. MEASURED 2026-08-15 with one harness over 240 rendered Mon lines
+        wide enough to need the choice, median 3 model windows each, swapping
+        only the graph:
+
+            v2     squeezed 0.0676   tiled 0.0758    CER, squeezing better
+            v3.5   squeezed 0.1434   tiled 0.0795    CER, tiling better
+
+        This package pins v3.5, so it tiles. Anything repinned to v2 at a51be11
+        should not: re-measure before changing the pin, because the direction
+        flips.
+
+        Rendered lines rather than photographed pages, so this is a preview and
+        not an evaluation; the two arms differ only in the choice under test.
         """
         if isinstance(img_path, (str, Path)):
             img = Image.open(img_path)
@@ -262,7 +287,19 @@ class MonOCR:
             # try it as one line before giving up.
             return self.predict_line(img)
 
-        return "\n".join(self.predict_line(line["img"]) for line in lines)
+        return "\n".join(self._read_line_tiled(line["img"]) for line in lines)
+
+    def _read_line_tiled(self, crop):
+        """Read one line, tiling it first if it will not fit the model window.
+
+        Tiles join with no separator: the cut falls inside a word by
+        construction, since cut_column searches for the *quietest* column rather
+        than a word boundary. A space here would insert one that is not there.
+        """
+        tiles = tile_line(crop, self.input_height, self.input_width)
+        if len(tiles) == 1:
+            return self.predict_line(tiles[0])
+        return "".join(self.predict_line(tile) for tile in tiles)
 
     def predict(self, img_path):
         # Alias for backward compatibility or ease of use

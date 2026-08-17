@@ -17,7 +17,7 @@ test('bundled charset has one character per model class, minus the CTC blank', (
 
 test('bundled charset is byte-identical to the pinned revision', () => {
     // Fetched from
-    // huggingface.co/janakhpon/monocr/resolve/a51be11/onnx/charset.txt
+    // huggingface.co/janakhpon/monocr/resolve/d3d9d5e/onnx/charset.txt
     assert.equal(fs.statSync(BUNDLED_CHARSET).size, PINNED.charsetBytes);
 });
 

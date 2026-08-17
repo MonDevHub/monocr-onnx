@@ -19,8 +19,8 @@ tokio = { version = "1", features = ["full"] }
 
 Weights are downloaded from
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr), pinned to revision
-`a51be11` (`model_manager::MODEL_REVISION`). That artifact takes a
-`[1, 1, 128, width]` input and emits `[1, sequence, 316]` logits: 315 characters
+`d3d9d5e` (`model_manager::MODEL_REVISION`). That artifact takes a
+`[1, 1, 160, width]` input and emits `[1, sequence, 277]` logits: 276 characters
 plus the CTC blank.
 
 The charset, the input height and the classifier width are one contract. If they
@@ -30,7 +30,7 @@ a `ModelContractError` when it disagrees with the charset it holds:
 
 ```
 model contract violation: charset/model mismatch.
-  charset: 315 characters -> expects 316 classes (315 + CTC blank)
+  charset: 276 characters -> expects 277 classes (276 + CTC blank)
   model (/…/monocr.onnx): 225 classes
 ```
 

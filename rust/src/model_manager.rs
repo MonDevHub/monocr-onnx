@@ -18,7 +18,7 @@ pub const MODEL_REPO: &str = "janakhpon/monocr";
 /// model served at one point had a 64-pixel input and 225 output classes, the
 /// one served now has 128 and 316. A cache that gates on "the file exists"
 /// cannot tell those apart, so the revision is part of the cache path.
-pub const MODEL_REVISION: &str = "a51be11";
+pub const MODEL_REVISION: &str = "d3d9d5e";
 
 /// Filename of the ONNX model within the repository's `onnx/` directory.
 pub const MODEL_FILENAME: &str = "monocr.onnx";

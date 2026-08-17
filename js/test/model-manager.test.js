@@ -40,9 +40,9 @@ test('the charset comes from the same revision as the weights', () => {
 });
 
 test('the cache path carries the revision, so a bump is a cache miss', () => {
-    const a = new ModelManager('a51be11');
+    const a = new ModelManager('d3d9d5e');
     const b = new ModelManager('deadbee');
-    assert.equal(path.basename(a.cacheDir), 'a51be11');
+    assert.equal(path.basename(a.cacheDir), 'd3d9d5e');
     assert.notEqual(a.getModelPath(), b.getModelPath());
     assert.notEqual(a.getCharsetPath(), b.getCharsetPath());
 });

@@ -24,10 +24,10 @@ class FakeSession:
 
     ``shape`` entries that are strings are dynamic axes, matching how
     onnxruntime reports them (the real pinned model reports
-    ``[1, 1, 128, 'width']`` and ``[1, 'sequence', 316]``).
+    ``[1, 1, 160, 1024]`` and ``[1, 'sequence', 277]``).
     """
 
-    def __init__(self, num_classes=316, height=128, width="width", logits=None):
+    def __init__(self, num_classes=277, height=160, width=1024, logits=None):
         self._inputs = [FakeIO("input", [1, 1, height, width])]
         self._outputs = [FakeIO("logits", [1, "sequence", num_classes])]
         self._logits = logits

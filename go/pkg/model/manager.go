@@ -14,10 +14,11 @@ const (
 
 	// ModelRevision pins the artifact. `main` is a moving ref and the artifact
 	// has already changed under it: the model served at one point had a 64-pixel
-	// input and 225 output classes, the one served now has 128 and 316. A cache
+	// input and 225 output classes, a51be11 had 128 and 316, and the one served
+	// now has 160 and 277. A cache
 	// keyed only on "the file exists" cannot tell those apart, so the revision is
 	// part of the cache path.
-	ModelRevision = "a51be11"
+	ModelRevision = "d3d9d5e"
 
 	ModelFilename   = "monocr.onnx"
 	CharsetFilename = "charset.txt"

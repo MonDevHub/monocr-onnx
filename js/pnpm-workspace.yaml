@@ -1,3 +1,11 @@
+# pnpm 9 requires `packages` in a workspace file and errors with
+# "packages field missing or empty" without it; pnpm 11 tolerates its absence.
+# js/ is a single package, not a workspace, so the list is the package itself.
+# Reproduced 2026-08-16: `npx pnpm@9 install --frozen-lockfile` failed here
+# while pnpm 11.20 succeeded, which is why CI went red and a local run did not.
+packages:
+  - "."
+
 allowBuilds:
   onnxruntime-node: true
 onlyBuiltDependencies:

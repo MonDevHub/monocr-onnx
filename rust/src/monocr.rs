@@ -28,7 +28,7 @@ const DEFAULT_CHARSET: &str = include_str!("charset.txt");
 /// they drift apart the model still runs and still returns text — it is just
 /// the wrong text, with no error anywhere. So this is declared here, checked
 /// against the graph in [`MonOcr::new`], and a disagreement refuses to load.
-pub const EXPECTED_INPUT_HEIGHT: u32 = 128;
+pub const EXPECTED_INPUT_HEIGHT: u32 = 160;
 
 /// Padded canvas width fed to the model. The model's width axis is dynamic;
 /// this is the binding's choice, not a model constraint.
@@ -748,6 +748,13 @@ impl MonOcr {
     ///    - Run inference with the ONNX model
     ///    - Decode CTC output to text
     /// 3. Return results with text and bounding boxes
+    // NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
+    // canvas; the Python binding tiles at whitespace columns instead. MEASURED
+    // over 240 rendered Mon lines wide enough to need the choice:
+    //     v2     squeezed 0.0676   tiled 0.0758   CER
+    //     v3.5   squeezed 0.1434   tiled 0.0795   CER
+    // This binding pins v3.5, so it is on the worse side. The port is
+    // tile_line/cut_column in python/monocr_onnx/segmenter.py.
     pub async fn predict_page(&mut self, image_path: impl AsRef<Path>) -> Result<Vec<LineResult>> {
         let image_path = image_path.as_ref();
         let lines = self.segmenter.segment(image_path)?;
@@ -920,9 +927,14 @@ fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String>
 mod tests {
     use super::*;
 
-    /// The pinned model: input [1, 1, 128, width], output [1, sequence, 316].
-    const PINNED_CLASSES: usize = 316;
-    const PINNED_CHAR_LEN: usize = 315;
+    /// The pinned model: input [1, 1, 160, 1024], output [1, sequence, 277].
+    ///
+    /// These two must move together. They were 316 and 276 for one commit —
+    /// mutually inconsistent, since check_contract requires
+    /// classes == charset_len + 1 — because the migration to v3.5 was verified
+    /// with `cargo check`, which compiles tests without running them.
+    const PINNED_CLASSES: usize = 277;
+    const PINNED_CHAR_LEN: usize = 276;
 
     fn charset_of_len(n: usize) -> Vec<char> {
         // Leading U+0020, as the real charset has.
@@ -951,8 +963,8 @@ mod tests {
             Some(EXPECTED_INPUT_HEIGHT as usize),
             "model.onnx",
         )
-        .expect_err("225 characters vs 316 classes must be refused");
-        assert!(err.0.contains("226") && err.0.contains("316"), "{err}");
+        .expect_err("225 characters vs 277 classes must be refused");
+        assert!(err.0.contains("226") && err.0.contains("277"), "{err}");
     }
 
     /// `.trim()` eating the leading space is a one-character mismatch, and one
@@ -965,11 +977,15 @@ mod tests {
             Some(EXPECTED_INPUT_HEIGHT as usize),
             "model.onnx",
         )
-        .expect_err("314 characters vs 316 classes must be refused");
+        .expect_err("275 characters vs 277 classes must be refused");
     }
 
     /// This binding hard-coded `target_height: 64` while the pinned model's
-    /// input is a static 128.
+    /// input is a static 160.
+    ///
+    /// Passes PINNED_CLASSES so the class check is satisfied and the height
+    /// branch is the one actually exercised. With the stale 316 it errored on
+    /// class count and never reached the height comparison it names.
     #[test]
     fn contract_rejects_height_mismatch() {
         check_contract(
@@ -983,7 +999,7 @@ mod tests {
 
     #[test]
     fn contract_rejects_empty_charset() {
-        check_contract(0, Some(PINNED_CLASSES), Some(128), "model.onnx")
+        check_contract(0, Some(PINNED_CLASSES), Some(EXPECTED_INPUT_HEIGHT as usize), "model.onnx")
             .expect_err("an empty charset must be refused");
     }
 
@@ -1024,11 +1040,11 @@ mod tests {
 
         // The `.trim()` victim: one character short.
         decode_ctc(&charset_of_len(PINNED_CHAR_LEN - 1), &data, &shape)
-            .expect_err("a 314-character charset against a 316-class tensor must be refused");
+            .expect_err("a 275-character charset against a 277-class tensor must be refused");
 
         // The old bundled charset.
         decode_ctc(&charset_of_len(225), &data, &shape)
-            .expect_err("a 225-character charset against a 316-class tensor must be refused");
+            .expect_err("a 225-character charset against a 277-class tensor must be refused");
     }
 
     #[test]

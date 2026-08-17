@@ -1,4 +1,10 @@
-const sharp = require('sharp');
+// Lazy for the same reason as in monocr.js: the tests exercise the projection
+// profile through fixtures and never open an image.
+let sharp = null;
+function imaging() {
+    if (sharp === null) sharp = require('sharp');
+    return sharp;
+}
 
 class LineSegmenter {
     /**
@@ -16,7 +22,7 @@ class LineSegmenter {
      * @returns {Promise<Array<{img: sharp.Sharp, bbox: {x: number, y: number, w: number, h: number}}>>}
      */
     async segment(imagePath) {
-        const image = sharp(imagePath);
+        const image = imaging()(imagePath);
         const { width, height } = await image.metadata();
         
         // 1. Get raw grayscale data for thresholding

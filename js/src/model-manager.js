@@ -17,7 +17,7 @@ const https = require('https');
  * count and input height against `js/test/`, and update the bundled
  * `src/charset.txt` in the same commit.
  */
-const MODEL_REVISION = 'a51be11';
+const MODEL_REVISION = 'd3d9d5e';
 const MODEL_REPO = 'janakhpon/monocr';
 
 /**
@@ -26,8 +26,8 @@ const MODEL_REPO = 'janakhpon/monocr';
  * corrupted download, not a cache hit.
  */
 const REMOTE_FILES = [
-    { remote: 'onnx/monocr.onnx', local: 'monocr.onnx', bytes: 26355440, label: 'model' },
-    { remote: 'onnx/charset.txt', local: 'charset.txt', bytes: 674, label: 'charset' },
+    { remote: 'onnx/monocr.onnx', local: 'monocr.onnx', bytes: 46247040, label: 'model' },
+    { remote: 'onnx/charset.txt', local: 'charset.txt', bytes: 556, label: 'charset' },
 ];
 
 class ModelManager {

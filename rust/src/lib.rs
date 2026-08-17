@@ -244,9 +244,9 @@ pub struct OcrResult {
 mod tests {
     use super::*;
 
-    /// The pinned model (`model_manager::MODEL_REVISION`) emits 316 classes:
-    /// 315 characters plus the CTC blank at index 0.
-    const PINNED_CHARSET_LEN: usize = 315;
+    /// The pinned model (`model_manager::MODEL_REVISION`) emits 277 classes:
+    /// 276 characters plus the CTC blank at index 0.
+    const PINNED_CHARSET_LEN: usize = 276;
 
     const EMBEDDED_CHARSET: &str = include_str!("charset.txt");
 
@@ -263,7 +263,7 @@ mod tests {
     }
 
     /// The charset's first character is U+0020. A bare `.trim()` eats it,
-    /// dropping 315 to 314 and shifting every index in the decode by one — the
+    /// dropping 276 to 275 and shifting every index in the decode by one — the
     /// model still runs and still returns text, just the wrong text.
     #[test]
     fn embedded_charset_keeps_its_leading_space() {
