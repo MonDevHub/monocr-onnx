@@ -19,6 +19,16 @@ import (
 //go:embed charset.txt
 var embeddedCharset string
 
+// Line segmentation parameters, shared by the image and PDF paths.
+//
+// They were the literals 10 and 3 at the one call site that segmented. Naming
+// them is what stops the two paths drifting: they have to agree, or the same
+// page read as a PNG and as a PDF comes back split differently.
+const (
+	segMinLineHeight = 10
+	segSmoothWindow  = 3
+)
+
 // RuntimeVersion loads the ONNX Runtime shared library if it is not already
 // loaded and reports its version.
 //
@@ -72,19 +82,25 @@ func resolveModel() (modelPath, charset string, err error) {
 
 // ReadImage recognizes text from an image file.
 // It automatically downloads the model if not present.
-// NOTE (2026-08-16): two gaps here, the second larger than the first.
+// Lines are segmented and read top to bottom, joined with newlines, the same
+// way the PDF path reads a page.
 //
-//  1. Wide lines are SQUEEZED into the model canvas rather than cut into tiles
-//     at whitespace columns, which is what the Python binding does. MEASURED
-//     over 240 rendered Mon lines wide enough to need the choice:
-//     v2     squeezed 0.0676   tiled 0.0758   CER
-//     v3.5   squeezed 0.1434   tiled 0.0795   CER
-//     This binding pins v3.5, so it is on the worse side of that.
+// NOTE (2026-08-16, gap 2 closed 2026-08-18): this did not segment at all. It
+// fed the whole image to the model as one line, so a multi-line image was
+// compressed into a single strip and decoded as one line, and the same page
+// read as a PNG and as a PDF came back differently. Both paths now share
+// segMinLineHeight and segSmoothWindow.
 //
-//  2. ReadImage does not segment at all. It feeds the whole image to the model
-//     as one line, so a multi-line image is compressed into a single strip and
-//     decoded as one line. Only the PDF path segments. That is a functional
-//     hole rather than a tuning choice, and it is the one to close first.
+// The remaining gap: wide lines are SQUEEZED into the model canvas rather than
+// cut into tiles at whitespace columns, which is what the Python binding and
+// the web app do. MEASURED over 240 rendered Mon lines wide enough to need the
+// choice:
+//
+//	v2     squeezed 0.0676   tiled 0.0758   CER
+//	v3.5   squeezed 0.1434   tiled 0.0795   CER
+//
+// This binding pins v3.5, so it is still on the worse side of that. Port
+// tile_line/cut_column from python/monocr_onnx/segmenter.py. ROADMAP 4.5.6.
 func ReadImage(imagePath string) (string, error) {
 	modelPath, charset, err := resolveModel()
 	if err != nil {
@@ -143,6 +159,14 @@ func ReadImageWithModel(imagePath, modelPath, charset string) (string, error) {
 	return predictFile(pred, imagePath)
 }
 
+// predictFile decodes an image and reads every line in it.
+//
+// It used to hand the whole image to the model as one line, so a page of text
+// was compressed vertically into a single strip and decoded as one line. Only
+// the PDF path segmented, which meant ReadImage("page.png") and
+// ReadPDF("page.pdf") gave different answers for the same page. Segmenting here
+// uses the same LineSegmenter with the same parameters as readPDFWithModel, so
+// the two paths now agree.
 func predictFile(pred *predictor.Predictor, imagePath string) (string, error) {
 	f, err := os.Open(imagePath)
 	if err != nil {
@@ -155,7 +179,40 @@ func predictFile(pred *predictor.Predictor, imagePath string) (string, error) {
 		return "", fmt.Errorf("failed to decode image: %v", err)
 	}
 
-	return pred.Predict(img)
+	return predictImage(pred, img)
+}
+
+// predictImage reads every line of an already-decoded image, top to bottom.
+//
+// A page the segmenter finds no lines in is read whole rather than returning
+// nothing, because a single cropped line is a legitimate input and produces
+// zero segments. That matches readPDFWithModel.
+func predictImage(pred *predictor.Predictor, img image.Image) (string, error) {
+	seg := segmenter.NewLineSegmenter(segMinLineHeight, segSmoothWindow)
+
+	lines, err := seg.Segment(img)
+	if err != nil || len(lines) == 0 {
+		return pred.Predict(img)
+	}
+
+	var out []string
+	for _, line := range lines {
+		text, err := pred.Predict(line.Img)
+		if err != nil {
+			// One unreadable line must not lose the rest of the page. The PDF
+			// path has always skipped and continued; this matches it.
+			continue
+		}
+		if strings.TrimSpace(text) != "" {
+			out = append(out, text)
+		}
+	}
+
+	if len(out) == 0 {
+		return "", nil
+	}
+
+	return strings.Join(out, "\n"), nil
 }
 
 // ReadPDF recognizes text from a PDF file (requires pdftoppm/poppler-utils).
@@ -224,7 +281,7 @@ func readPDFWithModel(pdfPath, modelPath, charset string) ([]string, error) {
 	}
 	defer pred.Close()
 
-	seg := segmenter.NewLineSegmenter(10, 3)
+	seg := segmenter.NewLineSegmenter(segMinLineHeight, segSmoothWindow)
 
 	var results []string
 	for _, file := range files {
