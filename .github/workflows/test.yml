@@ -11,11 +11,14 @@ name: CI
 # have checked. If a binding has no tests, the honest state is a red build, not
 # a green one with an echo in the log.
 
+# No branch filter on push. Restricted to [main], a branch got no CI at all
+# until someone opened a pull request, so work sat unverified in exactly the
+# window where finding a break is cheapest — and a branch pushed for review
+# looked untested because it was. The sibling monorepo runs everything on every
+# push for the same reason.
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   python-test:
