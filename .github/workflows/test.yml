@@ -89,6 +89,23 @@ jobs:
           # Matches go/go.mod, which requires 1.23. This read "1.21" until
           # 2026-08-15, so CI compiled against a toolchain the module rejects.
           go-version: "1.23"
+      # Neither of these ran until 2026-08-18, and two files had drifted out of
+      # gofmt by the time anyone looked.
+      - name: gofmt
+        # gofmt -l prints unformatted files and exits 0 either way, so the exit
+        # code is not the gate — the output is.
+        run: |
+          cd go
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error title=Unformatted Go files::$unformatted"
+            exit 1
+          fi
+          echo "gofmt clean"
+      - name: go vet
+        run: |
+          cd go
+          go vet ./...
       - name: Run tests
         run: |
           cd go

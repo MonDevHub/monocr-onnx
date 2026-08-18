@@ -65,11 +65,11 @@ func main() {
 			}
 		},
 	}
-	
+
 	var batchCmd = &cobra.Command{
-		Use: "batch [directory]",
+		Use:   "batch [directory]",
 		Short: "Process all images in a directory",
-		Args: cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			dir := args[0]
 			files, err := os.ReadDir(dir)
@@ -77,7 +77,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error reading directory: %v\n", err)
 				os.Exit(1)
 			}
-			
+
 			for _, file := range files {
 				ext := filepath.Ext(file.Name())
 				if ext == ".jpg" || ext == ".png" || ext == ".jpeg" {

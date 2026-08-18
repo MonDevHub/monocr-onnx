@@ -170,7 +170,7 @@ func (s *LineSegmenter) extractLine(img image.Image, bounds image.Rectangle, rSt
 	hRaw := rEnd - rStart
 	padY := int(math.Ceil(float64(hRaw) * 0.20))
 	padX := int(math.Ceil(float64(hRaw) * 0.15))
-	
+
 	y1 := int(math.Max(0, float64(rStart-padY)))
 	y2 := int(math.Min(float64(bounds.Dy()), float64(rEnd+padY)))
 	x1 := int(math.Max(0, float64(xMin-padX)))
