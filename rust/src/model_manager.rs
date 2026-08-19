@@ -15,8 +15,8 @@ pub const MODEL_REPO: &str = "janakhpon/monocr";
 /// The pinned revision.
 ///
 /// `main` is a moving ref and the artifact has already changed under it: the
-/// model served at one point had a 64-pixel input and 225 output classes, the
-/// one served now has 128 and 316. A cache that gates on "the file exists"
+/// model served at one point had a 64-pixel input and 225 output classes, v2
+/// had 128 and 316, and the one served now has 160 and 277. A cache that gates on "the file exists"
 /// cannot tell those apart, so the revision is part of the cache path.
 pub const MODEL_REVISION: &str = "d3d9d5e";
 

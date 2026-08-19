@@ -783,7 +783,7 @@ impl MonOcr {
     ///
     /// # Processing Steps
     ///
-    /// 1. **Scaling**: Scale the image to fit the model's input height (128) by
+    /// 1. **Scaling**: Scale the image to fit the model's input height (160) by
     ///    [`DEFAULT_INPUT_WIDTH`] (1024)
     ///    while maintaining aspect ratio
     /// 2. **Resizing**: Resize using Triangle filter for quality
@@ -999,8 +999,13 @@ mod tests {
 
     #[test]
     fn contract_rejects_empty_charset() {
-        check_contract(0, Some(PINNED_CLASSES), Some(EXPECTED_INPUT_HEIGHT as usize), "model.onnx")
-            .expect_err("an empty charset must be refused");
+        check_contract(
+            0,
+            Some(PINNED_CLASSES),
+            Some(EXPECTED_INPUT_HEIGHT as usize),
+            "model.onnx",
+        )
+        .expect_err("an empty charset must be refused");
     }
 
     /// A dynamic axis reports as -1; there is nothing to compare at load time,
