@@ -77,6 +77,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Go got a format gate on 2026-08-18 and Rust did not, which left this the
+      # only binding whose formatting was ungated. It had drifted by 16 lines.
+      - name: cargo fmt
+        run: |
+          cd rust
+          cargo fmt --check
       - name: Run tests
         run: |
           cd rust
