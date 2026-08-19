@@ -11,8 +11,9 @@
 //!
 //! Weights are downloaded from [janakhpon/monocr](https://huggingface.co/janakhpon/monocr),
 //! pinned to revision [`model_manager::MODEL_REVISION`]. That artifact takes a
-//! `[1, 1, 128, width]` input and emits `[1, sequence, 316]` logits: 315
-//! characters plus the CTC blank.
+//! `[1, 1, 160, 1024]` input and emits `[1, sequence, 277]` logits: 276
+//! characters plus the CTC blank. The width is static: v3.5 accepts 1024 and
+//! nothing else, where v2 accepted any width.
 //!
 //! The charset, the input height and the classifier width are one contract. If
 //! they drift apart the model still runs and still returns text — it is just the
