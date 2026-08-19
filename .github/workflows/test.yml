@@ -67,9 +67,22 @@ jobs:
           # bindings and the JS one lives in js/. Without this, action-setup
           # looks for `packageManager` at the root, finds no manifest and fails.
           package_json_file: js/package.json
-      - run: |
-          cd js
-          pnpm install --frozen-lockfile
+      # The runner annotates only "exit code 1" and the log needs admin, so this
+      # step's real output was invisible from outside when it began failing on
+      # 2026-08-19 against a lockfile that had passed unchanged since 2026-08-16.
+      - name: Install from the committed lockfile
+        run: |
+          set +e
+          output="$(cd js && pnpm install --frozen-lockfile 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(printf '%s\n' "$output" | tail -30 \
+              | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=pnpm install failed::${detail}"
+            exit "$status"
+          fi
 
   rust-test:
     runs-on: ubuntu-latest
