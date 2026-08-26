@@ -1,5 +1,18 @@
-// Lazy for the same reason as in monocr.js: the tests exercise the projection
-// profile through fixtures and never open an image.
+// Lazy for the same reason as in monocr.js: requiring sharp at import time makes
+// every consumer of this package pay for a native binding they may not use.
+//
+// This comment used to read "the tests exercise the projection profile through
+// fixtures and never open an image." That was false — corrected 2026-08-26.
+// Nothing in js/test/ references this file: `grep -rn segmenter js/test/` returns
+// nothing across all four of its test files (js/test/ holds five files; helpers.js
+// is a shared module, and package.json runs `node --test test/*.test.js`).
+//
+// The projection profile, the threshold, the smoothing and the padding here are
+// **entirely untested**, and
+// they diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
+// are recorded in that file's Canonical Algorithm Spec header — most of all the
+// flat global `< 128` binarisation below, where the reference thresholds
+// adaptively.
 let sharp = null;
 function imaging() {
     if (sharp === null) sharp = require('sharp');
