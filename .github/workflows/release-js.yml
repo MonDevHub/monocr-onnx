@@ -56,14 +56,20 @@ jobs:
       - name: Use an npm that supports trusted publishing
         run: npm install -g npm@11
 
-      # No install needed: the suite uses a fake session and src/ requires its
-      # native dependencies lazily. Same reasoning as the CI workflow.
-      - name: Run tests
-        run: |
-          cd js
-          node --test test/*.test.js
-
-      # The lockfile must resolve before anything is published from this tree.
+      # Install BEFORE the tests. This step and the one below were the other way
+      # round, carrying the comment "No install needed: the suite uses a fake
+      # session and src/ requires its native dependencies lazily."
+      #
+      # That was true until 2026-08-27, when preprocess.test.js, polarity.test.js
+      # and page-rules.test.js each began requiring `sharp` at the top level — a
+      # polarity or page-rule fixture is a real PNG and needs a real encoder. The
+      # CI workflow went red with four MODULE_NOT_FOUND failures the same day.
+      #
+      # It matters more here than in CI. A release is gated on these tests, and
+      # a MODULE_NOT_FOUND is indistinguishable from a genuine failure at a
+      # glance — so the wrong ordering does not just break the run, it makes a
+      # blocked release look like a broken binding. The lockfile must resolve
+      # before anything is published from this tree either way.
       - uses: pnpm/action-setup@v4
         with:
           # There is no package.json at the repo root — this tree ships four
@@ -74,6 +80,11 @@ jobs:
         run: |
           cd js
           pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: |
+          cd js
+          node --test test/*.test.js
 
       # A tag that disagrees with package.json publishes the wrong number under
       # the right name, and npm has no undo.
