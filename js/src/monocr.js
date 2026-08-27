@@ -218,9 +218,14 @@ class MonOCR {
         this.segmenter = new LineSegmenter();
         this.modelManager = new ModelManager();
 
-        // Metadata. 128 is the input height of the pinned v2 network
-        // (MobileNetV3-Large + BiLSTM + CTC, 315-character charset). It is not a
-        // free parameter: `init()` refuses to run if the model disagrees.
+        // Metadata for the pinned v3.5 graph: MobileNetV3-Large + BiLSTM + CTC,
+        // 160x1024 input, 276-character charset (277 classes with the CTC blank).
+        //
+        // Neither is a free parameter: `init()` refuses to run if the model
+        // disagrees. Corrected 2026-08-27 — this comment described v2, naming 128
+        // as the input height and a 315-character charset, three lines above the
+        // constants that say 160. The code was right and the comment was two
+        // generations behind.
         this.targetHeight = 160;
         this.targetWidth = 1024;
     }

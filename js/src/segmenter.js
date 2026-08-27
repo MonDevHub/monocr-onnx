@@ -1,15 +1,20 @@
 // Lazy for the same reason as in monocr.js: requiring sharp at import time makes
 // every consumer of this package pay for a native binding they may not use.
 //
-// This comment used to read "the tests exercise the projection profile through
-// fixtures and never open an image." That was false — corrected 2026-08-26.
-// Nothing in js/test/ references this file: `grep -rn segmenter js/test/` returns
-// nothing across all four of its test files (js/test/ holds five files; helpers.js
-// is a shared module, and package.json runs `node --test test/*.test.js`).
+// TEST COVERAGE, corrected twice now. This comment first read "the tests exercise
+// the projection profile through fixtures and never open an image", which was
+// false. It was then rewritten to say nothing in js/test/ references this file and
+// that the profile is "entirely untested" — true on 2026-08-26 and false a day
+// later. js/test/ now holds eight files, and test/page-rules.test.js requires this
+// module directly.
 //
-// The projection profile, the threshold, the smoothing and the padding here are
-// **entirely untested**, and
-// they diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
+// What is tested as of 2026-08-27: printed-rule suppression, in both directions and
+// at the exact-length bound on each axis, including a behavioural case driving
+// segment() end to end. What is still NOT tested: the projection profile itself,
+// the gap threshold, the histogram smoothing and the padding — the parts that
+// decide where a line begins.
+//
+// They diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
 // are recorded in that file's Canonical Algorithm Spec header — most of all the
 // flat global `< 128` binarisation below, where the reference thresholds
 // adaptively.
