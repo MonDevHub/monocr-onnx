@@ -1,11 +1,16 @@
 """Cutting a wide line into model-window tiles, instead of squeezing it.
 
 `preprocess` clamps a line's width to the canvas, which compresses the whole
-line horizontally and breaks the aspect ratio the model was trained on. For the
-pinned v3.5 network that costs a lot: MEASURED 2026-08-15 over 240 rendered Mon
-lines wide enough to need the choice, squeezing scored CER 0.1434 against
-tiling's 0.0795. On the v2 network the direction reverses, so these tests pin
-the mechanism rather than the preference.
+line horizontally and breaks the aspect ratio the model was trained on.
+
+This docstring used to price that at `CER 0.1434 squeezed against 0.0795 tiled`.
+RETIRED 2026-08-22: that harness was never committed and the figures do not
+reproduce. Remeasured over 201 rendered lines in
+`mon_OCR/eval/tiling-ab-2026-08-22.md`, the cost is width-dependent — squeezing
+wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
+
+These tests pin the mechanism rather than the preference, which is why the
+retirement does not change any assertion below.
 
 The cut position is the whole point. Cutting at an arbitrary pixel lands inside
 a glyph, and the model then reads each half as a whole character — upstream this

@@ -328,16 +328,21 @@ class MonOCR {
 
      * NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
      * canvas. The Python binding tiles instead, cutting at whitespace columns.
-     * On the pinned v3.5 network tiling is better; on v2 squeezing was.
-     * MEASURED over 240 rendered Mon lines wide enough to need the choice:
      *
-     *     v2     squeezed 0.0676   tiled 0.0758   CER
-     *     v3.5   squeezed 0.1434   tiled 0.0795   CER
+     * This comment used to quote `v3.5 squeezed 0.1434 against tiled 0.0795` and
+     * conclude "this binding is on the worse side of that". RETIRED 2026-08-22:
+     * that harness was never committed and the figures do not reproduce.
+     * Remeasured over 201 rendered lines, twice — Python arms and the Rust
+     * binding — in mon_OCR/eval/tiling-ab-2026-08-22.md, the answer is
+     * width-dependent: squeezing wins at 2 tiles, the two arms are level at 3,
+     * and tiling wins from 4 up. On a real book page at 150 dpi every line
+     * fitted one tile, so tiling never engaged.
      *
-     * This binding pins v3.5, so it is on the worse side of that. Porting
-     * `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py closes
-     * it. Deferred because the four bindings already disagree on output
-     * (docs/CROSS_BINDING_PARITY.md) and cut positions would be a second axis.
+     * Porting `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py
+     * is still worth doing — squeezing's downside on very wide input is
+     * unbounded where tiling's is not. Deferred because the four bindings
+     * already disagree on output (docs/CROSS_BINDING_PARITY.md) and cut
+     * positions would be a second axis.
      */
     async predictPage(imagePath) {
         if (!this.session) await this.init();
