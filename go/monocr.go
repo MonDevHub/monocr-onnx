@@ -46,8 +46,12 @@ func RuntimeVersion() (string, error) {
 //
 // The charset's first character really is U+0020 — a space is one of the
 // classes the model emits. strings.TrimSpace eats it, which drops the charset
-// from 315 characters to 314 and shifts every index in the decode by one, so
+// from 276 characters to 275 and shifts every index in the decode by one, so
 // every character comes back as its neighbour. Trim newlines and nothing else.
+//
+// 315/314 here until 2026-08-27 — v2's counts, written by `0022277` when they
+// were true. `6c6fc29` fixed this exact sentence in Rust's normalize_charset
+// and stopped there; the Go and JS copies of it stayed a generation behind.
 func NormalizeCharset(charset string) string {
 	return strings.Trim(charset, "\r\n")
 }

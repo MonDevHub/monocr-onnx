@@ -157,7 +157,13 @@ has not been pushed to since the web app moved into the monorepo.
 ## Resources
 
 - [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML.
-  The TFLite export was removed at revision `d3d9d5e`.
+  The TFLite export was removed at revision `a51be11` (2026-03-19) — a v2-era
+  revision, not the current pin. Do not bump this hash with the pin: `8da6178`
+  swept `a51be11` -> `d3d9d5e` across fourteen sites on 2026-08-15 and caught
+  this sentence too, but it is provenance, not a pin. The model repo's own
+  history is unambiguous: `a51be11` is `Delete tflite` and deletes all three
+  `.tflite` files; `d3d9d5e` deletes `pytorch/monocr.pt` and nothing else, five
+  months later. The three monorepo app READMEs kept the right value.
 
 ## License
 

@@ -51,7 +51,7 @@ test('the last class index decodes to the last character, not to nothing', async
     // 0.1.5 mapped only 1..224 and swallowed everything above it with `|| ""`.
     const ocr = new StubOCR(fakeSession(), BUNDLED_CHARSET);
     await ocr.init();
-    const last = PINNED.numClasses - 1; // 315
+    const last = PINNED.numClasses - 1; // 276 at d3d9d5e; was 315 under v2.
     const expected = [...ocr.charset][PINNED.numChars - 1];
     assert.equal(ocr.decode(logitsFor([last], PINNED.numClasses)), expected);
     assert.notEqual(expected, undefined);

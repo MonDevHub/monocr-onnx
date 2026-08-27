@@ -243,8 +243,12 @@ class MonOCR {
      *
      * Strips newlines only. A bare `.trim()` also eats the charset's leading
      * U+0020 -- the file really does start with a space -- which drops it from
-     * 315 characters to 314 and shifts every index in the lookup by one. That is
+     * 276 characters to 275 and shifts every index in the lookup by one. That is
      * not a hypothetical: 0.1.5 called `.trim()` here.
+     *
+     * The figures were 315/314 until 2026-08-27: v2's counts, left behind when
+     * d3d9d5e moved the pin to v3.5. `6c6fc29` corrected the identical sentence
+     * in Rust's `normalize_charset` and did not check its three siblings.
      */
     static readCharset(charsetPath) {
         return fs
@@ -283,10 +287,16 @@ class MonOCR {
 
     /**
      * Replicates Python's resize_and_pad:
-     * 1. Resize height to `targetHeight` (128 for the pinned model), maintain
+     * 1. Resize height to `targetHeight` (160 for the pinned model), maintain
      *    aspect ratio.
      * 2. Pad width to 1024 (white background).
      * 3. Normalize to [-1, 1].
+     *
+     * Said 128 until 2026-08-27 — v2's height, and the same defect the
+     * constructor comment 60 lines up announces having fixed. That fix stopped
+     * at the constants it was standing next to, so this file spent a commit
+     * declaring the correction and repeating the error below it. A stale number
+     * is not one edit; grep the file for the old digit before claiming it.
      */
     async preprocess(imageSource) {
         let sharpImg;
