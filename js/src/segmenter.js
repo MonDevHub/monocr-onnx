@@ -19,6 +19,71 @@ function imaging() {
     return sharp;
 }
 
+// Printed-rule suppression.
+//
+// A printed page border adds a constant ink floor to every row it spans, and once
+// that floor clears the gap threshold no in-frame row reads as a gap: the page
+// returns as one band and is squeezed into the model window.
+//
+// MEASURED WITH THIS PARAMETER SET (global threshold 128, no smear, smoothing 3,
+// ratio 0.05 of the mean) over twelve real MNEC page-ones: nine collapse to three
+// bands or fewer, and the twelve together go from 118 bands to 215. Pages carrying
+// no rules are untouched.
+//
+// Worth stating because it is counter-intuitive: this binding gains MORE from the
+// pass than the smeared implementations do, not less. A synthetic framed page does
+// not fuse here, which briefly suggested the opposite; real pages settle it.
+//
+// A rule is an unbroken ink run spanning at least RULE_SPAN of the page in one
+// direction. Implemented as a run-length scan, which is what an opening with a
+// 1xL line kernel computes, in one sweep per axis.
+const RULE_SPAN = 0.5;
+
+// Suppression that would remove more than this share of the page ink has found
+// text, not rules, and is abandoned. RULE_SPAN is a fraction of the page, so on a
+// SHORT page a tall text block exceeds it vertically and every glyph column reads
+// as a rule. Real framed pages classify 21.5%-58.8% of their ink as rules,
+// rule-free pages 0.00%, and the false positive upstream found 98.7%.
+const RULE_MAX_INK_SHARE = 0.8;
+
+/**
+ * Zero out printed rules in `binary` (1 = ink). Returns true when anything was
+ * removed. Mutates in place.
+ */
+function suppressPageRules(binary, width, height) {
+    const minH = Math.max(15, Math.floor(width * RULE_SPAN));
+    const minV = Math.max(15, Math.floor(height * RULE_SPAN));
+    const rules = new Uint8Array(width * height);
+
+    for (let y = 0; y < height; y++) {
+        const row = y * width;
+        let start = 0;
+        for (let x = 0; x <= width; x++) {
+            if (x < width && binary[row + x]) continue;
+            if (x - start >= minH) for (let i = start; i < x; i++) rules[row + i] = 1;
+            start = x + 1;
+        }
+    }
+    for (let x = 0; x < width; x++) {
+        let start = 0;
+        for (let y = 0; y <= height; y++) {
+            if (y < height && binary[y * width + x]) continue;
+            if (y - start >= minV) for (let i = start; i < y; i++) rules[i * width + x] = 1;
+            start = y + 1;
+        }
+    }
+
+    let ink = 0;
+    for (let i = 0; i < binary.length; i++) if (binary[i]) ink++;
+    if (ink === 0) return false;
+    let ruleInk = 0;
+    for (let i = 0; i < rules.length; i++) if (rules[i]) ruleInk++;
+    if (ruleInk === 0 || ruleInk > ink * RULE_MAX_INK_SHARE) return false;
+
+    for (let i = 0; i < rules.length; i++) if (rules[i]) binary[i] = 0;
+    return true;
+}
+
 class LineSegmenter {
     /**
      * @param {number} minLineH Minimum height of a line to be considered valid.
@@ -49,20 +114,25 @@ class LineSegmenter {
         // or just use sharp's threshold if we can get the mask.
         // Actually, to replicate Horizontal Projection, we need the sum of "text" pixels.
         // We'll treat dark pixels (< 128) as text (since background is white).
-        const hist = new Float32Array(height).fill(0);
-
+        // A mask IS materialised here, and unlike the dead one this file used to
+        // carry it is read: rule suppression needs the 2-D shape of the ink, which
+        // a per-row count cannot express.
+        const binary = new Uint8Array(width * height);
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const idx = y * width + x;
                 // Threshold: 128 is a safe bet for black text on white paper.
                 // Inverted so text is "high" (1) and background is 0.
-                if (grayBuffer[idx] < 128) {
-                    // No mask is materialised: only the row count is used, by the
-                    // projection profile below. A full-page Uint8Array used to be
-                    // written here on every pixel and never read again.
-                    hist[y]++;
-                }
+                if (grayBuffer[idx] < 128) binary[idx] = 1;
             }
+        }
+
+        suppressPageRules(binary, width, height);
+
+        const hist = new Float32Array(height).fill(0);
+        for (let y = 0; y < height; y++) {
+            const row = y * width;
+            for (let x = 0; x < width; x++) if (binary[row + x]) hist[y]++;
         }
 
         // 3. Smoothing projection profile
@@ -154,3 +224,6 @@ class LineSegmenter {
 }
 
 module.exports = LineSegmenter;
+
+// Exported for tests.
+module.exports.suppressPageRules = suppressPageRules;
