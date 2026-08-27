@@ -3,7 +3,7 @@
 //! This module contains the core OCR functionality including the MonOcr struct,
 //! the builder pattern for configuration, and the prediction/inference logic.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use image::{imageops::FilterType, GrayImage};
 use ndarray::Array4;
 use ort::session::{builder::GraphOptimizationLevel, Session};
@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::model_manager::ModelManager;
-use crate::segmenter::LineSegmenter;
+use crate::segmenter::{tile_line, LineSegmenter, DEFAULT_DENSITY_THRESHOLD_RATIO};
 use crate::utils::calculate_accuracy;
 use crate::OcrResult;
 
@@ -114,6 +114,22 @@ fn check_contract(
     Ok(())
 }
 
+/// Validate the segmenter's gap threshold ratio.
+///
+/// Rejected at build time rather than at segmentation time, so a bad value
+/// surfaces where the caller set it. Free-standing so it can be tested without a
+/// model or a session.
+fn check_density_ratio(ratio: f32) -> Result<f32> {
+    if !ratio.is_finite() || ratio <= 0.0 {
+        anyhow::bail!(
+            "density_threshold_ratio must be finite and greater than 0, got {ratio}; \
+             at or below 0 every row clears the gap threshold and the page comes back \
+             as a single band"
+        );
+    }
+    Ok(ratio)
+}
+
 /// Builder for configuring and creating MonOcr instances
 ///
 /// The builder pattern allows flexible configuration of OCR settings before
@@ -125,6 +141,8 @@ fn check_contract(
 /// - `charset`: Custom character set for OCR (default: built-in Mon charset)
 /// - `min_line_height`: Minimum height for line segmentation (default: 10 pixels)
 /// - `smooth_window`: Window size for smoothing projection profile (default: 3)
+/// - `density_threshold_ratio`: Gap threshold as a fraction of mean row density
+///   (default: 0.05)
 ///
 /// # Example
 ///
@@ -153,6 +171,10 @@ pub struct MonOcrBuilder {
     min_line_height: u32,
     /// Smoothing window size for projection profile
     smooth_window: u32,
+    /// Gap threshold as a fraction of mean row density
+    density_threshold_ratio: f32,
+    /// Whether a line wider than the window is tiled or squeezed into it.
+    tile_wide_lines: bool,
 }
 
 impl Default for MonOcrBuilder {
@@ -164,12 +186,15 @@ impl Default for MonOcrBuilder {
     ///   falling back to the built-in Mon charset)
     /// - min_line_height: 10 pixels
     /// - smooth_window: 3
+    /// - density_threshold_ratio: 0.05
     fn default() -> Self {
         Self {
             model_path: None,
             charset: None,
             min_line_height: 10,
             smooth_window: 3,
+            density_threshold_ratio: DEFAULT_DENSITY_THRESHOLD_RATIO,
+            tile_wide_lines: true,
         }
     }
 }
@@ -288,6 +313,53 @@ impl MonOcrBuilder {
         self
     }
 
+    /// Set the gap threshold for line segmentation
+    ///
+    /// A row counts as a gap between lines when its ink density falls below
+    /// `ratio` times the mean density of the page's non-empty rows. Lower it to
+    /// split lines that are being merged; raise it to stop faint texture between
+    /// lines from cutting one line in two.
+    ///
+    /// # Arguments
+    ///
+    /// * `ratio` - Fraction of mean row density, greater than 0 (default: 0.05)
+    ///
+    /// # Why this is exposed
+    ///
+    /// The right value is a property of the input class, not a constant waiting
+    /// to be settled. `mon_OCR/docs/LIMITATIONS.md:304-334` measured the
+    /// ordering reversing between a book page and a photographed poster: a
+    /// six-line slide returned 3 lines at the low ratio and all 6 at 0.50, and
+    /// the response to the ratio is explicitly non-monotone. So a caller that
+    /// knows what it is reading can do better than any single default, and every
+    /// port of this pipeline picked a different number.
+    ///
+    /// # Errors
+    ///
+    /// [`build`](Self::build) fails if `ratio` is not finite or not positive. At
+    /// 0 every row clears the threshold and the page comes back as one band,
+    /// which is a wrong result rather than a degraded one.
+    /// Squeeze wide lines into the window instead of tiling them.
+    ///
+    /// Tiling is the default and should stay the default. This exists so the two
+    /// strategies can be measured against each other on the same pipeline, which
+    /// `mon_OCR/docs/ROADMAP.md` item 4.5.6 requires before either is trusted,
+    /// and which was impossible while the squeeze arm was unreachable.
+    ///
+    /// The measurement in `mon_OCR/eval/tiling-ab-2026-08-22.md` found the answer
+    /// is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
+    /// 24x worse from 4 tiles up, where it drives CER above 0.9. Tiling is the
+    /// safe default because its downside is bounded and squeezing's is not.
+    pub fn tile_wide_lines(mut self, tile: bool) -> Self {
+        self.tile_wide_lines = tile;
+        self
+    }
+
+    pub fn density_threshold_ratio(mut self, ratio: f32) -> Self {
+        self.density_threshold_ratio = ratio;
+        self
+    }
+
     /// Build the MonOcr instance
     ///
     /// This method initializes the ONNX runtime session and prepares the OCR
@@ -308,6 +380,8 @@ impl MonOcrBuilder {
             self.charset,
             self.min_line_height,
             self.smooth_window,
+            check_density_ratio(self.density_threshold_ratio)?,
+            self.tile_wide_lines,
         )
         .await
     }
@@ -351,6 +425,9 @@ pub struct MonOcr {
     target_height: u32,
     /// Target width for model input (the model's width axis is dynamic)
     target_width: u32,
+    /// False squeezes wide lines instead of tiling. Measurement only; see
+    /// `MonOcrBuilder::tile_wide_lines`.
+    tile_wide_lines: bool,
 }
 
 /// Result from line prediction
@@ -378,6 +455,35 @@ pub struct BBox {
     pub w: u32,
     /// Height of the bounding box
     pub h: u32,
+}
+
+/// Smallest box containing both inputs.
+///
+/// Used to report one bbox for a line that was read as several tiles, so the
+/// geometry still describes the line the text came from.
+fn union_bbox(a: BBox, b: BBox) -> BBox {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = (a.x + a.w).max(b.x + b.w);
+    let bottom = (a.y + a.h).max(b.y + b.h);
+    BBox {
+        x,
+        y,
+        w: right - x,
+        h: bottom - y,
+    }
+}
+
+/// Join one page's line texts the way [`MonOcr::read_image`] does.
+///
+/// Distinct lines are separated by a newline. Tiles of the same line are already
+/// concatenated inside their [`LineResult`], so no separator appears mid-line.
+pub fn page_text(lines: &[LineResult]) -> String {
+    lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl MonOcr {
@@ -420,11 +526,15 @@ impl MonOcr {
     /// * `charset` - Optional custom charset string
     /// * `min_line_height` - Minimum line height for segmentation
     /// * `smooth_window` - Smoothing window size
+    /// * `density_threshold_ratio` - Gap threshold as a fraction of mean row
+    ///   density, already validated by the builder
     async fn new(
         model_path: Option<PathBuf>,
         charset: Option<String>,
         min_line_height: u32,
         smooth_window: u32,
+        density_threshold_ratio: f32,
+        tile_wide_lines: bool,
     ) -> Result<Self> {
         // Get or download model. When the model comes from the manager, its
         // charset comes from the same pinned revision, so the two agree by
@@ -432,10 +542,26 @@ impl MonOcr {
         let (model_path, published_charset) = match model_path {
             Some(path) => (path, None),
             None => {
-                let manager = ModelManager::new();
-                let path = manager.get_model_path()?;
-                let published = manager.get_charset().ok();
-                (path, published)
+                // `ModelManager` uses `reqwest::blocking`, which builds its own
+                // runtime and drops it when the request finishes. Doing that on
+                // an async worker thread panics outright:
+                //
+                //   Cannot drop a runtime in a context where blocking is not
+                //   allowed. This happens when a runtime is dropped from within
+                //   an asynchronous context.
+                //
+                // Every entry point here is `async`, so the only safe place for
+                // it is the blocking pool. This fires only on a cache miss,
+                // which is why it stayed latent: once the model is cached the
+                // download path is never taken and the panic never appears.
+                tokio::task::spawn_blocking(|| {
+                    let manager = ModelManager::new();
+                    let path = manager.get_model_path()?;
+                    let published = manager.get_charset().ok();
+                    Ok::<_, anyhow::Error>((path, published))
+                })
+                .await
+                .context("the model download task did not finish")??
             }
         };
 
@@ -483,7 +609,11 @@ impl MonOcr {
         let model_classes = static_dim(&out_shape, 2);
         check_contract(charset.len(), model_classes, model_height, &source)?;
 
-        let segmenter = LineSegmenter::new(min_line_height, smooth_window);
+        let segmenter = LineSegmenter::with_density_ratio(
+            min_line_height,
+            smooth_window,
+            density_threshold_ratio,
+        );
 
         Ok(Self {
             session,
@@ -493,6 +623,7 @@ impl MonOcr {
                 .map(|h| h as u32)
                 .unwrap_or(EXPECTED_INPUT_HEIGHT),
             target_width: DEFAULT_INPUT_WIDTH,
+            tile_wide_lines,
         })
     }
 
@@ -525,8 +656,7 @@ impl MonOcr {
     /// ```
     pub async fn read_image(&mut self, image_path: impl AsRef<Path>) -> Result<String> {
         let results = self.predict_page(image_path).await?;
-        let texts: Vec<String> = results.into_iter().map(|r| r.text).collect();
-        Ok(texts.join("\n"))
+        Ok(page_text(&results))
     }
 
     /// Read text from multiple images
@@ -588,6 +718,24 @@ impl MonOcr {
     /// - Ubuntu/Debian: `sudo apt-get install poppler-utils`
     /// - macOS: `brew install poppler`
     pub async fn read_pdf(&mut self, pdf_path: impl AsRef<Path>) -> Result<Vec<String>> {
+        let pages = self.predict_pdf(pdf_path).await?;
+        Ok(pages.iter().map(|lines| page_text(lines)).collect())
+    }
+
+    /// Predict text and geometry from a PDF file, page by page
+    ///
+    /// Same conversion as [`read_pdf`](Self::read_pdf), but keeps the per-line
+    /// bounding boxes. Coordinates are in pixels of the 300 DPI render of the
+    /// page, not PDF points.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<Vec<LineResult>>)` - One vector of line results per page
+    /// * `Err(anyhow::Error)` - If PDF conversion fails or OCR fails
+    pub async fn predict_pdf(
+        &mut self,
+        pdf_path: impl AsRef<Path>,
+    ) -> Result<Vec<Vec<LineResult>>> {
         use std::process::Stdio;
         use tokio::process::Command;
 
@@ -609,7 +757,7 @@ impl MonOcr {
 
         // Convert PDF to images
         let output = Command::new("pdftoppm")
-            .args(&["-png", "-r", "300"])
+            .args(["-png", "-r", "300"])
             .arg(pdf_path)
             .arg(&output_prefix)
             .stdout(Stdio::null())
@@ -639,13 +787,13 @@ impl MonOcr {
             let num_a: u32 = name_a
                 .to_string_lossy()
                 .split('-')
-                .last()
+                .next_back()
                 .and_then(|s| s.trim_end_matches(".png").parse().ok())
                 .unwrap_or(0);
             let num_b: u32 = name_b
                 .to_string_lossy()
                 .split('-')
-                .last()
+                .next_back()
                 .and_then(|s| s.trim_end_matches(".png").parse().ok())
                 .unwrap_or(0);
             num_a.cmp(&num_b)
@@ -658,8 +806,8 @@ impl MonOcr {
         // Process each page
         let mut pages = Vec::new();
         for entry in entries {
-            let text = self.read_image(entry.path()).await?;
-            pages.push(text);
+            let lines = self.predict_page(entry.path()).await?;
+            pages.push(lines);
         }
 
         Ok(pages)
@@ -744,36 +892,151 @@ impl MonOcr {
     ///
     /// 1. Segment the page into individual text lines using horizontal projection
     /// 2. For each line:
-    ///    - Preprocess the image for the model
+    ///    - Tile it at whitespace columns if it is too wide for the model window
+    ///    - Preprocess each tile for the model
     ///    - Run inference with the ONNX model
     ///    - Decode CTC output to text
-    /// 3. Return results with text and bounding boxes
-    // NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
-    // canvas; the Python binding tiles at whitespace columns instead. MEASURED
-    // over 240 rendered Mon lines wide enough to need the choice:
-    //     v2     squeezed 0.0676   tiled 0.0758   CER
-    //     v3.5   squeezed 0.1434   tiled 0.0795   CER
-    // This binding pins v3.5, so it is on the worse side. The port is
-    // tile_line/cut_column in python/monocr_onnx/segmenter.py.
+    /// 3. Return one result per line, with the text of its tiles concatenated
+    ///
+    /// # Wide lines
+    ///
+    /// A line wider than the model window is tiled by
+    /// [`crate::segmenter::tile_line`], not squeezed.
+    ///
+    /// Measured on **this** binding, 2026-08-22, over 201 rendered Mon lines by
+    /// `examples/tiling_ab.rs`. The answer depends on how wide the line is:
+    ///
+    /// ```text
+    /// tiles   squeezed   tiled    winner
+    ///     2     0.0444  0.0635    squeezing, 0.7x
+    ///     3     0.0317  0.0294    parity, 1.1x
+    ///     4     0.1509  0.0364    tiling, 4.1x
+    ///     6     0.8382  0.0229    tiling, 36.5x
+    ///     8     0.9090  0.0387    tiling, 23.5x
+    /// ```
+    ///
+    /// So tiling is not a uniform win: it is a **safety net**. Up to 3 tiles the
+    /// two are level, and from 4 up squeezing degrades without bound while tiling
+    /// stays flat. Tiling is the default because that asymmetry is the whole
+    /// argument — the downside is a fraction of a point on already-low rates, and
+    /// the upside is not losing the line.
+    ///
+    /// Char-level CER here; `mon_OCR/eval/tiling-ab-2026-08-22.md` scores the same
+    /// images by grapheme cluster and finds the same crossover. That report also
+    /// records that these numbers do **not** reproduce the older
+    /// squeezed-0.1434-against-tiled-0.0795 figures quoted elsewhere, whose
+    /// harness was never committed.
+    ///
+    /// The measurement is one held-out font at one size, on rendered lines rather
+    /// than photographed pages. If the pinned model moves, re-run the example
+    /// rather than assuming any of this still holds.
+    ///
+    /// The tiles of one line are joined with no separator, and their union is
+    /// reported as that line's bbox. Joining them with a newline is what
+    /// produced "Mon E-boo" and "k library" as two readings of a single line.
     pub async fn predict_page(&mut self, image_path: impl AsRef<Path>) -> Result<Vec<LineResult>> {
         let image_path = image_path.as_ref();
         let lines = self.segmenter.segment(image_path)?;
 
         let mut results = Vec::new();
         for line in lines {
-            let text = self.predict_line(&line.img).await?;
-            results.push(LineResult {
-                text,
-                bbox: BBox {
-                    x: line.bbox.x,
-                    y: line.bbox.y,
-                    w: line.bbox.w,
-                    h: line.bbox.h,
-                },
-            });
+            let origin = BBox {
+                x: line.bbox.x,
+                y: line.bbox.y,
+                w: line.bbox.w,
+                h: line.bbox.h,
+            };
+            results.push(self.read_line_crop(&line.img, origin).await?);
         }
 
         Ok(results)
+    }
+
+    /// Recognise an image that is already a single cropped line
+    ///
+    /// Skips segmentation entirely. Use when the caller knows the input is one
+    /// line — segmenting a line fragments it, because the projection profile has
+    /// no gap to find and any faint row inside the glyphs becomes one. The crop
+    /// is still tiled if it is wider than the model window, so a long line is
+    /// not squeezed.
+    ///
+    /// Deciding when an input is a single line belongs to the caller; the
+    /// library does not guess.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(LineResult)` - The text, with a bbox covering the whole source image
+    /// * `Err(anyhow::Error)` - If the image cannot be read or inference fails
+    pub async fn predict_single_line(
+        &mut self,
+        image_path: impl AsRef<Path>,
+    ) -> Result<LineResult> {
+        let image_path = image_path.as_ref();
+        let crop = image::open(image_path)
+            .with_context(|| format!("cannot open {}", image_path.display()))?
+            .to_luma8();
+
+        let (w, h) = crop.dimensions();
+        if w == 0 || h == 0 {
+            anyhow::bail!(
+                "{} is {w}x{h}: there is nothing to read",
+                image_path.display()
+            );
+        }
+
+        self.read_line_crop(&crop, BBox { x: 0, y: 0, w, h }).await
+    }
+
+    /// Read one line crop: tile it if it is too wide, recognise the tiles left
+    /// to right, and report their union in source coordinates.
+    ///
+    /// `origin` is where the crop sits in the source image, so a caller working
+    /// on a whole page passes the segment's box and a caller working on an
+    /// already-cropped line passes the image's own box.
+    ///
+    /// The tiles' texts are concatenated with no separator. A newline here is
+    /// what produced "Mon E-boo" and "k library" as two readings of one line.
+    async fn read_line_crop(&mut self, crop: &GrayImage, origin: BBox) -> Result<LineResult> {
+        // One tile means the squeeze path in `preprocess` handles the whole crop,
+        // which is exactly the arm being compared against.
+        let tiles = if self.tile_wide_lines {
+            tile_line(crop, self.target_height, self.target_width)
+        } else {
+            vec![crop.clone()]
+        };
+
+        let mut text = String::new();
+        let mut bbox: Option<BBox> = None;
+        // Tiles partition the crop left to right, so the running offset is what
+        // maps a tile back to source coordinates.
+        let mut x_offset = 0u32;
+
+        for tile in &tiles {
+            let (tile_w, tile_h) = tile.dimensions();
+            text.push_str(&self.predict_line(tile).await?);
+
+            let tile_bbox = BBox {
+                x: origin.x + x_offset,
+                y: origin.y,
+                w: tile_w,
+                h: tile_h,
+            };
+            bbox = Some(match bbox {
+                Some(current) => union_bbox(current, tile_bbox),
+                None => tile_bbox,
+            });
+            x_offset += tile_w;
+        }
+
+        Ok(LineResult {
+            text,
+            // Derived from the tiles rather than copied from `origin`, so if
+            // tiling ever stops covering the crop the reported geometry follows
+            // the text instead of overstating it. An empty tile list cannot
+            // happen — tile_line always returns at least the crop — but `origin`
+            // is the honest fallback.
+            bbox: bbox.unwrap_or(origin),
+        })
     }
 
     /// Preprocess image for model input
@@ -939,7 +1202,7 @@ mod tests {
     fn charset_of_len(n: usize) -> Vec<char> {
         // Leading U+0020, as the real charset has.
         std::iter::once(' ')
-            .chain(std::iter::repeat('x').take(n - 1))
+            .chain(std::iter::repeat_n('x', n - 1))
             .collect()
     }
 
@@ -1061,6 +1324,93 @@ mod tests {
         decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
         decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
             .expect_err("shape larger than the buffer");
+    }
+
+    /// A tiled line must report the box the text actually came from: the tiles
+    /// are adjacent and full height, so their union is the line.
+    #[test]
+    fn union_of_adjacent_tiles_is_the_line() {
+        let line = BBox {
+            x: 100,
+            y: 40,
+            w: 900,
+            h: 60,
+        };
+        let widths = [254u32, 255, 255, 136];
+
+        let mut x = line.x;
+        let mut acc: Option<BBox> = None;
+        for w in widths {
+            let tile = BBox {
+                x,
+                y: line.y,
+                w,
+                h: line.h,
+            };
+            acc = Some(match acc {
+                Some(current) => union_bbox(current, tile),
+                None => tile,
+            });
+            x += w;
+        }
+
+        let got = acc.expect("at least one tile");
+        assert_eq!(
+            (got.x, got.y, got.w, got.h),
+            (line.x, line.y, line.w, line.h)
+        );
+    }
+
+    #[test]
+    fn union_covers_boxes_in_any_order() {
+        let a = BBox {
+            x: 10,
+            y: 5,
+            w: 4,
+            h: 2,
+        };
+        let b = BBox {
+            x: 2,
+            y: 9,
+            w: 3,
+            h: 6,
+        };
+        let u = union_bbox(a, b);
+        assert_eq!((u.x, u.y, u.w, u.h), (2, 5, 12, 10));
+        let flipped = union_bbox(b, a);
+        assert_eq!(
+            (flipped.x, flipped.y, flipped.w, flipped.h),
+            (u.x, u.y, u.w, u.h)
+        );
+    }
+
+    /// Exposing the knob must not move the default: every existing caller
+    /// segments exactly as before.
+    #[test]
+    fn density_ratio_default_is_unchanged() {
+        assert_eq!(DEFAULT_DENSITY_THRESHOLD_RATIO, 0.05);
+        assert_eq!(
+            MonOcrBuilder::default().density_threshold_ratio,
+            DEFAULT_DENSITY_THRESHOLD_RATIO
+        );
+        assert_eq!(
+            MonOcr::builder()
+                .density_threshold_ratio(0.3)
+                .density_threshold_ratio,
+            0.3
+        );
+    }
+
+    /// A ratio of 0 makes every row clear the gap threshold, so the page comes
+    /// back as one band. That is a wrong result, not a degraded one.
+    #[test]
+    fn density_ratio_rejects_useless_values() {
+        for bad in [0.0, -0.05, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            check_density_ratio(bad).expect_err(&format!("{bad} must be refused"));
+        }
+        for good in [DEFAULT_DENSITY_THRESHOLD_RATIO, 0.12, 0.5, 1.0] {
+            assert_eq!(check_density_ratio(good).expect("valid ratio"), good);
+        }
     }
 
     /// CTC: index 0 is blank, repeats collapse, index n maps to charset[n - 1].

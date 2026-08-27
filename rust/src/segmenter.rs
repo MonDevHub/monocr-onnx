@@ -4,8 +4,123 @@
 //! using horizontal projection profile analysis.
 
 use anyhow::Result;
-use image::{GrayImage, ImageBuffer};
+use image::{imageops::crop_imm, GrayImage, ImageBuffer};
+use std::ops::Range;
 use std::path::Path;
+
+/// Where a tile may be cut, as a fraction of the tile width, searching backwards
+/// from the ideal boundary. 0.12 of a 1024px window is ~123px, roughly two Mon
+/// glyphs — wide enough to find a gap, narrow enough that tiles stay near full
+/// width.
+pub const CUT_SEARCH_FRACTION: f64 = 0.12;
+
+/// A column counts as carrying ink below this grayscale value.
+pub const CUT_INK_THRESHOLD: u8 = 250;
+
+/// Where to end a tile that starts at `x0` and may not pass `ideal`.
+///
+/// Cutting at exactly `ideal` lands wherever the arithmetic falls, which is
+/// usually the middle of a glyph. Both halves keep their pixels, so a coverage
+/// check still passes, but the model reads each half as a whole character and one
+/// glyph becomes two. Measured upstream on 120 drawn lines this showed up as
+/// `ဗော်` read back as `ဗေဗိာ်`.
+///
+/// So search backwards from `ideal` for a column of white. A tile may only get
+/// narrower, never wider, or it stops fitting the model window. Returns `ideal`
+/// unchanged when there is no gap to cut at, which is the honest outcome for a
+/// continuous script: a known-bad seam beats an overflowing tile.
+///
+/// Ported from `monocr_onnx.segmenter.cut_column`; the constants and the
+/// tie-breaking are the same, so the two produce the same cuts on the same
+/// input. The shared fixture in `monocr-monorepo/shared/segmentation-fixtures`
+/// is what holds them together.
+pub fn cut_column(crop: &GrayImage, x0: u32, ideal: u32, crop_w: u32) -> u32 {
+    if ideal >= crop_w {
+        return crop_w;
+    }
+
+    // `as u32` truncates toward zero, which is what Python's `int()` does, so
+    // the two ports pick the same window on the same input.
+    let window = (((ideal - x0) as f64 * CUT_SEARCH_FRACTION) as u32).max(1);
+    // Python computes `ideal - window` in unbounded integers and can go
+    // negative; `max(x0 + 1, ...)` then discards it. Saturating at 0 reaches the
+    // same answer because x0 + 1 is always the larger value there.
+    let lo = (x0 + 1).max(ideal.saturating_sub(window));
+    if lo >= ideal {
+        return ideal;
+    }
+
+    let height = crop.height();
+    let mut rightmost_blank: Option<u32> = None;
+    let mut lightest_offset = 0u32;
+    let mut lightest_ink = u32::MAX;
+
+    for x in lo..ideal {
+        let mut ink = 0u32;
+        for y in 0..height {
+            if crop.get_pixel(x, y)[0] < CUT_INK_THRESHOLD {
+                ink += 1;
+            }
+        }
+
+        let offset = x - lo;
+        if ink == 0 {
+            rightmost_blank = Some(offset);
+        }
+        // Strict `<` keeps the leftmost of equally light columns, which is what
+        // numpy's argmin returns. The fixture pins this: on solid ink every
+        // column ties and the cut must land on `lo`.
+        if ink < lightest_ink {
+            lightest_ink = ink;
+            lightest_offset = offset;
+        }
+    }
+
+    // Prefer a truly empty column, and the rightmost one, so tiles stay as wide
+    // as the window allows. Fall back to the lightest column present.
+    lo + rightmost_blank.unwrap_or(lightest_offset)
+}
+
+/// Split one line crop into pieces that each fit the model window.
+///
+/// Returns the crop unchanged when the line already fits after being scaled to
+/// `target_h`. Otherwise cuts at whitespace columns and returns the pieces left
+/// to right, to be read separately and joined with no separator.
+///
+/// `target_h` and `target_w` come from the model contract and must both be
+/// positive. A zero `target_w` would ask for one-pixel tiles, which is garbage
+/// in, garbage out rather than an error worth a result type.
+pub fn tile_line(crop: &GrayImage, target_h: u32, target_w: u32) -> Vec<GrayImage> {
+    let (crop_w, crop_h) = crop.dimensions();
+    if crop_h == 0 || crop_w == 0 {
+        return vec![crop.clone()];
+    }
+
+    let scale = target_h as f64 / crop_h as f64;
+    // Truncation again matches Python's `int()`. It matters at the boundary: a
+    // line that scales to exactly target_w is left alone, one pixel over is
+    // tiled.
+    if (crop_w as f64 * scale) as u32 <= target_w {
+        return vec![crop.clone()];
+    }
+
+    // Must stay an f64 division in this order. Integer arithmetic on
+    // target_w * crop_h / target_h would round differently, and the fixture's
+    // 1.6 scale is a case where the difference is a whole pixel per tile.
+    let tile_w_src = ((target_w as f64 / scale) as u32).max(1);
+    let mut tiles = Vec::new();
+    let mut x0 = 0u32;
+    while x0 < crop_w {
+        let ideal = x0.saturating_add(tile_w_src).min(crop_w);
+        // Structural guard, not a tuning knob: cut_column can only return a
+        // value in (x0, ideal], but if it ever returned x0 this loop would spin
+        // forever on a page. One pixel of forced progress bounds it.
+        let x1 = cut_column(crop, x0, ideal, crop_w).max(x0 + 1);
+        tiles.push(crop_imm(crop, x0, 0, x1 - x0, crop_h).to_image());
+        x0 = x1;
+    }
+    tiles
+}
 
 /// Bounding box for a line segment
 ///
@@ -34,6 +149,20 @@ pub struct LineSegment {
     pub bbox: BBox,
 }
 
+/// A page and the text mask derived from it, kept together.
+///
+/// The two are only meaningful as a pair: `binary` is a flat row-major slice
+/// that can only be indexed with the image's own width as the stride. Passing
+/// them as separate arguments made it possible to hand one function a mask and a
+/// width that did not agree; here the stride comes from `gray` so it cannot
+/// disagree.
+struct BinarizedPage<'a> {
+    /// Grayscale source that line crops are taken from
+    gray: &'a GrayImage,
+    /// Text mask, 1 = text and 0 = background, row-major over `gray`
+    binary: &'a [u8],
+}
+
 /// Line segmenter using horizontal projection profile
 ///
 /// This segmenter detects text lines in a document image by analyzing the
@@ -51,12 +180,25 @@ pub struct LineSegment {
 ///
 /// - `min_line_height`: Minimum height to consider as a valid text line
 /// - `smooth_window`: Window size for smoothing the projection profile
+/// - `density_threshold_ratio`: Fraction of mean row density that still counts
+///   as a gap
 pub struct LineSegmenter {
     /// Minimum height for a valid text line (in pixels)
     min_line_height: u32,
     /// Window size for histogram smoothing
     smooth_window: u32,
+    /// Fraction of the mean non-empty row density below which a row counts as a
+    /// gap between lines
+    density_threshold_ratio: f32,
 }
+
+/// The gap threshold this segmenter has always used, kept as the default so
+/// existing callers segment identically.
+///
+/// Every port of this pipeline picked a different number (canonical mon_OCR
+/// 0.12, the Python binding 0.02 of max, web and Android 0.03, iOS 0.03), which
+/// is the sign that it belongs to the input class rather than to the algorithm.
+pub const DEFAULT_DENSITY_THRESHOLD_RATIO: f32 = 0.05;
 
 impl LineSegmenter {
     /// Create a new line segmenter with specified parameters
@@ -79,9 +221,28 @@ impl LineSegmenter {
     /// let segmenter = LineSegmenter::new(10, 3);
     /// ```
     pub fn new(min_line_height: u32, smooth_window: u32) -> Self {
+        Self::with_density_ratio(
+            min_line_height,
+            smooth_window,
+            DEFAULT_DENSITY_THRESHOLD_RATIO,
+        )
+    }
+
+    /// Create a segmenter with an explicit gap threshold ratio.
+    ///
+    /// See [`crate::MonOcrBuilder::density_threshold_ratio`] for what the ratio
+    /// does and why it is worth setting per input class. The caller is
+    /// responsible for passing a finite, positive ratio; the builder validates
+    /// it.
+    pub fn with_density_ratio(
+        min_line_height: u32,
+        smooth_window: u32,
+        density_threshold_ratio: f32,
+    ) -> Self {
         Self {
             min_line_height,
             smooth_window,
+            density_threshold_ratio,
         }
     }
 
@@ -104,7 +265,9 @@ impl LineSegmenter {
     /// 1. **Binarization**: Convert to grayscale and threshold at 128 (pixels < 128 are text)
     /// 2. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
     /// 3. **Smoothing**: Apply moving average filter if smooth_window > 1
-    /// 4. **Gap Detection**: Find gaps where projection is below 5% of mean density
+    /// 4. **Gap Detection**: Find gaps where projection is below
+    ///    `density_threshold_ratio` of the mean non-empty row density
+    ///    (default 5%)
     /// 5. **Line Extraction**: Extract each region between gaps as a separate line
     /// 6. **Padding**: Add 4-pixel padding around each line for edge character capture
     pub fn segment(&self, image_path: impl AsRef<Path>) -> Result<Vec<LineSegment>> {
@@ -148,9 +311,13 @@ impl LineSegmenter {
         }
 
         let mean_density: f32 = non_zero_vals.iter().sum::<f32>() / non_zero_vals.len() as f32;
-        let gap_threshold = mean_density * 0.05;
+        let gap_threshold = mean_density * self.density_threshold_ratio;
 
         // 4. Find line regions
+        let page = BinarizedPage {
+            gray: &gray_img,
+            binary: &binary,
+        };
         let mut results = Vec::new();
         let mut start: Option<u32> = None;
 
@@ -164,15 +331,7 @@ impl LineSegmenter {
                 let line_height = end - start.unwrap();
 
                 if line_height >= self.min_line_height {
-                    self.extract_line(
-                        &gray_img,
-                        &binary,
-                        width,
-                        height,
-                        start.unwrap(),
-                        end,
-                        &mut results,
-                    )?;
+                    self.extract_line(&page, start.unwrap()..end, &mut results)?;
                 }
                 start = None;
             }
@@ -182,7 +341,7 @@ impl LineSegmenter {
         if let Some(s) = start {
             let line_height = height - s;
             if line_height >= self.min_line_height {
-                self.extract_line(&gray_img, &binary, width, height, s, height, &mut results)?;
+                self.extract_line(&page, s..height, &mut results)?;
             }
         }
 
@@ -211,7 +370,10 @@ impl LineSegmenter {
         let mut smoothed = vec![0f32; height];
         let half = (self.smooth_window / 2) as i32;
 
-        for i in 0..height {
+        // The window reads `hist` while the position writes `smoothed`, two
+        // separate allocations, so iterating the write target does not disturb
+        // the values being averaged.
+        for (i, out) in smoothed.iter_mut().enumerate() {
             let mut sum = 0f32;
             let mut count = 0u32;
 
@@ -222,7 +384,7 @@ impl LineSegmenter {
                 }
             }
 
-            smoothed[i] = if count > 0 { sum / count as f32 } else { 0.0 };
+            *out = if count > 0 { sum / count as f32 } else { 0.0 };
         }
 
         smoothed
@@ -242,23 +404,20 @@ impl LineSegmenter {
     ///
     /// # Arguments
     ///
-    /// * `gray_img` - Source grayscale image
-    /// * `binary` - Binary image (1 = text, 0 = background)
-    /// * `width` - Width of source image
-    /// * `height` - Height of source image
-    /// * `r_start` - Starting row (y coordinate) of the line region
-    /// * `r_end` - Ending row (y coordinate) of the line region
+    /// * `page` - Source grayscale image and its matching text mask
+    /// * `rows` - Half-open row range (y coordinates) of the line region
     /// * `results` - Vector to append the extracted line to
     fn extract_line(
         &self,
-        gray_img: &GrayImage,
-        binary: &[u8],
-        width: u32,
-        height: u32,
-        r_start: u32,
-        r_end: u32,
+        page: &BinarizedPage,
+        rows: Range<u32>,
         results: &mut Vec<LineSegment>,
     ) -> Result<()> {
+        let gray_img = page.gray;
+        let binary = page.binary;
+        let (width, height) = gray_img.dimensions();
+        let (r_start, r_end) = (rows.start, rows.end);
+
         // Find horizontal bounds
         let mut x_min = width;
         let mut x_max = 0u32;
@@ -311,5 +470,260 @@ impl LineSegmenter {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    /// Override for the shared fixture, for checkouts that do not sit next to
+    /// the monorepo.
+    const FIXTURE_ENV: &str = "MONOCR_TILING_FIXTURE";
+
+    /// The fixture is shared with the web, Android and iOS ports on purpose: one
+    /// file, generated from the Python implementation, so a port that drifts
+    /// fails here instead of in production. Transcribing the numbers into Rust
+    /// would defeat that, so the tests read the JSON.
+    fn fixture_path() -> PathBuf {
+        if let Some(path) = std::env::var_os(FIXTURE_ENV) {
+            return PathBuf::from(path);
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../monocr-monorepo/shared/segmentation-fixtures/tiling-cases.json")
+    }
+
+    /// A missing fixture fails loudly. Skipping would report a green run for a
+    /// port nothing checked, which is the exact failure this fixture exists to
+    /// prevent.
+    fn load_fixture() -> Value {
+        let path = fixture_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read the shared tiling fixture at {}: {e}\n\
+                 set {FIXTURE_ENV} to point at \
+                 monocr-monorepo/shared/segmentation-fixtures/tiling-cases.json",
+                path.display()
+            )
+        });
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
+    }
+
+    fn u32_field(value: &Value, key: &str) -> u32 {
+        value
+            .get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| panic!("fixture entry is missing an integer '{key}': {value}"))
+            as u32
+    }
+
+    /// Ink is grey 0, background grey 255, per the fixture contract.
+    fn build_image(width: u32, height: u32, ink: &Value) -> GrayImage {
+        let kind = ink
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("ink rule has no 'kind': {ink}"));
+        let modulus = u32_field(ink, "modulus");
+
+        let mut img = GrayImage::from_pixel(width, height, Luma([255u8]));
+        for x in 0..width {
+            let is_ink = match kind {
+                "mod_eq" => x % modulus == 0,
+                "mod_ne" => x % modulus != 0,
+                "solid" => true,
+                "blank" => false,
+                other => panic!("unknown ink rule '{other}' in the fixture"),
+            };
+            if is_ink {
+                for y in 0..height {
+                    img.put_pixel(x, y, Luma([0u8]));
+                }
+            }
+        }
+        img
+    }
+
+    struct Fixture {
+        target_height: u32,
+        target_width: u32,
+        root: Value,
+    }
+
+    fn fixture() -> Fixture {
+        let root = load_fixture();
+        let target_height = u32_field(&root, "target_height");
+        let target_width = u32_field(&root, "target_width");
+
+        // The constants live in two places, so pin them to each other here.
+        assert_eq!(
+            root.get("cut_search_fraction").and_then(Value::as_f64),
+            Some(CUT_SEARCH_FRACTION),
+            "fixture and port disagree on the cut search fraction"
+        );
+        assert_eq!(
+            root.get("cut_ink_threshold").and_then(Value::as_u64),
+            Some(CUT_INK_THRESHOLD as u64),
+            "fixture and port disagree on the ink threshold"
+        );
+
+        Fixture {
+            target_height,
+            target_width,
+            root,
+        }
+    }
+
+    /// An empty array would make every assertion below vacuous, so an empty one
+    /// is a fixture failure rather than a pass.
+    fn cases(root: &Value, key: &str) -> Vec<Value> {
+        let cases = root
+            .get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("fixture has no '{key}' array"))
+            .clone();
+        assert!(!cases.is_empty(), "fixture '{key}' is empty");
+        cases
+    }
+
+    fn case_image(case: &Value) -> (GrayImage, String) {
+        let name = case
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let ink = case
+            .get("ink")
+            .unwrap_or_else(|| panic!("case '{name}' has no ink rule"));
+        let img = build_image(u32_field(case, "width"), u32_field(case, "height"), ink);
+        (img, name)
+    }
+
+    #[test]
+    fn tile_widths_match_the_shared_fixture() {
+        let f = fixture();
+        for case in cases(&f.root, "cases") {
+            let (img, name) = case_image(&case);
+            let expected: Vec<u32> = case
+                .get("expected_tile_widths")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("case '{name}' has no expected_tile_widths"))
+                .iter()
+                .map(|v| {
+                    v.as_u64()
+                        .unwrap_or_else(|| panic!("case '{name}' has a non-integer tile width"))
+                        as u32
+                })
+                .collect();
+
+            let widths: Vec<u32> = tile_line(&img, f.target_height, f.target_width)
+                .iter()
+                .map(|t| t.width())
+                .collect();
+
+            assert_eq!(widths, expected, "case '{name}'");
+        }
+    }
+
+    /// Tiles must cover the line exactly once. Concatenating them back is the
+    /// direct proof: a gap or an overlap changes the pixels, not just the count.
+    #[test]
+    fn tiles_partition_the_line() {
+        let f = fixture();
+        for case in cases(&f.root, "cases") {
+            let (img, name) = case_image(&case);
+            let tiles = tile_line(&img, f.target_height, f.target_width);
+
+            let total: u32 = tiles.iter().map(|t| t.width()).sum();
+            assert_eq!(
+                total,
+                img.width(),
+                "case '{name}': tile widths must sum to the line width"
+            );
+
+            let mut rebuilt = GrayImage::new(img.width(), img.height());
+            let mut x_off = 0u32;
+            for tile in &tiles {
+                assert_eq!(
+                    tile.height(),
+                    img.height(),
+                    "case '{name}': a tile must keep the full line height"
+                );
+                assert!(tile.width() > 0, "case '{name}': empty tile");
+                for x in 0..tile.width() {
+                    for y in 0..tile.height() {
+                        rebuilt.put_pixel(x_off + x, y, *tile.get_pixel(x, y));
+                    }
+                }
+                x_off += tile.width();
+            }
+            assert!(
+                rebuilt.as_raw() == img.as_raw(),
+                "case '{name}': tiles do not reassemble into the source line"
+            );
+        }
+    }
+
+    /// The single-line path (`MonOcr::predict_single_line`) runs a caller's
+    /// already-cropped line through the same `tile_line`, so a wide crop must
+    /// come back as several tiles covering the full width. If it ever returned
+    /// one tile the crop would be squeezed into the model window. Measured cost of
+    /// that on this binding: nothing at 3 tiles, 4.1x the error at 4, and 23x at 8
+    /// (`examples/tiling_ab.rs`, `mon_OCR/eval/tiling-ab-2026-08-22.md`).
+    #[test]
+    fn a_wide_crop_is_tiled_not_squeezed() {
+        let f = fixture();
+        let mut checked = 0;
+
+        for case in cases(&f.root, "cases") {
+            let expected_count = case
+                .get("expected_tile_widths")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if expected_count < 2 {
+                continue;
+            }
+
+            let (img, name) = case_image(&case);
+            let tiles = tile_line(&img, f.target_height, f.target_width);
+            assert!(
+                tiles.len() > 1,
+                "case '{name}': a crop this wide must be tiled, got {} tile(s)",
+                tiles.len()
+            );
+            assert_eq!(
+                tiles.iter().map(|t| t.width()).sum::<u32>(),
+                img.width(),
+                "case '{name}': tiles must cover the whole crop"
+            );
+            for tile in &tiles {
+                assert!(
+                    tile.width() <= img.width(),
+                    "case '{name}': a tile cannot be wider than the crop"
+                );
+            }
+            checked += 1;
+        }
+
+        assert!(checked > 0, "the fixture has no multi-tile case to check");
+    }
+
+    #[test]
+    fn cut_column_matches_the_shared_fixture() {
+        let f = fixture();
+        for probe in cases(&f.root, "cut_column_probes") {
+            let (img, name) = case_image(&probe);
+            let got = cut_column(
+                &img,
+                u32_field(&probe, "x0"),
+                u32_field(&probe, "ideal"),
+                img.width(),
+            );
+            assert_eq!(got, u32_field(&probe, "expected_cut"), "probe '{name}'");
+        }
     }
 }

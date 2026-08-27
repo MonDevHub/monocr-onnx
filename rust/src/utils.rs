@@ -95,15 +95,20 @@ fn levenshtein(s1: &str, s2: &str) -> usize {
     let len1 = s1_chars.len();
     let len2 = s2_chars.len();
 
-    // Create distance matrix
+    // The matrix is indexed `matrix[j][i]`: s2 selects the row, s1 the column.
+    // That is the opposite of how the docs above name it, so any rewrite of the
+    // two initialisation loops has to keep the axes straight. Iterating
+    // `matrix` where a column walk is meant silently produces wrong distances,
+    // and only when len1 != len2.
     let mut matrix = vec![vec![0; len1 + 1]; len2 + 1];
 
-    // Initialize first column and row
-    for i in 0..=len1 {
-        matrix[0][i] = i;
+    // Row 0: distance from the empty s2 prefix to each s1 prefix.
+    for (i, cell) in matrix[0].iter_mut().enumerate() {
+        *cell = i;
     }
-    for j in 0..=len2 {
-        matrix[j][0] = j;
+    // Column 0: distance from the empty s1 prefix to each s2 prefix.
+    for (j, row) in matrix.iter_mut().enumerate() {
+        row[0] = j;
     }
 
     // Fill the matrix
@@ -142,6 +147,20 @@ mod tests {
         assert_eq!(levenshtein("abc", "abc"), 0);
     }
 
+    /// Pins the matrix axes. The distance matrix is indexed `matrix[j][i]` with
+    /// s2 on the rows and s1 on the columns, so the two initialisation loops
+    /// walk different axes. Get one of them wrong and equal-length inputs still
+    /// come out right, which is why the older equal-length cases above cannot
+    /// catch it. These lengths differ in both directions.
+    ///
+    /// Distance is 3 either way: "ab" -> "abcde" inserts c, d and e, and edit
+    /// distance is symmetric so the reverse deletes the same three.
+    #[test]
+    fn levenshtein_handles_unequal_lengths() {
+        assert_eq!(levenshtein("ab", "abcde"), 3);
+        assert_eq!(levenshtein("abcde", "ab"), 3);
+    }
+
     #[test]
     fn test_accuracy() {
         assert_eq!(calculate_accuracy("hello", "hello"), 100.0);
@@ -150,6 +169,18 @@ mod tests {
 
         // 1 error out of 5 chars = 80% accuracy
         let acc = calculate_accuracy("hellp", "hello");
-        assert!(acc >= 79.99 && acc <= 80.01);
+        assert!((79.99..=80.01).contains(&acc));
+    }
+
+    /// The accuracy path over the same unequal-length inputs, so a broken
+    /// matrix is caught at the public API too.
+    ///
+    /// Derivation: levenshtein("ab", "abcde") = 3 (insert c, d, e).
+    /// max_len = max(2, 5) = 5. accuracy = (1 - 3/5) * 100 = 40.0, and the
+    /// round-to-2-decimals step leaves it unchanged.
+    #[test]
+    fn accuracy_uses_the_longer_string_when_lengths_differ() {
+        assert_eq!(calculate_accuracy("ab", "abcde"), 40.0);
+        assert_eq!(calculate_accuracy("abcde", "ab"), 40.0);
     }
 }

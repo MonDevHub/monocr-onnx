@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use monocr_onnx::MonOcrBuilder;
+use monocr_onnx::{page_text, LineResult, MonOcrBuilder};
 use serde::Serialize;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = "monocr")]
@@ -62,19 +62,19 @@ struct BboxOutput {
     pub height: u32,
 }
 
-fn is_pdf(path: &PathBuf) -> bool {
+fn is_pdf(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase() == "pdf")
         .unwrap_or(false)
 }
 
-fn get_default_output(input: &PathBuf, format: &OutputFormat) -> PathBuf {
+fn get_default_output(input: &Path, format: &OutputFormat) -> PathBuf {
     let ext = match format {
         OutputFormat::Text => "txt",
         OutputFormat::Json => "json",
     };
-    let mut output = input.clone();
+    let mut output = input.to_path_buf();
     output.set_extension(ext);
     output
 }
@@ -119,24 +119,27 @@ async fn main() -> Result<()> {
         }
     }
 
-    let result: Vec<String> = if is_pdf_file {
-        ocr.read_pdf(&args.input).await?
+    // Keep the per-line results, not just the joined text: the JSON output
+    // reports each line's bounding box, and re-deriving lines by splitting the
+    // page text throws that geometry away.
+    let pages: Vec<Vec<LineResult>> = if is_pdf_file {
+        ocr.predict_pdf(&args.input).await?
     } else {
-        vec![ocr.read_image(&args.input).await?]
+        vec![ocr.predict_page(&args.input).await?]
     };
 
     match args.format {
         OutputFormat::Text => {
             let mut file = File::create(&output_path).context("Failed to create output file")?;
-            for (i, page_text) in result.iter().enumerate() {
+            for (i, lines) in pages.iter().enumerate() {
                 if i > 0 {
                     writeln!(file, "\n--- Page {} ---\n", i + 1)?;
                 }
-                writeln!(file, "{}", page_text)?;
+                writeln!(file, "{}", page_text(lines))?;
             }
         }
         OutputFormat::Json => {
-            let json_output = build_json_output(&result, &args.input, is_pdf_file);
+            let json_output = build_json_output(&pages);
             let json_str =
                 serde_json::to_string_pretty(&json_output).context("Failed to serialize JSON")?;
             let mut file = File::create(&output_path).context("Failed to create output file")?;
@@ -153,29 +156,35 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_json_output(pages_text: &[String], _input: &PathBuf, _is_pdf: bool) -> JsonOutput {
-    let pages: Vec<PageOutput> = pages_text
+/// Serialize the OCR results, keeping each line's real geometry.
+///
+/// Every bbox used to be reported as all zeroes even though the library returns
+/// real coordinates, which made the JSON format useless for anything that needs
+/// to point back at the page. For a line that was tiled, the bbox is the union of
+/// its tiles, so it still describes the line the text came from.
+fn build_json_output(pages: &[Vec<LineResult>]) -> JsonOutput {
+    let pages: Vec<PageOutput> = pages
         .iter()
         .enumerate()
-        .map(|(i, text)| {
-            let lines: Vec<LineOutput> = text
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(|line_text| LineOutput {
-                    text: line_text.to_string(),
+        .map(|(i, lines)| {
+            let line_outputs: Vec<LineOutput> = lines
+                .iter()
+                .filter(|line| !line.text.trim().is_empty())
+                .map(|line| LineOutput {
+                    text: line.text.clone(),
                     bbox: BboxOutput {
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0,
+                        x: line.bbox.x,
+                        y: line.bbox.y,
+                        width: line.bbox.w,
+                        height: line.bbox.h,
                     },
                 })
                 .collect();
 
             PageOutput {
                 page: i + 1,
-                lines,
-                full_text: text.clone(),
+                lines: line_outputs,
+                full_text: page_text(lines),
             }
         })
         .collect();
