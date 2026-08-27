@@ -47,19 +47,32 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # Tests first, and with no dependencies installed. They use a fake
-      # session and never run inference, and src/ requires onnxruntime-node
-      # and sharp lazily, so the suite is pure logic. Running it before any
-      # install means a dependency problem cannot be mistaken for a test
-      # failure, and a test failure cannot be masked by one.
-      - name: Run tests
-        run: |
-          cd js
-          node --test test/*.test.js
-      # Separately: the committed lockfile must still resolve. js/ has
-      # pnpm-lock.yaml and no package-lock.json, so `npm install` ignored it,
-      # dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's network
-      # postinstall unsandboxed. That is what failed here on 2026-08-15.
+      # The install now comes BEFORE the tests, and the reason it used to come
+      # after is worth keeping rather than deleting.
+      #
+      # The old comment read: "Tests first, and with no dependencies installed.
+      # They use a fake session and never run inference, and src/ requires
+      # onnxruntime-node and sharp lazily, so the suite is pure logic." That was
+      # true and it was a good property — it meant a dependency problem could not
+      # be mistaken for a test failure, and a test failure could not be masked by
+      # one.
+      #
+      # Three test files added on 2026-08-27 ended it: preprocess.test.js
+      # (5213cbf), polarity.test.js (a970032) and page-rules.test.js (167da6a)
+      # each `require('sharp')` at the top level, because a polarity or
+      # page-rule fixture is a real PNG and there is no way to encode one
+      # without an encoder. On 2026-08-27 main went red with four
+      # MODULE_NOT_FOUND failures that were not test failures at all.
+      #
+      # The lockfile check is not lost by moving it first — it still runs, still
+      # uses --frozen-lockfile, and still fails on its own step with its own
+      # annotation, so an install problem remains distinguishable from a test
+      # problem. What is lost is the proof that the suite needs no native
+      # modules, and that proof stopped being true.
+      #
+      # js/ has pnpm-lock.yaml and no package-lock.json, so `npm install` ignored
+      # it, dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's
+      # network postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
         uses: pnpm/action-setup@v4
         with:
@@ -83,6 +96,10 @@ jobs:
             echo "::error title=pnpm install failed::${detail}"
             exit "$status"
           fi
+      - name: Run tests
+        run: |
+          cd js
+          node --test test/*.test.js
 
   rust-test:
     runs-on: ubuntu-latest
