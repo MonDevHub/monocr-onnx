@@ -93,14 +93,22 @@ func resolveModel() (modelPath, charset string, err error) {
 //
 // The remaining gap: wide lines are SQUEEZED into the model canvas rather than
 // cut into tiles at whitespace columns, which is what the Python binding and
-// the web app do. MEASURED over 240 rendered Mon lines wide enough to need the
-// choice:
+// the web app do.
 //
-//	v2     squeezed 0.0676   tiled 0.0758   CER
-//	v3.5   squeezed 0.1434   tiled 0.0795   CER
+// This comment used to quote `v3.5 squeezed 0.1434 against tiled 0.0795` and
+// conclude "this binding is still on the worse side of that". RETIRED
+// 2026-08-22: that harness was never committed and the figures do not
+// reproduce. Remeasured over 201 rendered lines, twice — Python arms and the
+// Rust binding — in mon_OCR/eval/tiling-ab-2026-08-22.md, the answer is
+// width-dependent: squeezing wins at 2 tiles, the two arms are level at 3, and
+// tiling wins from 4 up. On a real book page at 150 dpi every line fitted one
+// tile, so tiling never engaged at all.
 //
-// This binding pins v3.5, so it is still on the worse side of that. Port
-// tile_line/cut_column from python/monocr_onnx/segmenter.py. ROADMAP 4.5.6.
+// So squeezing is not a standing accuracy loss here; it is an unbounded one on
+// unusually wide input, where tiling's downside stays bounded. Porting
+// tile_line/cut_column from python/monocr_onnx/segmenter.py is still worth
+// doing for that reason, and measuring it on this binding first is the point.
+// ROADMAP 4.5.6.
 func ReadImage(imagePath string) (string, error) {
 	modelPath, charset, err := resolveModel()
 	if err != nil {

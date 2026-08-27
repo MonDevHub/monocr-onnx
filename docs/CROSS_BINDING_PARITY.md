@@ -17,12 +17,23 @@ image.
 > kernels, is an argument about the code rather than about the artifact, so it
 > plausibly survives the model change. It has not been re-checked either.
 >
-> There is also a **second axis this file never covered**: Python tiles a wide line
-> into canvas-width pieces, while JS, Go and Rust squeeze it into the window. On v3.5
-> that gap was measured upstream at CER 0.1434 squeezed against 0.0795 tiled — larger
-> than any disagreement recorded here. Go's `ReadImage` goes further and does not
-> segment at all, so a multi-line page is read as one strip; only its PDF path
-> segments. See the notes in `go/monocr.go` and `python/monocr_onnx/predictor.py`.
+> There is also a **second axis this file never covered**: Python and Rust tile a wide
+> line into canvas-width pieces, while JS and Go squeeze it into the window. This note
+> used to price that gap at `CER 0.1434 squeezed against 0.0795 tiled` and call it
+> "larger than any disagreement recorded here". **Retired 2026-08-22**: that harness
+> was never committed and the figures do not reproduce. Remeasured over 201 rendered
+> lines in `mon_OCR/eval/tiling-ab-2026-08-22.md`, the gap is width-dependent —
+> squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
+> On the ordinary page input that report describes — a book page at 150 dpi, where
+> every line fitted one tile — the gap is not smaller than the disagreements below,
+> it is **absent**, because tiling never engages. It is also a CER and those are
+> agreement counts, so the two were never comparable by magnitude in the first place.
+> Rust gained tiling on 2026-08-22; JS and Go have not.
+>
+> Go's `ReadImage` no longer reads a multi-line page as one strip — that gap closed
+> 2026-08-18 and both its image and PDF paths now share `segMinLineHeight` and
+> `segSmoothWindow`. See the notes in `go/monocr.go` and
+> `python/monocr_onnx/predictor.py`.
 
 ## What was measured
 
