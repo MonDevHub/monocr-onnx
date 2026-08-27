@@ -115,10 +115,42 @@ jobs:
         run: |
           cd rust
           cargo fmt --check
+      # Wrapped so the failure is readable without admin on the repository.
+      # `cargo test` on this job went red on 2026-08-27 and the reason could not
+      # be established from outside: the runner annotates only "Process completed
+      # with exit code 1", and GET /actions/jobs/:id/logs answers 403 "Must have
+      # admin rights to Repository". The pnpm step in js-test and the publish
+      # steps in both release workflows already echo their own output back as an
+      # ::error:: for exactly this reason; this job was the one that did not.
+      #
+      # It matters more here than elsewhere because these tests do not run on a
+      # macOS dev machine by default. Command Line Tools 21 removed the clang 17
+      # path the linker searches, so `cargo test` fails locally with
+      # `ld: library 'clang_rt.osx' not found` before running anything. The
+      # runtime is present, just under a different version directory:
+      #
+      #   RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin" \
+      #     cargo test
+      #
+      # With that set the full suite passes locally (28 lib + 14 doc-tests), so
+      # whatever fails here is specific to this job and cannot be reproduced on a
+      # Mac. Until this annotation lands, nobody without admin can see what.
       - name: Run tests
         run: |
           cd rust
-          cargo test
+          set +e
+          output="$(cargo test 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(printf '%s\n' "$output" | grep -iE '^error|^warning: unused|panicked|assertion|cannot find|not found|failures:' \
+              | head -30 | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=cargo test failed::${detail:-no error-shaped line in cargo output; see the tail below}"
+            tail="$(printf '%s\n' "$output" | tail -30 | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=cargo test output (tail)::${tail}"
+            exit "$status"
+          fi
 
   go-test:
     runs-on: ubuntu-latest
