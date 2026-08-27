@@ -41,19 +41,25 @@
 //! - Measure OCR accuracy against ground truth
 //! - Customizable model paths and character sets
 //! - Line segmentation for full page OCR
+//! - Lines too wide for the 1024px model window are tiled at whitespace columns
+//!   rather than squeezed into it; see [`MonOcr::predict_page`] for the measured
+//!   reason
 
 use anyhow::Result;
 use std::path::Path;
 
 pub mod model_manager;
 mod monocr;
-mod segmenter;
+pub mod segmenter;
 mod utils;
 
 pub use model_manager::ModelManager;
 pub use monocr::{
-    normalize_charset, LineResult, ModelContractError, MonOcr, MonOcrBuilder, DEFAULT_INPUT_WIDTH,
-    EXPECTED_INPUT_HEIGHT,
+    normalize_charset, page_text, BBox, LineResult, ModelContractError, MonOcr, MonOcrBuilder,
+    DEFAULT_INPUT_WIDTH, EXPECTED_INPUT_HEIGHT,
+};
+pub use segmenter::{
+    cut_column, tile_line, CUT_INK_THRESHOLD, CUT_SEARCH_FRACTION, DEFAULT_DENSITY_THRESHOLD_RATIO,
 };
 pub use utils::calculate_accuracy;
 
