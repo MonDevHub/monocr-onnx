@@ -1,15 +1,20 @@
 // Lazy for the same reason as in monocr.js: requiring sharp at import time makes
 // every consumer of this package pay for a native binding they may not use.
 //
-// This comment used to read "the tests exercise the projection profile through
-// fixtures and never open an image." That was false — corrected 2026-08-26.
-// Nothing in js/test/ references this file: `grep -rn segmenter js/test/` returns
-// nothing across all four of its test files (js/test/ holds five files; helpers.js
-// is a shared module, and package.json runs `node --test test/*.test.js`).
+// TEST COVERAGE, corrected twice now. This comment first read "the tests exercise
+// the projection profile through fixtures and never open an image", which was
+// false. It was then rewritten to say nothing in js/test/ references this file and
+// that the profile is "entirely untested" — true on 2026-08-26 and false a day
+// later. js/test/ now holds eight files, and test/page-rules.test.js requires this
+// module directly.
 //
-// The projection profile, the threshold, the smoothing and the padding here are
-// **entirely untested**, and
-// they diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
+// What is tested as of 2026-08-27: printed-rule suppression, in both directions and
+// at the exact-length bound on each axis, including a behavioural case driving
+// segment() end to end. What is still NOT tested: the projection profile itself,
+// the gap threshold, the histogram smoothing and the padding — the parts that
+// decide where a line begins.
+//
+// They diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
 // are recorded in that file's Canonical Algorithm Spec header — most of all the
 // flat global `< 128` binarisation below, where the reference thresholds
 // adaptively.
@@ -17,6 +22,71 @@ let sharp = null;
 function imaging() {
     if (sharp === null) sharp = require('sharp');
     return sharp;
+}
+
+// Printed-rule suppression.
+//
+// A printed page border adds a constant ink floor to every row it spans, and once
+// that floor clears the gap threshold no in-frame row reads as a gap: the page
+// returns as one band and is squeezed into the model window.
+//
+// MEASURED WITH THIS PARAMETER SET (global threshold 128, no smear, smoothing 3,
+// ratio 0.05 of the mean) over twelve real MNEC page-ones: nine collapse to three
+// bands or fewer, and the twelve together go from 118 bands to 215. Pages carrying
+// no rules are untouched.
+//
+// Worth stating because it is counter-intuitive: this binding gains MORE from the
+// pass than the smeared implementations do, not less. A synthetic framed page does
+// not fuse here, which briefly suggested the opposite; real pages settle it.
+//
+// A rule is an unbroken ink run spanning at least RULE_SPAN of the page in one
+// direction. Implemented as a run-length scan, which is what an opening with a
+// 1xL line kernel computes, in one sweep per axis.
+const RULE_SPAN = 0.5;
+
+// Suppression that would remove more than this share of the page ink has found
+// text, not rules, and is abandoned. RULE_SPAN is a fraction of the page, so on a
+// SHORT page a tall text block exceeds it vertically and every glyph column reads
+// as a rule. Real framed pages classify 21.5%-58.8% of their ink as rules,
+// rule-free pages 0.00%, and the false positive upstream found 98.7%.
+const RULE_MAX_INK_SHARE = 0.8;
+
+/**
+ * Zero out printed rules in `binary` (1 = ink). Returns true when anything was
+ * removed. Mutates in place.
+ */
+function suppressPageRules(binary, width, height) {
+    const minH = Math.max(15, Math.floor(width * RULE_SPAN));
+    const minV = Math.max(15, Math.floor(height * RULE_SPAN));
+    const rules = new Uint8Array(width * height);
+
+    for (let y = 0; y < height; y++) {
+        const row = y * width;
+        let start = 0;
+        for (let x = 0; x <= width; x++) {
+            if (x < width && binary[row + x]) continue;
+            if (x - start >= minH) for (let i = start; i < x; i++) rules[row + i] = 1;
+            start = x + 1;
+        }
+    }
+    for (let x = 0; x < width; x++) {
+        let start = 0;
+        for (let y = 0; y <= height; y++) {
+            if (y < height && binary[y * width + x]) continue;
+            if (y - start >= minV) for (let i = start; i < y; i++) rules[i * width + x] = 1;
+            start = y + 1;
+        }
+    }
+
+    let ink = 0;
+    for (let i = 0; i < binary.length; i++) if (binary[i]) ink++;
+    if (ink === 0) return false;
+    let ruleInk = 0;
+    for (let i = 0; i < rules.length; i++) if (rules[i]) ruleInk++;
+    if (ruleInk === 0 || ruleInk > ink * RULE_MAX_INK_SHARE) return false;
+
+    for (let i = 0; i < rules.length; i++) if (rules[i]) binary[i] = 0;
+    return true;
 }
 
 class LineSegmenter {
@@ -49,21 +119,25 @@ class LineSegmenter {
         // or just use sharp's threshold if we can get the mask.
         // Actually, to replicate Horizontal Projection, we need the sum of "text" pixels.
         // We'll treat dark pixels (< 128) as text (since background is white).
-        const binary = new Uint8Array(grayBuffer.length);
-        const hist = new Float32Array(height).fill(0);
-
+        // A mask IS materialised here, and unlike the dead one this file used to
+        // carry it is read: rule suppression needs the 2-D shape of the ink, which
+        // a per-row count cannot express.
+        const binary = new Uint8Array(width * height);
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const idx = y * width + x;
                 // Threshold: 128 is a safe bet for black text on white paper.
                 // Inverted so text is "high" (1) and background is 0.
-                if (grayBuffer[idx] < 128) {
-                    binary[idx] = 1;
-                    hist[y]++;
-                } else {
-                    binary[idx] = 0;
-                }
+                if (grayBuffer[idx] < 128) binary[idx] = 1;
             }
+        }
+
+        suppressPageRules(binary, width, height);
+
+        const hist = new Float32Array(height).fill(0);
+        for (let y = 0; y < height; y++) {
+            const row = y * width;
+            for (let x = 0; x < width; x++) if (binary[row + x]) hist[y]++;
         }
 
         // 3. Smoothing projection profile
@@ -155,3 +229,6 @@ class LineSegmenter {
 }
 
 module.exports = LineSegmenter;
+
+// Exported for tests.
+module.exports.suppressPageRules = suppressPageRules;

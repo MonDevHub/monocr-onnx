@@ -44,8 +44,9 @@ re-pinning is a cache miss rather than a silent reuse of the previous artifact.
 - **Fail-closed loading**: Refuses to run a model whose input height or class
   count disagrees with the charset, instead of returning the wrong text.
 - **Memory Efficient**: Uses `ndarray` for tensor construction.
-- **Line segmentation**: Horizontal projection profile with adaptive
-  thresholding for full-page OCR.
+- **Line segmentation**: Horizontal projection profile over a **flat global
+  threshold at 128** for full-page OCR (`src/segmenter.rs:288`). Not adaptive —
+  the crate's own docs at `src/segmenter.rs:265` state it correctly.
 
 ## Quick Start
 

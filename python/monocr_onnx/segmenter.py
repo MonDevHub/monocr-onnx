@@ -2,6 +2,63 @@ import cv2
 import numpy as np
 from PIL import Image
 
+# Printed-rule suppression. A page border adds a constant ink floor to every row
+# it spans, and once that floor clears the gap threshold no in-frame row reads as
+# a gap: the page comes back as one band and is squeezed into the model window.
+#
+# Measured 2026-08-27 on the reference implementation over twelve real MNEC
+# papers: nine collapsed to a single band without this, seven of them returning
+# 0-2 characters, and the twelve together went from 3,846 characters to 5,924.
+# Pages carrying no rules come back byte-identical.
+#
+# A rule is an unbroken ink run spanning at least RULE_SPAN of the page in one
+# direction. Morphological opening with a line kernel keeps exactly those runs;
+# subtracting them leaves the text. No Mon, Burmese or Latin glyph holds an
+# unbroken stroke half a page long, so the false-positive risk against text is
+# structural rather than merely small.
+#
+# There is deliberately NO thickness test. "A rule is long AND thin" was written,
+# measured and deleted upstream: across twelve real pages the rule pixels found
+# with a thickness limit and with none were identical to the pixel, and it cannot
+# work anyway -- adaptiveThreshold compares against a LOCAL mean, so the interior
+# of a thick ink region is not ink and only its edges are. Every thick region
+# arrives already presented as a pair of thin bands.
+RULE_SPAN = 0.5
+
+# Suppression that would remove more than this share of the page ink has found
+# text, not rules, and is abandoned. RULE_SPAN is a fraction of the page, so on a
+# SHORT page a tall block of text exceeds it vertically and every glyph column
+# reads as a rule. Upstream this was caught by an existing test losing 98.7% of
+# its ink and returning zero lines. The threshold sits in a measured gap: real
+# framed pages classify 21.5%-58.8% of their ink as rules, rule-free pages 0.00%,
+# and that false positive 98.7%.
+RULE_MAX_INK_SHARE = 0.80
+
+
+def suppress_page_rules(binary):
+    """Remove printed rules from a text mask, leaving glyphs untouched.
+
+    Returns `binary` unchanged when the page carries no rules, and also when
+    suppression would remove more ink than RULE_MAX_INK_SHARE.
+    """
+    h, w = binary.shape
+    horizontal = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(15, int(w * RULE_SPAN)), 1)),
+    )
+    vertical = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, int(h * RULE_SPAN)))),
+    )
+    rules = cv2.bitwise_or(horizontal, vertical)
+    ink = int(np.count_nonzero(binary))
+    if not ink or np.count_nonzero(rules) > ink * RULE_MAX_INK_SHARE:
+        return binary
+    return cv2.subtract(binary, rules)
+
+
 class LineSegmenter:
     """
     Robust line segmenter using Horizontal Projection Profiles with Smoothing.
@@ -34,6 +91,9 @@ class LineSegmenter:
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
         )
         
+        # 1.5 Printed-rule suppression
+        binary = suppress_page_rules(binary)
+
         # 2. Horizontal Projection Profile
         raw_hist = np.sum(binary, axis=1).astype(np.float32)
 
