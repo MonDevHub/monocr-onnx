@@ -347,6 +347,20 @@ class MonOCR:
         else:
             img = img_path
 
+        # Polarity BEFORE segmentation, and this ordering is the whole point.
+        #
+        # `preprocess` also calls this, per crop, which is what the single-line
+        # path needs. But the segmenter binarises with THRESH_BINARY_INV and so
+        # treats dark as ink: handed a light-on-dark page it segments the
+        # BACKGROUND and returns the gaps between lines. Inverting each crop
+        # afterwards cannot recover a line that was never found.
+        #
+        # An audit caught this after the probe was added to `preprocess` alone.
+        # The probe is idempotent — once the corners are light a second call is a
+        # no-op, pinned by `test_inverting_twice_returns_the_original` — so both
+        # call sites are safe, and the per-crop one still covers `predict_line`.
+        img = normalize_polarity(img.convert("L") if img.mode != "L" else img)
+
         lines = self.segmenter.segment(img)
 
         if not lines:

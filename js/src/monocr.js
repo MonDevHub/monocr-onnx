@@ -189,6 +189,26 @@ function normalizePolarity(gray, width, height) {
     return gray;
 }
 
+/**
+ * Return the page as a grayscale PNG Buffer with its polarity corrected, ready to
+ * hand to the segmenter.
+ *
+ * Only the polarity probe runs here. Everything else the model needs — the resize,
+ * the pad, the normalisation — belongs to `preprocess`, per crop.
+ */
+async function normalizePageForSegmentation(imagePath) {
+    const { data, info } = await imaging()(imagePath)
+        .grayscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    normalizePolarity(data, info.width, info.height);
+    return imaging()(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels }
+    })
+        .png()
+        .toBuffer();
+}
+
 class MonOCR {
     constructor(modelPath = null, charsetPath = null) {
         this.modelPath = modelPath;
@@ -439,7 +459,20 @@ class MonOCR {
     async predictPage(imagePath) {
         if (!this.session) await this.init();
 
-        const lines = await this.segmenter.segment(imagePath);
+        // Polarity BEFORE segmentation, and this ordering is the point. The
+        // segmenter treats dark as ink (`grayBuffer[idx] < 128`), so handed a
+        // light-on-dark page it segments the BACKGROUND and returns the gaps
+        // between lines. Inverting each crop inside `preprocess` afterwards cannot
+        // recover a line that was never found. An audit caught this after the probe
+        // shipped in `preprocess` alone.
+        //
+        // `segment` takes a path or a Buffer, so the page is normalised into a
+        // Buffer first. The probe is idempotent — once the corners are light a
+        // second call is a no-op — so the per-crop call still covers `predictLine`
+        // without fighting this one.
+        const source = await normalizePageForSegmentation(imagePath);
+
+        const lines = await this.segmenter.segment(source);
         const results = [];
 
         for (const line of lines) {
@@ -459,4 +492,5 @@ module.exports.ModelContractError = ModelContractError;
 // Exported for tests: the probe is the load-bearing half of preprocess.
 module.exports.normalizePolarity = normalizePolarity;
 module.exports.backgroundIsDark = backgroundIsDark;
+module.exports.normalizePageForSegmentation = normalizePageForSegmentation;
 module.exports.assertModelContract = assertModelContract;

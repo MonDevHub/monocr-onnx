@@ -105,3 +105,52 @@ test('preprocess normalises polarity before building the tensor', async () => {
 test('a zero-sized image does not throw', () => {
     assert.strictEqual(backgroundIsDark(new Uint8Array(0), 0, 0), false);
 });
+
+test('predictPage normalises the page before segmenting it', async () => {
+    // THE ORDERING. The segmenter treats dark as ink, so a light-on-dark page
+    // segments the BACKGROUND and returns the gaps between lines. A probe inside
+    // preprocess runs per crop, after segmentation, and cannot recover a line that
+    // was never found. An audit caught that after the probe shipped there alone.
+    //
+    // Behavioural, not structural: an inverted page must segment into the same
+    // number of lines as its upright twin.
+    const sharp = require('sharp');
+    const LineSegmenter = require('../src/segmenter');
+    const { normalizePageForSegmentation } = require('../src/monocr');
+
+    const W = 900, H = 260;
+    async function png(bg, ink) {
+        const g = new Uint8Array(W * H).fill(bg);
+        for (const top of [40, 140]) {
+            for (let y = top; y < top + 60; y++)
+                for (let x = 60; x < W - 60; x += 20)
+                    for (let i = 0; i < 12; i++) g[y * W + x + i] = ink;
+        }
+        return sharp(Buffer.from(g), { raw: { width: W, height: H, channels: 1 } })
+            .png()
+            .toBuffer();
+    }
+
+    const seg = new LineSegmenter();
+    const upright = await seg.segment(await normalizePageForSegmentation(await png(255, 0)));
+    const inverted = await seg.segment(await normalizePageForSegmentation(await png(0, 255)));
+
+    assert.strictEqual(upright.length, 2, 'the control must find 2 lines');
+    assert.strictEqual(
+        inverted.length,
+        upright.length,
+        'an inverted page must segment like its upright twin — the probe is running too late'
+    );
+});
+
+test('predictPage calls the page-level probe before segment', () => {
+    // Paired with the behavioural test above: this one names the call site, so a
+    // failure points at the wiring rather than at a band count.
+    const MonOCR = require('../src/monocr');
+    const src = MonOCR.prototype.predictPage.toString();
+    const probeAt = src.indexOf('normalizePageForSegmentation');
+    const segmentAt = src.indexOf('segmenter.segment');
+    assert.ok(probeAt !== -1, 'predictPage does not call the page-level probe');
+    assert.ok(segmentAt !== -1, 'predictPage no longer calls segment; update this test');
+    assert.ok(probeAt < segmentAt, 'the probe must be called BEFORE segmentation');
+});

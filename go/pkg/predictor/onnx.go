@@ -409,10 +409,10 @@ func backgroundIsDark(img image.Image) bool {
 	return median < darkBackgroundMedian
 }
 
-// normalizePolarity returns img as dark-text-on-light, inverting it when the
+// NormalizePolarity returns img as dark-text-on-light, inverting it when the
 // background is dark. An already-correct image is returned unchanged, which is
 // what makes this safe to run on every input.
-func normalizePolarity(img image.Image) image.Image {
+func NormalizePolarity(img image.Image) image.Image {
 	if !backgroundIsDark(img) {
 		return img
 	}
@@ -435,7 +435,7 @@ func (p *Predictor) preprocess(img image.Image) ([]float32, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("cannot preprocess an empty image")
 	}
 
-	img = normalizePolarity(img)
+	img = NormalizePolarity(img)
 
 	targetHeight := p.targetHeight
 	targetWidth := p.targetWidth

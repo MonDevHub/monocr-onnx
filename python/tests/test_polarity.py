@@ -133,3 +133,76 @@ def test_a_narrow_crop_still_gets_a_usable_corner_patch():
 
     out = np.asarray(normalize_polarity(page))
     assert out[0, 0] == 255, "an 8px-wide dark-background crop must still invert"
+
+
+def test_polarity_runs_before_segmentation_not_only_per_crop():
+    """THE ORDERING, which is what makes the probe useful on a page.
+
+    The segmenter binarises with THRESH_BINARY_INV, so it treats dark as ink. On a
+    light-on-dark page it segments the BACKGROUND and returns the gaps between
+    lines; inverting each crop afterwards cannot recover a line never found.
+
+    A probe in `preprocess` alone does not fix a page, and that is what shipped
+    first. Asserted on the band count: an inverted page must segment into the same
+    number of lines as its upright twin.
+    """
+    from monocr_onnx import predictor as P
+
+    def page(bg, ink, w=900, h=260):
+        a = np.full((h, w), bg, dtype=np.uint8)
+        for top in (40, 140):
+            for x in range(60, w - 60, 20):
+                a[top : top + 60, x : x + 12] = ink
+        return Image.fromarray(a, mode="L")
+
+    seg = P.LineSegmenter()
+    upright = len(seg.segment(P.normalize_polarity(page(255, 0))))
+    inverted = len(seg.segment(P.normalize_polarity(page(0, 255))))
+
+    assert upright == 2, f"the control must find 2 lines, found {upright}"
+    assert inverted == upright, (
+        f"an inverted page found {inverted} bands against the upright page's "
+        f"{upright} — polarity is not being applied before segmentation"
+    )
+
+
+def test_predict_page_normalises_before_it_segments():
+    """The ordering inside `predict_page`, pinned where it can actually fail.
+
+    The test above exercises the probe and the segmenter together, which passes
+    whether or not `predict_page` itself calls the probe first — verified by
+    mutation: deleting the call from `predict_page` left it green. This reads the
+    two call sites out of the function body and asserts their order.
+
+    Source order rather than a runtime assertion because `predict_page` needs the
+    46MB graph and a real inference to reach the segmenter, none of which bears on
+    the question.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from monocr_onnx.predictor import MonOCR
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(MonOCR.predict_page)))
+    polarity_at = segment_at = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        if name == "normalize_polarity" and polarity_at is None:
+            polarity_at = node.lineno
+        if name == "segment" and segment_at is None:
+            segment_at = node.lineno
+
+    assert polarity_at is not None, (
+        "predict_page does not call normalize_polarity. The segmenter binarises "
+        "with THRESH_BINARY_INV, so a light-on-dark page segments the background "
+        "and returns the gaps between lines; a probe in preprocess alone runs too "
+        "late to help."
+    )
+    assert segment_at is not None, "predict_page no longer calls segment; update this test"
+    assert polarity_at < segment_at, (
+        f"normalize_polarity is called at line {polarity_at} and segment at "
+        f"{segment_at}: the probe must run BEFORE segmentation, not after"
+    )

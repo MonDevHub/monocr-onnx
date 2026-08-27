@@ -38,13 +38,13 @@ func page(w, h int, bg, ink uint8) *image.Gray {
 // that a future refactor cannot start copying every page for nothing.
 func TestDarkOnLightIsUntouched(t *testing.T) {
 	in := page(200, 60, 255, 0)
-	if out := normalizePolarity(in); out != image.Image(in) {
+	if out := NormalizePolarity(in); out != image.Image(in) {
 		t.Fatalf("a dark-on-light page must be returned unchanged")
 	}
 }
 
 func TestLightOnDarkIsInverted(t *testing.T) {
-	out := normalizePolarity(page(200, 60, 0, 255))
+	out := NormalizePolarity(page(200, 60, 0, 255))
 	if g := color.GrayModel.Convert(out.At(0, 0)).(color.Gray); g.Y != 255 {
 		t.Fatalf("dark background should have become light, got %d", g.Y)
 	}
@@ -128,6 +128,36 @@ func TestPreprocessNormalisesPolarity(t *testing.T) {
 	for i := range up {
 		if up[i] != inv[i] {
 			t.Fatalf("tensors differ at %d: upright %f, inverted %f", i, up[i], inv[i])
+		}
+	}
+}
+
+// TestNormalizePolarityIsExportedForThePagePath: the probe must be reachable from
+// the page path, because that is where the ordering matters.
+//
+// The segmenter treats dark as ink, so handed a light-on-dark page it segments the
+// BACKGROUND and returns the gaps between lines. A probe inside preprocess runs
+// per crop, after segmentation, and cannot recover a line that was never found.
+// An audit caught that after the probe shipped in preprocess alone.
+func TestNormalizePolarityIsExportedForThePagePath(t *testing.T) {
+	out := NormalizePolarity(page(200, 60, 0, 255))
+	if g := color.GrayModel.Convert(out.At(0, 0)).(color.Gray); g.Y != 255 {
+		t.Fatalf("exported probe did not invert a dark-background page, corner is %d", g.Y)
+	}
+}
+
+// TestProbeIsIdempotent: both call sites apply it, so a second application must be
+// a no-op or the page path would fight the per-crop path.
+func TestProbeIsIdempotent(t *testing.T) {
+	once := NormalizePolarity(page(200, 60, 0, 255))
+	twice := NormalizePolarity(once)
+	for y := 0; y < 60; y += 7 {
+		for x := 0; x < 200; x += 11 {
+			a := color.GrayModel.Convert(once.At(x, y)).(color.Gray).Y
+			b := color.GrayModel.Convert(twice.At(x, y)).(color.Gray).Y
+			if a != b {
+				t.Fatalf("not idempotent at (%d,%d): %d then %d", x, y, a, b)
+			}
 		}
 	}
 }
