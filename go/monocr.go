@@ -198,6 +198,16 @@ func predictFile(pred *predictor.Predictor, imagePath string) (string, error) {
 func predictImage(pred *predictor.Predictor, img image.Image) (string, error) {
 	seg := segmenter.NewLineSegmenter(segMinLineHeight, segSmoothWindow)
 
+	// Polarity BEFORE segmentation, and this ordering is the point. The segmenter
+	// treats dark as ink (segmenter.go's `< 128`), so handed a light-on-dark page it
+	// segments the BACKGROUND and returns the gaps between lines. Inverting each
+	// crop inside preprocess afterwards cannot recover a line never found.
+	//
+	// An audit caught this after the probe was added to preprocess alone. The probe
+	// is idempotent -- once the corners are light a second call is a no-op -- so
+	// both call sites are safe, and the per-crop one still covers ReadLine.
+	img = predictor.NormalizePolarity(img)
+
 	lines, err := seg.Segment(img)
 	if err != nil || len(lines) == 0 {
 		return pred.Predict(img)
@@ -308,6 +318,16 @@ func readPDFWithModel(pdfPath, modelPath, charset string) ([]string, error) {
 			}
 
 			// Segment lines
+			// Polarity BEFORE segmentation, and this ordering is the point. The segmenter
+			// treats dark as ink (segmenter.go's `< 128`), so handed a light-on-dark page it
+			// segments the BACKGROUND and returns the gaps between lines. Inverting each
+			// crop inside preprocess afterwards cannot recover a line never found.
+			//
+			// An audit caught this after the probe was added to preprocess alone. The probe
+			// is idempotent -- once the corners are light a second call is a no-op -- so
+			// both call sites are safe, and the per-crop one still covers ReadLine.
+			img = predictor.NormalizePolarity(img)
+
 			lines, err := seg.Segment(img)
 			if err != nil || len(lines) == 0 {
 				// Fallback to full page prediction (single line assumption)

@@ -121,6 +121,94 @@ function assertModelContract(session, charset, targetHeight, modelPath) {
     // the real dims of every output tensor, which are always concrete.
 }
 
+// Polarity. The model is trained on dark text on a light background and this
+// binding never checked which it was given.
+//
+// Measured 2026-08-27 over 300 labelled crops from mon_OCR's
+// data/real/digits/val, same graph, only the polarity of the input changed:
+//
+//     upright, with this probe    CER 0.0000   300/300 exact
+//     inverted, with this probe   CER 0.0000   300/300 exact
+//     upright, without it         CER 0.0036   296/300
+//     inverted, without it        CER 0.0342   288/300   <- 9.5x worse
+//
+// Degradation rather than the total failure it might sound like, and cheap to
+// close. Those crops are Myanmar digits on composited backgrounds, so the effect
+// on full Mon text lines is unmeasured.
+//
+// A COPY of mon_OCR's `to_normalized_grayscale` steps 1-3, not a shared module:
+// these bindings ship independently. Step 4, background levelling, is not ported
+// and is what the 0.0036 upright row above costs.
+const POLARITY_CORNER_FRACTION = 10;
+const POLARITY_CORNER_FLOOR = 3;
+const DARK_BACKGROUND_MEDIAN = 128;
+
+/**
+ * True when the four corner patches say this is light-text-on-dark.
+ *
+ * Corner-median rather than a global mean: document corners are almost always
+ * background, so their median survives a dense, text-heavy page where a global
+ * mean is dragged toward the ink. A page 64% covered in ink has a mean below 128
+ * and must NOT be inverted.
+ */
+function backgroundIsDark(gray, width, height) {
+    if (width <= 0 || height <= 0) return false;
+    // The floor can exceed the image on a tiny crop; clamping keeps the sample
+    // inside the buffer. Reading past it yields undefined, which coerces to NaN
+    // in the comparison and to 0 in a sort — either way a light page could be
+    // inverted. Silent and backwards.
+    const ch = Math.min(height, Math.max(POLARITY_CORNER_FLOOR,
+        Math.floor(height / POLARITY_CORNER_FRACTION)));
+    const cw = Math.min(width, Math.max(POLARITY_CORNER_FLOOR,
+        Math.floor(width / POLARITY_CORNER_FRACTION)));
+
+    const samples = [];
+    const corners = [[0, 0], [width - cw, 0], [0, height - ch], [width - cw, height - ch]];
+    for (const [ox, oy] of corners) {
+        for (let y = 0; y < ch; y++) {
+            for (let x = 0; x < cw; x++) {
+                samples.push(gray[(oy + y) * width + (ox + x)]);
+            }
+        }
+    }
+    if (samples.length === 0) return false;
+    samples.sort((a, b) => a - b);
+    const n = samples.length;
+    const median = n % 2 ? samples[(n - 1) / 2] : (samples[n / 2 - 1] + samples[n / 2]) / 2;
+    return median < DARK_BACKGROUND_MEDIAN;
+}
+
+/**
+ * Invert `gray` in place when its background is dark. Returns the buffer either
+ * way, unchanged when the page is already dark-on-light — which is what makes
+ * this safe to run on every input.
+ */
+function normalizePolarity(gray, width, height) {
+    if (!backgroundIsDark(gray, width, height)) return gray;
+    for (let i = 0; i < gray.length; i++) gray[i] = 255 - gray[i];
+    return gray;
+}
+
+/**
+ * Return the page as a grayscale PNG Buffer with its polarity corrected, ready to
+ * hand to the segmenter.
+ *
+ * Only the polarity probe runs here. Everything else the model needs — the resize,
+ * the pad, the normalisation — belongs to `preprocess`, per crop.
+ */
+async function normalizePageForSegmentation(imagePath) {
+    const { data, info } = await imaging()(imagePath)
+        .grayscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    normalizePolarity(data, info.width, info.height);
+    return imaging()(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels }
+    })
+        .png()
+        .toBuffer();
+}
+
 class MonOCR {
     constructor(modelPath = null, charsetPath = null) {
         this.modelPath = modelPath;
@@ -130,9 +218,14 @@ class MonOCR {
         this.segmenter = new LineSegmenter();
         this.modelManager = new ModelManager();
 
-        // Metadata. 128 is the input height of the pinned v2 network
-        // (MobileNetV3-Large + BiLSTM + CTC, 315-character charset). It is not a
-        // free parameter: `init()` refuses to run if the model disagrees.
+        // Metadata for the pinned v3.5 graph: MobileNetV3-Large + BiLSTM + CTC,
+        // 160x1024 input, 276-character charset (277 classes with the CTC blank).
+        //
+        // Neither is a free parameter: `init()` refuses to run if the model
+        // disagrees. Corrected 2026-08-27 — this comment described v2, naming 128
+        // as the input height and a 315-character charset, three lines above the
+        // constants that say 160. The code was right and the comment was two
+        // generations behind.
         this.targetHeight = 160;
         this.targetWidth = 1024;
     }
@@ -202,15 +295,39 @@ class MonOCR {
         } else {
             sharpImg = imaging()(imageSource);
         }
-        const metadata = await sharpImg.metadata();
+        // Dimensions come from the DECODED buffer, not from `metadata()`.
+        //
+        // `metadata()` reads the input header and, as sharp's own docs put it,
+        // "does not take into consideration any operations to be applied to the
+        // output image". The segmenter hands us `image.clone().extract({...})` --
+        // a crop whose `extract` has not run yet -- so `metadata()` returns the
+        // PAGE's size, not the crop's.
+        //
+        // Measured on a 2550x3300 page with a 2400x90 line crop:
+        //     crop.metadata()  ->  2550 x 3300
+        //     scale = 160/3300 -> newWidth = 124   (correct: 1024)
+        // Every segmented line was squeezed into 124 columns of a 1024 canvas
+        // and the remaining 900 filled with white padding -- an ~8x horizontal
+        // crush. `predictLine(path)` on a pre-cropped file was unaffected, which
+        // is exactly the path docs/CROSS_BINDING_PARITY.md measured, so the
+        // parity run could not have caught it.
+        //
+        // Materialising the grayscale raw buffer first costs one decode and
+        // reports the true post-`extract` size in `info`.
+        const { data: grayData, info } = await sharpImg
+            .grayscale()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+
+        normalizePolarity(grayData, info.width, info.height);
 
         // Scale to target height
-        const scale = this.targetHeight / metadata.height;
-        const newWidth = Math.min(this.targetWidth, Math.round(metadata.width * scale));
+        const scale = this.targetHeight / info.height;
+        const newWidth = Math.min(this.targetWidth, Math.round(info.width * scale));
 
-        // Create the grayscale resized image
-        const resizedBuffer = await sharpImg
-            .grayscale()
+        const resizedBuffer = await imaging()(grayData, {
+            raw: { width: info.width, height: info.height, channels: info.channels }
+        })
             .resize({
                 height: this.targetHeight,
                 width: newWidth,
@@ -347,7 +464,20 @@ class MonOCR {
     async predictPage(imagePath) {
         if (!this.session) await this.init();
 
-        const lines = await this.segmenter.segment(imagePath);
+        // Polarity BEFORE segmentation, and this ordering is the point. The
+        // segmenter treats dark as ink (`grayBuffer[idx] < 128`), so handed a
+        // light-on-dark page it segments the BACKGROUND and returns the gaps
+        // between lines. Inverting each crop inside `preprocess` afterwards cannot
+        // recover a line that was never found. An audit caught this after the probe
+        // shipped in `preprocess` alone.
+        //
+        // `segment` takes a path or a Buffer, so the page is normalised into a
+        // Buffer first. The probe is idempotent — once the corners are light a
+        // second call is a no-op — so the per-crop call still covers `predictLine`
+        // without fighting this one.
+        const source = await normalizePageForSegmentation(imagePath);
+
+        const lines = await this.segmenter.segment(source);
         const results = [];
 
         for (const line of lines) {
@@ -364,4 +494,8 @@ class MonOCR {
 
 module.exports = MonOCR;
 module.exports.ModelContractError = ModelContractError;
+// Exported for tests: the probe is the load-bearing half of preprocess.
+module.exports.normalizePolarity = normalizePolarity;
+module.exports.backgroundIsDark = backgroundIsDark;
+module.exports.normalizePageForSegmentation = normalizePageForSegmentation;
 module.exports.assertModelContract = assertModelContract;

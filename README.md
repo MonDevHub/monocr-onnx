@@ -135,8 +135,6 @@ monocr-onnx/
 ├── js/               # Node.js package (uses sharp)
 ├── go/               # Go module
 ├── rust/             # Rust crate
-├── src/              # monocr_full.js — an early single-file prototype,
-│                     #   imported by nothing and pinned to a 64px input
 ├── scripts/          # download_models.sh — fetch the pinned model
 ├── examples/         # runnable examples: python, js, go (no rust yet)
 ├── data/             # test images and fixtures

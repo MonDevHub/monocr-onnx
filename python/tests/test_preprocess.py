@@ -11,6 +11,28 @@ import pytest
 from PIL import Image
 
 
+def _inked(width: int, height: int = 40) -> Image.Image:
+    """A dark bar on a light background — realistic ink, unambiguous polarity.
+
+    These tests used `Image.new("L", (w, h), color=0)`, a UNIFORMLY BLACK image,
+    as a stand-in for "ink everywhere". That is genuinely ambiguous — all
+    background, or all ink? — and `preprocess`'s corner-median polarity probe
+    reads it as a dark background and inverts it, which is the same thing
+    `mon_OCR`'s `to_normalized_grayscale` has always done to such an image.
+
+    So the fixture, not the contract, was wrong: it asserted the normalisation
+    arithmetic on an input the real pipeline never produces. A dark bar with light
+    margins keeps the corners as background, so the probe leaves it alone and
+    these tests measure what they were written to measure.
+
+    The bar spans the full width and the middle half of the height, so after the
+    scale to h=160 it occupies rows 40..120.
+    """
+    a = np.full((height, width), 255, dtype=np.uint8)
+    a[height // 4 : 3 * height // 4, :] = 0
+    return Image.fromarray(a, mode="L")
+
+
 def test_white_maps_to_plus_one_and_black_to_minus_one(make_ocr):
     """
     The regression test for the /255 bug. Under [0, 1] normalisation white is
@@ -18,7 +40,7 @@ def test_white_maps_to_plus_one_and_black_to_minus_one(make_ocr):
     """
     ocr = make_ocr()
     white = ocr.preprocess(Image.new("L", (200, 40), color=255))
-    black = ocr.preprocess(Image.new("L", (200, 40), color=0))
+    black = ocr.preprocess(_inked(200))
 
     assert white.min() == pytest.approx(1.0)
     assert white.max() == pytest.approx(1.0)
@@ -66,8 +88,11 @@ def test_padding_is_white_not_black(make_ocr):
 
 def test_aspect_ratio_is_preserved_below_the_canvas_width(make_ocr):
     ocr = make_ocr()
-    arr = ocr.preprocess(Image.new("L", (200, 40), color=0))
-    ink_columns = int(np.count_nonzero(arr[0, 0, 0, :] < 0))
+    arr = ocr.preprocess(_inked(200))
+    # Row 80 of 160: inside the bar, which occupies rows 40..120 after scaling.
+    # Row 0 was readable while the fixture was uniformly black; with realistic
+    # ink it is background.
+    ink_columns = int(np.count_nonzero(arr[0, 0, 80, :] < 0))
     assert ink_columns == pytest.approx(200 * (160 / 40), abs=1)
 
 
@@ -77,9 +102,10 @@ def test_wide_lines_are_squeezed_not_truncated(make_ocr):
     Truncating instead would drop the tail of the line with no error.
     """
     ocr = make_ocr()
-    arr = ocr.preprocess(Image.new("L", (4000, 40), color=0))
+    arr = ocr.preprocess(_inked(4000))
     assert arr.shape[3] == 1024
-    assert np.all(arr[0, 0, :, -1] < 0)  # ink reaches the right edge
+    # The bar's rows, not every row: with realistic ink the margins are light.
+    assert np.all(arr[0, 0, 60:100, -1] < 0), "ink must reach the right edge"
 
 
 def test_dimensions_come_from_the_graph_not_a_constant(make_ocr):

@@ -30,6 +30,105 @@ func NewLineSegmenter(minLineH, smoothWindow int) *LineSegmenter {
 	}
 }
 
+// Printed-rule suppression.
+//
+// A printed page border adds a constant ink floor to every row it spans, and once
+// that floor clears the gap threshold no in-frame row reads as a gap: the page
+// returns as one band and is squeezed into the model window.
+//
+// MEASURED WITH THIS PARAMETER SET (global threshold 128, no smear, smoothing 3,
+// ratio 0.05 of the mean) over twelve real MNEC page-ones: nine collapse to three
+// bands or fewer, and the twelve go from 118 bands to 215. Pages carrying no rules
+// are untouched.
+//
+// Counter-intuitive and worth stating: this binding gains MORE from the pass than
+// the smeared implementations, not less. A synthetic framed page does not fuse
+// here, which briefly suggested the opposite; real pages settle it.
+const (
+	// A rule spans at least this fraction of the page in one direction. No Mon,
+	// Burmese or Latin glyph holds an unbroken stroke half a page long, so the
+	// false-positive risk against text is structural rather than merely small.
+	ruleSpan = 0.5
+
+	// Suppression that would remove more than this share of the page ink has found
+	// text, not rules, and is abandoned. ruleSpan is a fraction of the page, so on
+	// a SHORT page a tall text block exceeds it vertically and every glyph column
+	// reads as a rule. Real framed pages classify 21.5%-58.8% of their ink as
+	// rules, rule-free pages 0.00%, and the false positive upstream found 98.7%.
+	ruleMaxInkShare = 0.80
+)
+
+// suppressPageRules zeroes printed rules in mask (1 = ink) and reports whether
+// anything was removed. Mutates in place.
+//
+// A run-length scan rather than a generic erode-then-dilate: opening with a 1xL
+// line kernel keeps exactly those ink runs at least L long, which one sweep per
+// axis computes directly.
+func suppressPageRules(mask []uint8, width, height int) bool {
+	if width <= 0 || height <= 0 || len(mask) < width*height {
+		return false
+	}
+	minH := int(float64(width) * ruleSpan)
+	if minH < 15 {
+		minH = 15
+	}
+	minV := int(float64(height) * ruleSpan)
+	if minV < 15 {
+		minV = 15
+	}
+
+	rules := make([]uint8, width*height)
+	for y := 0; y < height; y++ {
+		row := y * width
+		start := 0
+		for x := 0; x <= width; x++ {
+			if x < width && mask[row+x] != 0 {
+				continue
+			}
+			if x-start >= minH {
+				for i := start; i < x; i++ {
+					rules[row+i] = 1
+				}
+			}
+			start = x + 1
+		}
+	}
+	for x := 0; x < width; x++ {
+		start := 0
+		for y := 0; y <= height; y++ {
+			if y < height && mask[y*width+x] != 0 {
+				continue
+			}
+			if y-start >= minV {
+				for i := start; i < y; i++ {
+					rules[i*width+x] = 1
+				}
+			}
+			start = y + 1
+		}
+	}
+
+	ink, ruleInk := 0, 0
+	for i := range mask[:width*height] {
+		if mask[i] != 0 {
+			ink++
+		}
+		if rules[i] != 0 {
+			ruleInk++
+		}
+	}
+	if ink == 0 || ruleInk == 0 || float64(ruleInk) > float64(ink)*ruleMaxInkShare {
+		// Found the text. Leaving the page alone is strictly better than emptying it.
+		return false
+	}
+	for i := range rules {
+		if rules[i] != 0 {
+			mask[i] = 0
+		}
+	}
+	return true
+}
+
 func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	// Convert to Grayscale if needed (conceptually, we just need luminance)
 	bounds := img.Bounds()
@@ -43,12 +142,26 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	// Accessing pixels via At() is slow, but compatible with all image types.
 	// For optimization later, type switch to *image.Gray, *image.RGBA etc.
 	// For now, simple implementation.
+	// A mask is materialised because rule suppression needs the 2-D shape of the
+	// ink, which a per-row count cannot express.
+	mask := make([]uint8, width*height)
 	for y := 0; y < height; y++ {
-		sum := 0
 		for x := 0; x < width; x++ {
 			c := img.At(bounds.Min.X+x, bounds.Min.Y+y)
 			gray := color.GrayModel.Convert(c).(color.Gray)
 			if gray.Y < 128 {
+				mask[y*width+x] = 1
+			}
+		}
+	}
+
+	suppressPageRules(mask, width, height)
+
+	for y := 0; y < height; y++ {
+		sum := 0
+		row := y * width
+		for x := 0; x < width; x++ {
+			if mask[row+x] != 0 {
 				sum++
 			}
 		}
