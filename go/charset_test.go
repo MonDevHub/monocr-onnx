@@ -9,9 +9,15 @@ import (
 	"testing"
 )
 
-// The pinned revision (model.ModelRevision) exports 316 output classes:
-// 276 characters plus the CTC blank at index 0. Was 315 until revision
-// d3d9d5e moved the pin from the v2 network to v3.5.
+// The pinned revision (model.ModelRevision) exports 277 output classes:
+// 276 characters plus the CTC blank at index 0. The charset was 315 characters
+// (316 classes) until revision d3d9d5e moved the pin from the v2 network to
+// v3.5.
+//
+// The first line said 316 until 2026-08-27, so the comment contradicted its own
+// second line — 276 + 1 is 277 — and the const below it. `8da6178` rewrote the
+// second line for v3.5 and left the first as `0022277` wrote it against v2, one
+// line apart. Nothing failed, because only the const is compiled.
 const pinnedCharsetLen = 276
 
 func TestDefaultCharsetMatchesPinnedModel(t *testing.T) {
@@ -23,8 +29,13 @@ func TestDefaultCharsetMatchesPinnedModel(t *testing.T) {
 }
 
 // The charset's first character is U+0020. TrimSpace eats it, dropping 276 to
-// 314 and shifting every index in the decode by one — the model still runs and
+// 275 and shifting every index in the decode by one — the model still runs and
 // still returns text, just the wrong text.
+//
+// Read "276 to 314" until 2026-08-27: `8da6178` updated the first number to
+// v3.5's and not the second, leaving one subtraction with a foot in each model
+// generation. The assertion below computes pinnedCharsetLen-1 and was right
+// throughout.
 func TestDefaultCharsetKeepsLeadingSpace(t *testing.T) {
 	cs := []rune(DefaultCharset())
 	if len(cs) == 0 {

@@ -15,8 +15,11 @@ go get github.com/MonDevHub/monocr-onnx/go
 
 The SDK downloads its ONNX weights from
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr), pinned to revision
-`d3d9d5e` (`model.ModelRevision`). That artifact takes a `[1, 1, 160, width]`
-input and emits `[1, sequence, 277]` logits: 276 characters plus the CTC blank.
+`d3d9d5e` (`model.ModelRevision`). That artifact takes a
+`[batch, 1, 160, 1024]` input and emits `[batch, sequence, 277]` logits: 276
+characters plus the CTC blank. **Height and width are both static**; batch is
+the only dynamic axis. This line previously read `[1, 1, 160, width]`, which had
+both halves backwards.
 
 The charset, the input height and the classifier width are one contract. If they
 drift apart the model still runs and still returns text — it is just the wrong
