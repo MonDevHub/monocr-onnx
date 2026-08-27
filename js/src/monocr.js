@@ -202,15 +202,37 @@ class MonOCR {
         } else {
             sharpImg = imaging()(imageSource);
         }
-        const metadata = await sharpImg.metadata();
+        // Dimensions come from the DECODED buffer, not from `metadata()`.
+        //
+        // `metadata()` reads the input header and, as sharp's own docs put it,
+        // "does not take into consideration any operations to be applied to the
+        // output image". The segmenter hands us `image.clone().extract({...})` --
+        // a crop whose `extract` has not run yet -- so `metadata()` returns the
+        // PAGE's size, not the crop's.
+        //
+        // Measured on a 2550x3300 page with a 2400x90 line crop:
+        //     crop.metadata()  ->  2550 x 3300
+        //     scale = 160/3300 -> newWidth = 124   (correct: 1024)
+        // Every segmented line was squeezed into 124 columns of a 1024 canvas
+        // and the remaining 900 filled with white padding -- an ~8x horizontal
+        // crush. `predictLine(path)` on a pre-cropped file was unaffected, which
+        // is exactly the path docs/CROSS_BINDING_PARITY.md measured, so the
+        // parity run could not have caught it.
+        //
+        // Materialising the grayscale raw buffer first costs one decode and
+        // reports the true post-`extract` size in `info`.
+        const { data: grayData, info } = await sharpImg
+            .grayscale()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
 
         // Scale to target height
-        const scale = this.targetHeight / metadata.height;
-        const newWidth = Math.min(this.targetWidth, Math.round(metadata.width * scale));
+        const scale = this.targetHeight / info.height;
+        const newWidth = Math.min(this.targetWidth, Math.round(info.width * scale));
 
-        // Create the grayscale resized image
-        const resizedBuffer = await sharpImg
-            .grayscale()
+        const resizedBuffer = await imaging()(grayData, {
+            raw: { width: info.width, height: info.height, channels: info.channels }
+        })
             .resize({
                 height: this.targetHeight,
                 width: newWidth,

@@ -16,7 +16,11 @@ npm install monocr
   and its caveats.
 - **Pinned Model**: Weights and charset are fetched from one immutable Hugging Face revision, so two installs of the same version decode with the same network.
 - **Fails Closed**: A model whose class count or input height disagrees with the charset is refused at load rather than decoded into wrong text.
-- **Line segmentation**: adaptive thresholding, with padding relative to each line's height.
+- **Line segmentation**: horizontal projection profile over a **flat global
+  threshold at 128**, with padding relative to each line's height. Not adaptive —
+  `src/segmenter.js:58`. The reference implementation in `mon_OCR` does threshold
+  adaptively; this binding does not, and `src/segmenter.js:10-15` records that the
+  projection profile here is untested.
 
 ## Quick Start
 

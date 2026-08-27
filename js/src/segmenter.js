@@ -49,7 +49,6 @@ class LineSegmenter {
         // or just use sharp's threshold if we can get the mask.
         // Actually, to replicate Horizontal Projection, we need the sum of "text" pixels.
         // We'll treat dark pixels (< 128) as text (since background is white).
-        const binary = new Uint8Array(grayBuffer.length);
         const hist = new Float32Array(height).fill(0);
 
         for (let y = 0; y < height; y++) {
@@ -58,10 +57,10 @@ class LineSegmenter {
                 // Threshold: 128 is a safe bet for black text on white paper.
                 // Inverted so text is "high" (1) and background is 0.
                 if (grayBuffer[idx] < 128) {
-                    binary[idx] = 1;
+                    // No mask is materialised: only the row count is used, by the
+                    // projection profile below. A full-page Uint8Array used to be
+                    // written here on every pixel and never read again.
                     hist[y]++;
-                } else {
-                    binary[idx] = 0;
                 }
             }
         }
