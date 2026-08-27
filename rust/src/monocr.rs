@@ -30,8 +30,15 @@ const DEFAULT_CHARSET: &str = include_str!("charset.txt");
 /// against the graph in [`MonOcr::new`], and a disagreement refuses to load.
 pub const EXPECTED_INPUT_HEIGHT: u32 = 160;
 
-/// Padded canvas width fed to the model. The model's width axis is dynamic;
-/// this is the binding's choice, not a model constraint.
+/// Padded canvas width fed to the model.
+///
+/// This is a *fallback*, not the binding's free choice. v3.5 was exported with
+/// `dynamic_axes={"input": {0: "batch"}}` and nothing else, so axis 3 is the
+/// literal integer 1024 and the graph runs at that width alone. The comment
+/// here used to read "the model's width axis is dynamic; this is the binding's
+/// choice, not a model constraint" — true of v2 (`[1, 1, 128, width]`), false
+/// since the move to `d3d9d5e`, and it is the stated reason `check_contract`
+/// below validates height but not width.
 pub const DEFAULT_INPUT_WIDTH: u32 = 1024;
 
 /// A model artifact that disagrees with the charset or the input geometry this
@@ -54,7 +61,7 @@ impl std::error::Error for ModelContractError {}
 ///
 /// The charset's first character really is U+0020 — a space is one of the
 /// classes the model emits. A bare `.trim()` eats it, which drops the charset
-/// from 315 characters to 314 and shifts every index in the decode by one, so
+/// from 276 characters to 275 and shifts every index in the decode by one, so
 /// every character comes back as its neighbour.
 pub fn normalize_charset(charset: &str) -> &str {
     charset
@@ -423,7 +430,9 @@ pub struct MonOcr {
     /// Target height for model input, taken from the model graph once the
     /// contract check has confirmed it matches [`EXPECTED_INPUT_HEIGHT`]
     target_height: u32,
-    /// Target width for model input (the model's width axis is dynamic)
+    /// Target width for model input. Unlike `target_height` this is NOT read
+    /// from the graph — see `DEFAULT_INPUT_WIDTH` for why that is a gap and not
+    /// a decision.
     target_width: u32,
     /// False squeezes wide lines instead of tiling. Measurement only; see
     /// `MonOcrBuilder::tile_wide_lines`.

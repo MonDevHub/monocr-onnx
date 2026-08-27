@@ -23,8 +23,14 @@ import (
 // the graph in NewPredictor, and a disagreement refuses to load.
 const ExpectedInputHeight = 160
 
-// DefaultInputWidth is the padded canvas width fed to the model. The model's
-// width axis is dynamic; this is the binding's choice, not a model constraint.
+// DefaultInputWidth is the padded canvas width fed to the model.
+//
+// This is a fallback, not a free choice. v3.5 was exported with only axis 0
+// dynamic, so axis 3 is the literal integer 1024 and the graph runs at that
+// width alone. This comment used to read "the model's width axis is dynamic;
+// this is the binding's choice, not a model constraint" — true of v2
+// ([1, 1, 128, width]), false since the move to d3d9d5e, and it is the stated
+// reason checkContract validates height but not width.
 const DefaultInputWidth = 1024
 
 // ContractError reports a model artifact that disagrees with the charset or the

@@ -51,8 +51,12 @@ def test_charset_begins_with_a_space():
 
 def test_bare_strip_would_lose_the_leading_space():
     """
-    Pins the trap itself. `.strip()` silently returns 314 characters, which
+    Pins the trap itself. `.strip()` silently returns 275 characters, which
     still loads, still decodes, and produces the wrong glyph for every index.
+
+    Said 314 until 2026-08-27: v2's count, and never what this test measured —
+    the assertion is relative to ``_read_charset``, so it kept passing while the
+    prose named a number from the previous model.
     """
     text = bundled_text()
     assert len(text.strip()) == len(_read_charset(text)) - 1
