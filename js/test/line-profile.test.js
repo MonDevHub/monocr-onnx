@@ -11,7 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const sharp = require('sharp');
 const LineSegmenter = require('../src/segmenter');
-const { smoothProfile } = require('../src/segmenter');
+const { smoothProfile, mergeRuns, MIN_GAP_MERGE } = require('../src/segmenter');
 
 const WIDTH = 800, BAND = 40, MARGIN = 30, GLYPH_W = 12, PITCH = 20;
 
@@ -228,4 +228,190 @@ test('smoothing never lifts the profile above its raw peak', () => {
         assert.ok(smoothed[20] < 300,
             `window ${window} left the band's first row at 300 — nothing was smoothed`);
     }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The other half of the dual histogram: the gap merge.
+//
+// Raw-profile detection alone splits one Mon line wherever a single row dips below
+// the gap threshold, between the upper diacritic zone and the consonant bodies. See
+// `MIN_GAP_MERGE` and `mergeRuns` in src/segmenter.js for the measurement, taken
+// through THIS binding.
+//
+// Every fixture below carries ORDINARY full-height lines as well as the case under
+// test, and that is load-bearing rather than decoration. `mergeRuns` judges a
+// fragment against the page's typical line height, so a page consisting of nothing
+// but the two halves of one split line is degenerate — the median IS the
+// half-height, and there is no evidence in it that they are halves rather than two
+// short lines. Each test also says which clause is the sole reason its assertion
+// holds, so a mutation to that clause cannot be masked by another.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A PNG of one split text line: a strip of sparse upper marks, a blank gap, then a
+ *  44-row body.
+ *
+ *  The measured geometry. Marks 2px wide against the body's 12px so the strip's row
+ *  profile is faint but well clear of the gap threshold, and so the strip is a run
+ *  in its own right rather than noise. */
+async function splitLinePage(stripH, gapH) {
+    const height = 200;
+    const g = new Uint8Array(WIDTH * height).fill(255);
+    const stripY = 60, bodyY = stripY + stripH + gapH;
+    for (const [y0, y1, w] of [[stripY, stripY + stripH, 2], [bodyY, bodyY + 44, GLYPH_W]])
+        for (let yy = y0; yy < y1; yy++)
+            for (let k = 0; k < 30; k++) {
+                const x = 100 + k * PITCH;
+                if (x + w <= WIDTH) for (let i = 0; i < w; i++) g[yy * WIDTH + x + i] = 0;
+            }
+    return sharp(Buffer.from(g), { raw: { width: WIDTH, height, channels: 1 } })
+        .png()
+        .toBuffer();
+}
+
+/** A raw profile with ink on `bands` and nowhere else. */
+function profile(length, bands) {
+    const hist = new Float32Array(length);
+    for (const [a, b, v] of bands) hist.fill(v === undefined ? 300 : v, a, b);
+    return hist;
+}
+
+test('a diacritic strip is returned joined to its line', async () => {
+    // The merge must be reached THROUGH segment(), not only unit-tested. A mutation
+    // deleting the mergeRuns call from the pipeline survives every helper test below,
+    // because they call the helper directly and leave the call site unguarded. That is
+    // the gap se-brain rules/standards/testing.md names: a tested helper does not make
+    // its call site safe.
+    //
+    // Geometry is the measured one: a 20-row strip of upper marks, two empty rows,
+    // then a 44-row body. One line, and it must come back as one band.
+    const got = await new LineSegmenter(10, 3).segment(await splitLinePage(20, 2));
+    assert.strictEqual(got.length, 1,
+        `the strip and its body came back as ${got.length} bands — the merge is not `
+        + 'reached from segment()');
+    assert.ok(got[0].bbox.h >= 66,
+        `the returned band is ${got[0].bbox.h}px tall, so it does not span the strip `
+        + 'and the body together');
+});
+
+test('a strip shorter than minLineH survives the merge', async () => {
+    // The ORDER of the merge and the height filter, which no band count reveals.
+    // Filtering first also returns one band here — the body, with its diacritics
+    // deleted — so a count assertion passes either way. What separates them is where
+    // the band STARTS: merged first it opens above the strip, filtered first the
+    // 6-row strip is discarded and the band opens at the body.
+    const got = await new LineSegmenter(10, 3).segment(await splitLinePage(6, 4));
+    assert.strictEqual(got.length, 1, `expected one band, got ${got.length}`);
+    assert.ok(got[0].bbox.y <= 60,
+        `the band starts at row ${got[0].bbox.y}, below the strip at row 60 — the `
+        + 'height filter ran before the merge and ate the diacritics');
+});
+
+test('a sub-threshold dip does not end a line', () => {
+    // Both clauses on measured numbers rather than invented ones: one line, rows
+    // 260-324, split by row 280 carrying 6 ink pixels against a threshold of 7.0.
+    // Upstream's measurement, kept because it is the case F-69 diagnosed; this
+    // binding's own instance is page 9 of the same book, where the threshold is 6.8
+    // and row 377 carries 5.
+    const hist = profile(400, [[260, 325]]);
+    hist[280] = 6; // above zero, below the gap threshold
+    assert.deepStrictEqual(mergeRuns([[260, 280], [281, 325]], hist, MIN_GAP_MERGE),
+        [[260, 325]], 'a 1-row dip holding ink split one line in two');
+});
+
+test('a zero-ink gap still merges a fragment into its line', () => {
+    // The other measured case: rows 341-360 are the upper marks and 362-404 the body
+    // of one line, separated by TWO rows of genuinely zero ink. No ink test can cross
+    // that; the fragment clause is what does, and it is the sole reason this merge
+    // happens.
+    const hist = profile(500, [[341, 360, 40], [362, 404]]);
+    assert.deepStrictEqual(mergeRuns([[341, 360], [362, 404]], hist, MIN_GAP_MERGE),
+        [[341, 404]], 'a 19-row fragment two empty rows from a 42-row line stayed separate');
+});
+
+test('two real lines two rows apart stay separate', () => {
+    // The case the fragment clause must NOT swallow, and the reason it is a 2x ratio
+    // and not a 1x one: same gap, same emptiness, but both runs are full height.
+    //
+    // The three 60-row lines make this test mean something. Without them the page
+    // median would be 40, the merged band would be 82 against a ceiling of 80, and the
+    // SIZE BOUND would refuse the merge whatever the ratio said — so a ratio loosened
+    // to 1x would survive. With them the median is 60, the ceiling is 120, and the
+    // fragment clause is the only thing holding the two lines apart.
+    //
+    // A vertical smear cannot tell these apart at all, which is why one was not used:
+    // at reach 1 it closes 2-row gaps, and 2 rows is the tightest real line spacing.
+    const runs = [[20, 60], [62, 102], [150, 210], [250, 310], [350, 410]];
+    const hist = profile(500, runs);
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+        'two 40-row lines were fused on a page whose typical line is 60 — the fragment '
+        + 'ratio is no longer 2x');
+});
+
+test('a wide gap is a line boundary however much ink it holds', () => {
+    // The size bound on its own. Overlapping diacritics can hold the raw profile above
+    // zero right across real inter-line spacing; upstream that collapsed 3 PDF lines
+    // into 1.
+    //
+    // The 60-row lines are again what makes the assertion about maxGap: they put the
+    // ceiling at 120, and the merged band would be 95, so maxGap is the only clause
+    // refusing this merge. Sized the other way the test would pass for a maxGap of any
+    // value at all.
+    const runs = [[20, 60], [75, 115], [150, 210], [250, 310], [350, 410]];
+    const hist = profile(500, [...runs, [60, 75, 5]]);
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+        'a 15-row gap merged, so the size bound is not being applied');
+});
+
+test('a dip between equal halves merges on ink alone', () => {
+    // The ink clause on its own, which no other case here isolates: in the measured dip
+    // cases the fragment clause ALSO fires, so dropping the ink test survives them.
+    //
+    // Here the two halves are 40 rows each on a page whose typical line is 60, so
+    // neither is a fragment by the 2x ratio, and only the two rows of surviving ink in
+    // the dip can merge them.
+    const hist = profile(400, [[20, 60], [60, 62, 5], [62, 102], [150, 210], [260, 320]]);
+    assert.deepStrictEqual(
+        mergeRuns([[20, 60], [62, 102], [150, 210], [260, 320]], hist, MIN_GAP_MERGE),
+        [[20, 102], [150, 210], [260, 320]],
+        'an ink-holding 2-row dip between two halves of a typical line did not merge');
+});
+
+test('a merge may not build a band past twice a typical line', () => {
+    // The ceiling, and the cascade it is the backstop for. Four 20-row fragments
+    // separated by single inked rows would chain into one 83-row band, and each merge
+    // makes the accumulated run taller. Upstream, with a fragment test judged against
+    // the NEIGHBOUR and no ceiling, page 47 of a 56-page book collapsed from 36 bands
+    // to 10 with single bands of 534, 632 and 732 rows, losing 92% of its readable
+    // characters.
+    //
+    // The typical line here is 40, so the chain is cut when it would pass 80: the first
+    // three fragments become one 62-row band and the fourth stays its own.
+    const runs = [[0, 20], [21, 41], [42, 62], [63, 83],
+                  [150, 190], [210, 250], [270, 310], [330, 370], [390, 430]];
+    const hist = profile(500, runs);
+    for (const y of [20, 41, 62]) hist[y] = 5; // one inked row, so the gap clause allows it
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE),
+        [[0, 62], [63, 83], [150, 190], [210, 250], [270, 310], [330, 370], [390, 430]],
+        'the fragment chain grew past twice a typical line — the ceiling is gone');
+});
+
+test('a fragment is judged against the page median, not against its neighbour', () => {
+    // Trap #1, and the only case that separates the two yardsticks while the ceiling
+    // still allows the merge.
+    //
+    // The 21-row run is exactly half its 42-row neighbour, so a neighbour-relative
+    // ratio calls it a fragment and fuses them. Against the page median of 40 it is
+    // NOT a fragment — 21 is over half a typical line — and it stays its own band. The
+    // merged band would be 65 against a ceiling of 80, so the ceiling is not what
+    // refuses this: the yardstick is.
+    //
+    // Judging against the neighbour cascades, because each merge makes the accumulated
+    // run taller and the next line then looks more like a fragment. Measured on this
+    // binding's 56-page corpus, that form costs 28 bands and 3.4 points more sub-0.6x
+    // fragments (1921 bands, 17.4%) than this one (1893, 15.2%).
+    const runs = [[10, 50], [100, 142], [144, 165], [200, 240], [260, 300]];
+    const hist = profile(400, runs);
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+        'a 21-row run was fused into its 42-row neighbour on a page whose typical line '
+        + 'is 40 — the fragment test is measuring against the neighbour again');
 });
