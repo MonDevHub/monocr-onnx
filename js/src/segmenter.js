@@ -18,8 +18,8 @@
 // at the exact-length bound on each axis, including two behavioural cases driving
 // segment() end to end — one on the band count, one on the crop COLUMN extents,
 // which pins the horizontal padding with it; the dual histogram, both halves, and
-// the smoother's span, divisor and peak; and the gap merge, five clauses through the
-// helper plus two cases through segment(). What is still NOT tested: the vertical
+// the smoother's span, divisor and peak; and the gap merge, seven cases through the
+// helper plus two driving segment(). What is still NOT tested: the vertical
 // padding's exact value, and the binarisation threshold.
 //
 // They diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
