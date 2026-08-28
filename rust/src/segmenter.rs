@@ -507,19 +507,26 @@ impl LineSegmenter {
             //
             // The threshold above stays calibrated on the smoothed profile,
             // because its non-zero mean is steadier. But the smoother averages
-            // over `smooth_window` rows, so a gap narrower than the whole
-            // window never reaches zero in the smoothed profile: the ink either
-            // side bleeds into it, the bled rows clear the threshold, and the
-            // two lines fuse. The raw profile needs one clean row.
+            // several rows together, so a gap narrower than its span never
+            // reaches zero in the smoothed profile: the ink either side bleeds
+            // into it, the bled rows clear the threshold, and the two lines
+            // fuse. The raw profile needs one clean row.
             //
             // Measured HERE, at this port's own parameters (min_line_height 10,
-            // smooth_window 3, density_threshold_ratio 0.05) on 29 drawn bands:
-            // reading the smoothed profile returned 1 band at gaps of 1px and
-            // 2px, against 29 lines drawn, and matched the raw profile from 3px
-            // up. The break point is the smoother's full width, so a caller who
-            // raises `smooth_window` widens the failure with it — at 15 the
-            // smoothed profile lost every page whose lines sat closer than 15px
-            // while the raw profile kept all 29.
+            // density_threshold_ratio 0.05) on 29 drawn bands, driving the
+            // pre-fix form that read boundaries off the smoothed profile. First
+            // gap that returned all 29 bands, by `smooth_window` 1 to 12:
+            //
+            //     1 3 3 5 5 7 7 9 9 11 11 13
+            //
+            // So the break point is `smooth_histogram`'s SPAN,
+            // 2 * (smooth_window / 2) + 1, and NOT the requested window: at
+            // `smooth_window` 4 a gap of exactly 4px still fused. Python's table
+            // is 1,2,...,12 because its kernel is a true window-tap box.
+            // `smooth_window` is a constructor argument, so a caller who raises
+            // it widens the failure with it — at 15 the smoothed profile lost
+            // every page whose lines sat closer than 15px while the raw profile
+            // kept all 29.
             //
             // Rust's break point is far tighter than the monorepo apps', which
             // fused at 5px to 8px, because those ports dilate the mask
@@ -564,10 +571,37 @@ impl LineSegmenter {
     ///
     /// Smoothed histogram with the same length as input
     ///
-    /// # Algorithm
+    /// # Algorithm, and two measured divergences from the Python binding
     ///
-    /// For each position, computes the average of values within the window:
-    /// `[i - half_window, i + half_window]`
+    /// For each position, the mean of `[i - half, i + half]` with
+    /// `half = smooth_window / 2`, over the rows actually in range. Neither
+    /// divergence below is reconciled here: the formula is published behaviour
+    /// for anyone reading the profile, so changing it changes this port's output
+    /// and that is an owner decision.
+    ///
+    /// 1. **Span is `2 * (smooth_window / 2) + 1`, not `smooth_window`.** An EVEN
+    ///    window therefore spans one row MORE than asked and is bit-identical to
+    ///    the odd window ABOVE it. Python convolves a true `window`-tap kernel.
+    ///    Measured on 29 drawn glyph-blob bands at `min_line_height` 10, driving
+    ///    the pre-fix form that read boundaries off this profile: the first gap
+    ///    returning all 29 bands, for windows 1 to 12, was
+    ///    1,3,3,5,5,7,7,9,9,11,11,13, against Python's 1,2,...,12. So at
+    ///    `smooth_window` 4 a gap of exactly 4px still fused. JS and Go measure
+    ///    the same table as this port.
+    /// 2. **The divisor is the rows visited, not the window.** Near the top and
+    ///    bottom edges fewer rows are in range, and dividing by that count reports
+    ///    the true local mean. numpy's `mode='same'` zero-pads and divides by the
+    ///    window, attenuating those rows to `(window / 2 + 1) / window` of the
+    ///    true mean — two thirds at window 3, 8/15 at window 15. Go matches numpy;
+    ///    this port does not. Measured cost, now that the smoothed profile only
+    ///    sets the threshold LEVEL: on a page with a blank margin of at least
+    ///    `half` rows the affected rows are zero either way and the two formulas
+    ///    agree to the bit. On a page cropped flush to the ink the threshold moved
+    ///    0.21% at window 3 and 1.17% at window 15, and no band count changed.
+    ///
+    /// Dividing by the rows visited also means this port cannot produce Go's
+    /// even-window defect, where `window + 1` terms are divided by `window` and the
+    /// smoothed peak clears the raw one by up to 1.5x.
     fn smooth_histogram(&self, hist: &[f32]) -> Vec<f32> {
         let height = hist.len();
         let mut smoothed = vec![0f32; height];
@@ -1312,9 +1346,12 @@ mod tests {
     }
 
     /// `smooth_window` is a constructor argument, and on the smoothed profile
-    /// raising it widened the damage: the break point is the smoother's full
-    /// width, so at 15 every page whose lines sat closer than 15px collapsed to
-    /// one band. Measured at 5px and 12px, both of which the old form lost.
+    /// raising it widened the damage: the break point is the smoother's SPAN,
+    /// 2 * (smooth_window / 2) + 1 and not the requested window, so at 15 every
+    /// page whose lines sat closer than 15px collapsed to one band. Measured at
+    /// 5px and 12px, both of which the old form lost. 15 is odd, so span and
+    /// window coincide here; the even-window case is pinned against
+    /// `smooth_histogram` directly, below.
     #[test]
     fn a_wide_smoother_does_not_fuse_the_page() {
         let seg = LineSegmenter::new(10, 15);
@@ -1358,5 +1395,117 @@ mod tests {
              is being calibrated on the raw profile",
             got.len()
         );
+    }
+
+    // The smoother's own arithmetic, pinned separately from the segmenter that
+    // reads it. Three of the four bindings diverge from Python here and nothing
+    // caught it, because no test used an even window.
+
+    /// `lead` rows of `ink`, then `gap` zero rows, then `lead` rows of `ink`.
+    fn banded_profile(lead: usize, gap: usize, ink: f32) -> Vec<f32> {
+        let mut out = vec![0f32; lead * 2 + gap];
+        out[..lead].fill(ink);
+        out[lead + gap..].fill(ink);
+        out
+    }
+
+    /// THE DIVERGENCE AN ODD-WINDOW-ONLY TEST CANNOT SEE, and the reason it
+    /// survived four ports: at an odd window this formula and Python's agree.
+    ///
+    /// The loop is `[i - half, i + half]` with `half = smooth_window / 2`, so an
+    /// even window spans one row MORE than asked and is bit-identical to the odd
+    /// window ABOVE it. A gap of exactly `smooth_window` zero rows therefore
+    /// still reaches zero at odd windows and does NOT at even ones — which is why
+    /// the measured break-point table reads 1,3,3,5,5,7,7,9,9,11,11,13 here
+    /// against Python's 1,2,...,12.
+    #[test]
+    fn the_box_spans_one_more_row_than_an_even_window_asks() {
+        for window in 2u32..=12 {
+            let span = (2 * (window / 2) + 1) as usize;
+            let at_span =
+                LineSegmenter::new(10, window).smooth_histogram(&banded_profile(20, span, 9.0));
+            let min_in_gap = at_span[20..20 + span]
+                .iter()
+                .cloned()
+                .fold(f32::MAX, f32::min);
+            assert_eq!(
+                min_in_gap, 0.0,
+                "window {window} left no zero row across a gap of {span} rows \
+                 (min {min_in_gap}) — its span is no longer 2 * (window / 2) + 1"
+            );
+
+            let profile = banded_profile(20, span - 1, 9.0);
+            let under = LineSegmenter::new(10, window).smooth_histogram(&profile);
+            let min_under = under[20..20 + span - 1]
+                .iter()
+                .cloned()
+                .fold(f32::MAX, f32::min);
+            assert!(
+                min_under > 0.0,
+                "window {window} reached zero across a gap of only {} rows, so the \
+                 box is narrower than measured",
+                span - 1
+            );
+
+            if window % 2 == 0 {
+                let odd = LineSegmenter::new(10, window + 1).smooth_histogram(&profile);
+                assert_eq!(
+                    under,
+                    odd,
+                    "window {window} no longer matches window {} — the even-window \
+                     rounding changed",
+                    window + 1
+                );
+            }
+        }
+    }
+
+    /// Edge handling, and the formula difference against Python and Go.
+    ///
+    /// numpy's `mode='same'` zero-pads and divides by the window, so row 0 comes
+    /// back at `(window / 2 + 1) / window` of the true local mean — 200 not 300 at
+    /// window 3, 160 not 300 at window 15. Go does the same. This port divides by
+    /// the rows it actually visited and reports 300. Recorded, not reconciled:
+    /// see `smooth_histogram`'s docs.
+    #[test]
+    fn the_divisor_is_the_rows_visited_so_edge_rows_keep_their_true_mean() {
+        let flat = vec![300f32; 60];
+        for window in [3u32, 5, 15] {
+            let smoothed = LineSegmenter::new(10, window).smooth_histogram(&flat);
+            assert_eq!(
+                smoothed[0], 300.0,
+                "window {window} attenuated row 0 to {} — the divisor became the \
+                 window rather than the rows visited",
+                smoothed[0]
+            );
+            assert_eq!(
+                smoothed[59], 300.0,
+                "window {window} attenuated the last row"
+            );
+        }
+    }
+
+    /// Go's even-window defect, asserted absent here.
+    ///
+    /// Go sums `2 * (window / 2) + 1` terms and divides by the requested `window`,
+    /// so at an even window every interior row is inflated by
+    /// `(window + 1) / window` and the smoothed peak clears the raw one — 1.5x at
+    /// window 2, 1.25x at window 4. Dividing by what you summed cannot do that,
+    /// and this pins that it does not.
+    #[test]
+    fn smoothing_never_lifts_the_profile_above_its_raw_peak() {
+        let profile = banded_profile(30, 0, 300.0);
+        for window in 2u32..=12 {
+            let peak = LineSegmenter::new(10, window)
+                .smooth_histogram(&profile)
+                .iter()
+                .cloned()
+                .fold(f32::MIN, f32::max);
+            assert!(
+                peak <= 300.0,
+                "window {window} smoothed to a peak of {peak}, above the raw 300 — \
+                 the divisor is smaller than the row count"
+            );
+        }
     }
 }
