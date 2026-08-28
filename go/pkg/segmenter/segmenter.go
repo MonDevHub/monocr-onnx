@@ -129,6 +129,66 @@ func suppressPageRules(mask []uint8, width, height int) bool {
 	return true
 }
 
+// smoothProfile box-filters the row profile. Returns a fresh []float64 always, so
+// it never aliases the caller's []int raw profile.
+//
+// THREE MEASURED DIVERGENCES FROM THE PYTHON BINDING, none of them reconciled
+// here. The formula is published behaviour for anyone reading the profile, so
+// changing it changes output for this binding's users; that is an owner decision.
+//
+//  1. SPAN IS 2*(window/2)+1, NOT window. The loop is [-overflow, +overflow] with
+//     overflow = window/2, so an EVEN window spans window+1 rows -- one MORE than
+//     asked -- and behaves exactly as the odd window ABOVE it. Python convolves a
+//     true window-tap kernel. Measured on 29 drawn glyph-blob bands at MinLineH 10,
+//     driving the pre-fix form that read boundaries off this profile: the first gap
+//     that returned all 29 bands, for windows 1 to 12, was
+//     1,3,3,5,5,7,7,9,9,11,11,13. Python's was 1,2,...,12. So at SmoothWindow 4 a
+//     gap of exactly 4px still fused. JS and Rust measure the same table as this.
+//  2. THE DIVISOR IS THE REQUESTED WINDOW, NOT THE ROWS SUMMED. This is edge
+//     handling, and at ODD windows it matches numpy's mode='same' to the bit --
+//     zero-padded ends, divided by the window. Row 0 at window 3 therefore comes
+//     back at 2/3 of the true mean of the two rows in range, and at window 15 at
+//     8/15 of it. JS and Rust divide by the rows they visited and report the true
+//     local mean instead. Measured cost, now that this profile only sets the
+//     threshold LEVEL: on a page with a blank margin of at least window/2 rows the
+//     affected rows are zero either way and the thresholds agree to the bit; on a
+//     page cropped flush to the ink the threshold sat 0.21% below JS's at window 3
+//     (17.2096 against 17.2455) and 1.17% below at window 15, and no band count
+//     changed in any case measured.
+//  3. AT AN EVEN WINDOW THIS DIVIDES BY LESS THAN IT SUMMED, and that one is a
+//     defect rather than a difference. It sums window+1 terms and divides by
+//     window, so every interior row is inflated by exactly (window+1)/window and
+//     the smoothed peak CLEARS the raw peak: measured on an 8-band page, smoothed
+//     max 540 against raw 360 at window 2, 450 at window 4, 420 at 6, 405 at 8.
+//     The gap threshold is inflated by the same factor -- 25.71 against JS's and
+//     Rust's 17.14 at window 2, 20.45 against 16.36 at window 4 -- so at an even
+//     window this binding drops faint bands the other three keep. It does not move
+//     the break-point table, because the inflation is uniform and the threshold
+//     scales with it. The default SmoothWindow is 3, so nothing reaches this
+//     unless a caller passes an even window or sets the exported field to one.
+func smoothProfile(hist []int, window int) []float64 {
+	height := len(hist)
+	smoothed := make([]float64, height)
+	if window <= 1 {
+		for i, v := range hist {
+			smoothed[i] = float64(v)
+		}
+		return smoothed
+	}
+	overflow := window / 2
+	for i := 0; i < height; i++ {
+		sum := 0.0
+		for k := -overflow; k <= overflow; k++ {
+			idx := i + k
+			if idx >= 0 && idx < height {
+				sum += float64(hist[idx])
+			}
+		}
+		smoothed[i] = sum / float64(window)
+	}
+	return smoothed
+}
+
 func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	// Convert to Grayscale if needed (conceptually, we just need luminance)
 	bounds := img.Bounds()
@@ -173,33 +233,12 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	// `hist` stays alive past this point, because the two profiles have different
 	// jobs: the gap threshold below is calibrated on the smoothed one, the
 	// boundaries are detected on the raw one. No copy is needed for that in Go --
-	// `smoothedHist` is always a fresh []float64 and never aliases `hist`, which is
-	// []int. The Rust port needed a clone() here only because it moved its raw
-	// profile into the smoothed one.
-	smoothedHist := make([]float64, height)
-	if s.SmoothWindow > 1 {
-		window := float64(s.SmoothWindow)
-		overflow := s.SmoothWindow / 2
-		for i := 0; i < height; i++ {
-			sum := 0.0
-			count := 0.0
-			for k := -overflow; k <= overflow; k++ {
-				idx := i + k
-				if idx >= 0 && idx < height {
-					sum += float64(hist[idx])
-					count++
-				}
-			}
-			smoothedHist[i] = sum / window // Python code divides by window size (kernel is 1/window)
-			// Actually numpy convolution handling at edges: 'same' mode zero-pads?
-			// Python: np.convolve(hist, np.ones(window)/window, mode='same')
-			// Let's stick to a simple moving average.
-		}
-	} else {
-		for i, v := range hist {
-			smoothedHist[i] = float64(v)
-		}
-	}
+	// smoothProfile always returns a fresh []float64 and never aliases `hist`, which
+	// is []int. The Rust port needed a clone() here only because it moved its raw
+	// profile into the smoothed one. That function's header carries the three
+	// measured divergences from the Python binding: span, divisor and the
+	// even-window inflation.
+	smoothedHist := smoothProfile(hist, s.SmoothWindow)
 
 	// 3. Gap Detection
 	var nonZeroVals []float64
@@ -229,20 +268,24 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 		// Boundaries come off the RAW profile, not the smoothed one.
 		//
 		// The threshold above stays calibrated on the smoothed profile, because its
-		// non-zero mean is the steadier of the two. But the smoother averages over
-		// SmoothWindow rows, so a gap narrower than the whole window never reaches
-		// zero in the smoothed profile: the ink either side bleeds into it, the bled
-		// rows clear the threshold, and the two lines fuse. The raw profile needs one
-		// clean row.
+		// non-zero mean is the steadier of the two. But the smoother averages several
+		// rows together, so a gap narrower than its span never reaches zero in the
+		// smoothed profile: the ink either side bleeds into it, the bled rows clear
+		// the threshold, and the two lines fuse. The raw profile needs one clean row.
 		//
-		// MEASURED HERE, at this binding's own parameters (MinLineH 10, SmoothWindow
-		// 3, ratio 0.05 of the non-zero mean) on 29 drawn bands: reading the smoothed
-		// profile returned 1 band against 29 drawn at gaps of 1px and 2px, and matched
-		// the raw profile from 3px up. The break point is the smoother's full width,
-		// and SmoothWindow is both a NewLineSegmenter argument and an exported field,
-		// so a caller widens the failure with it -- at 15 the smoothed profile lost
-		// every page whose lines sat closer than 15px while the raw profile kept all
-		// 29.
+		// MEASURED HERE, at this binding's own parameters (MinLineH 10, ratio 0.05 of
+		// the non-zero mean) on 29 drawn bands, driving the pre-fix form that read
+		// boundaries off the smoothed profile. First gap that returned all 29 bands,
+		// by SmoothWindow 1 to 12:
+		//
+		//	1 3 3 5 5 7 7 9 9 11 11 13
+		//
+		// So the break point is smoothProfile's SPAN, 2*(SmoothWindow/2)+1, and not
+		// the requested window: at SmoothWindow 4 a gap of exactly 4px still fused.
+		// Python's table is 1,2,...,12 because its kernel is a true window-tap box.
+		// SmoothWindow is both a NewLineSegmenter argument and an exported field, so a
+		// caller widens the failure with it -- at 15 the smoothed profile lost every
+		// page whose lines sat closer than 15px while the raw profile kept all 29.
 		//
 		// These are this binding's numbers. Do not substitute the reference's: mon_OCR
 		// dilates the mask vertically before taking the profile and this one does not,
