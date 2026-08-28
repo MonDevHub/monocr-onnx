@@ -227,7 +227,7 @@ const MIN_GAP_MERGE: u32 = 10;
 ///
 /// A free function taking the profile rather than a method, so the arithmetic is
 /// testable without a page, a mask or a model.
-fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32) -> Vec<(u32, u32)> {
+fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32, min_line: u32) -> Vec<(u32, u32)> {
     if runs.is_empty() {
         return Vec::new();
     }
@@ -240,7 +240,28 @@ fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32) -> Vec<(u32, u32)
     // fragment. Measured 2026-08-28 on page 47 of a 56-page book: 36 bands
     // collapsed to 10, with single bands of 534, 632 and 732 rows holding a dozen
     // text lines each, and the page lost 92% of its readable characters.
-    let mut heights: Vec<u32> = runs.iter().map(|&(a, b)| b - a).collect();
+    // Median over runs that could BE a line, not over every run.
+    //
+    // The merge deliberately runs before the height filter, so `runs` still holds
+    // every speckle the profile picked up. Medianing over all of them lets noise
+    // decide what a typical line is, and on a heavily speckled scan the noise
+    // wins: measured on a sibling port, 30% of collected runs were under the
+    // minimum, and on 8 of 55 pages that drove `typical` below 10 — one page
+    // reached `typical` 2 and a ceiling of 4, against a real line height of 35. The
+    // ceiling then refuses every merge, so the pass switches itself off on exactly
+    // the pages that need it most.
+    //
+    // Falling back to the unfiltered median when nothing clears the minimum is
+    // safe rather than principled: on such a page the height filter discards
+    // everything anyway, so no crop depends on the value.
+    let mut heights: Vec<u32> = runs
+        .iter()
+        .map(|&(a, b)| b - a)
+        .filter(|&h| h >= min_line)
+        .collect();
+    if heights.is_empty() {
+        heights = runs.iter().map(|&(a, b)| b - a).collect();
+    }
     heights.sort_unstable();
     let typical = heights[heights.len() / 2].max(1);
 
@@ -268,7 +289,14 @@ fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32) -> Vec<(u32, u32)
             // produces: measured, runs `341-360` and `362-404` are the upper marks
             // and the body of one line separated by two empty rows. Two REAL lines
             // two rows apart are each a full line by this test, so they stay apart.
-            let fragment = 2 * (r1 - r0) <= typical || 2 * (last.1 - last.0) <= typical;
+            // A fragment attaches to a LINE, never to another fragment. Without the
+            // second half of this, a run of speckle merges with itself: measured on
+            // a 12-speck fixture, twelve 2-row specks fused into one 46-row band,
+            // which then CLEARS the height filter and is sent to the recogniser as
+            // a line. Two pieces that are both too short to be a line do not become
+            // one by being adjacent.
+            let (ha, hb) = (last.1 - last.0, r1 - r0);
+            let fragment = 2 * ha.min(hb) <= typical && ha.max(hb) >= min_line;
 
             if gap_size <= max_gap && (gap_has_ink || fragment) && r1 - last.0 <= ceiling {
                 last.1 = r1;
@@ -639,7 +667,7 @@ impl LineSegmenter {
         // filter. The order is the reference's and it matters: a diacritic strip
         // can be shorter than `min_line_height`, and filtering first would discard
         // the strip and leave the decapitated body behind as a whole line.
-        let runs = merge_runs(&runs, &hist, MIN_GAP_MERGE);
+        let runs = merge_runs(&runs, &hist, MIN_GAP_MERGE, self.min_line_height);
 
         for (r0, r1) in runs {
             if r1 - r0 >= self.min_line_height {
@@ -1438,6 +1466,58 @@ mod tests {
         );
     }
 
+    /// Speckle must not decide what a typical line is.
+    ///
+    /// The merge runs before the height filter, so `runs` holds every speck the
+    /// profile picked up. Twelve 2-row specks against five 50-row lines: a median
+    /// over ALL runs is 2 and the ceiling 4, which refuses every merge and switches
+    /// the pass off on the pages that need it most. Filtering to runs that could be
+    /// a line gives 50 and a ceiling of 100.
+    #[test]
+    fn speckle_does_not_set_the_typical_line_height() {
+        let mut hist = vec![0f32; 700];
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        // Specks first, so they dominate the count.
+        for i in 0..12u32 {
+            let y = i * 4;
+            hist[y as usize..(y + 2) as usize].fill(20.0);
+            runs.push((y, y + 2));
+        }
+        // Then a split line whose halves ARE halves: 24 rows, a 2-row inked dip, 24
+        // rows, summing to the 50 an ordinary line measures here. An earlier version
+        // of this fixture used 50 + 50, which is two whole lines by its own page's
+        // standard, and the ceiling refused the merge for the right reason.
+        hist[100..124].fill(300.0);
+        hist[124..126].fill(5.0);
+        hist[126..150].fill(300.0);
+        runs.push((100, 124));
+        runs.push((126, 150));
+        // And three ordinary lines, so a real median exists.
+        for i in 0..3u32 {
+            let y = 200 + i * 60;
+            hist[y as usize..(y + 50) as usize].fill(300.0);
+            runs.push((y, y + 50));
+        }
+
+        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE, 10);
+        assert!(
+            merged.contains(&(100, 150)),
+            "the split pair did not merge, so speckle set the ceiling: got {merged:?}"
+        );
+        // And the specks must not have fused into something the height filter will
+        // pass. Twelve 2-row specks chaining into one 46-row band is a line the
+        // recogniser is handed and asked to read.
+        let speckle_band = merged
+            .iter()
+            .filter(|&&(a, b)| a < 100 && b - a >= 10)
+            .count();
+        assert_eq!(
+            speckle_band, 0,
+            "speckle fused into {speckle_band} band(s) tall enough to clear the \
+             height filter: got {merged:?}"
+        );
+    }
+
     /// The ceiling, isolated: every other clause says merge and only the height
     /// cap refuses.
     ///
@@ -1459,7 +1539,7 @@ mod tests {
             (300u32, 360u32),
         ];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(20, 80), (82, 142), (200, 260), (300, 360)],
             "a merge produced a band taller than twice a typical line"
         );
@@ -1496,7 +1576,7 @@ mod tests {
             runs.push((y, y + h));
             y += h + 2;
         }
-        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE);
+        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE, 10);
         let tallest = merged.iter().map(|&(a, b)| b - a).max().unwrap();
         assert!(
             tallest <= 100,
@@ -1591,7 +1671,7 @@ mod tests {
             (260u32, 320u32),
         ];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(20, 102), (150, 210), (260, 320)],
             "an ink-holding 2-row dip between two halves of a typical line did \
              not merge"
@@ -1609,7 +1689,7 @@ mod tests {
         hist[280] = 6.0; // above zero, below the gap threshold
         let runs = [(260u32, 280u32), (281u32, 325u32)];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(260, 325)],
             "a 1-row dip holding ink split one line in two"
         );
@@ -1625,7 +1705,7 @@ mod tests {
         hist[362..404].fill(300.0);
         let runs = [(341u32, 360u32), (362u32, 404u32)];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(341, 404)],
             "a 19-row fragment two empty rows from a 42-row line stayed separate"
         );
@@ -1655,7 +1735,7 @@ mod tests {
             (280u32, 340u32),
         ];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(20, 60), (62, 102), (180, 240), (280, 340)],
             "two 40-row lines were fused, which is what SMEAR_Y would have done"
         );
@@ -1688,7 +1768,7 @@ mod tests {
             (280u32, 340u32),
         ];
         assert_eq!(
-            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
             vec![(20, 60), (75, 115), (180, 240), (280, 340)],
             "a 15-row gap merged, so the size bound is not being applied"
         );
