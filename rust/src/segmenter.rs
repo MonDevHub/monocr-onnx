@@ -393,9 +393,11 @@ impl LineSegmenter {
     ///    fuse the whole page into one band (`suppress_page_rules`)
     /// 3. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
     /// 4. **Smoothing**: Apply moving average filter if smooth_window > 1
-    /// 5. **Gap Detection**: Find gaps where projection is below
-    ///    `density_threshold_ratio` of the mean non-empty row density
-    ///    (default 5%)
+    /// 5. **Gap Detection**: Find gaps where the RAW projection is below
+    ///    `density_threshold_ratio` of the SMOOTHED profile's mean non-empty row
+    ///    density (default 5%). The two profiles are deliberately different: the
+    ///    smoothed mean is the steadier calibration, and the raw profile is the
+    ///    only one that still reaches zero between tightly set lines
     /// 6. **Line Extraction**: Extract each region between gaps as a separate line
     /// 7. **Padding**: Add 4-pixel padding around each line for edge character capture
     ///
@@ -468,10 +470,14 @@ impl LineSegmenter {
         }
 
         // 2. Smooth projection profile
+        //
+        // `hist` is kept alive because the two profiles have different jobs: the
+        // threshold below is calibrated on the smoothed one, the boundaries are
+        // detected on the raw one. See step 4 for why.
         let smoothed_hist = if self.smooth_window > 1 {
             self.smooth_histogram(&hist)
         } else {
-            hist
+            hist.clone()
         };
 
         // 3. Gap detection
@@ -497,7 +503,29 @@ impl LineSegmenter {
         let mut start: Option<u32> = None;
 
         for y in 0..height {
-            let is_text = smoothed_hist[y as usize] > gap_threshold;
+            // Boundaries come off the RAW profile, not the smoothed one.
+            //
+            // The threshold above stays calibrated on the smoothed profile,
+            // because its non-zero mean is steadier. But the smoother averages
+            // over `smooth_window` rows, so a gap narrower than the whole
+            // window never reaches zero in the smoothed profile: the ink either
+            // side bleeds into it, the bled rows clear the threshold, and the
+            // two lines fuse. The raw profile needs one clean row.
+            //
+            // Measured HERE, at this port's own parameters (min_line_height 10,
+            // smooth_window 3, density_threshold_ratio 0.05) on 29 drawn bands:
+            // reading the smoothed profile returned 1 band at gaps of 1px and
+            // 2px, against 29 lines drawn, and matched the raw profile from 3px
+            // up. The break point is the smoother's full width, so a caller who
+            // raises `smooth_window` widens the failure with it — at 15 the
+            // smoothed profile lost every page whose lines sat closer than 15px
+            // while the raw profile kept all 29.
+            //
+            // Rust's break point is far tighter than the monorepo apps', which
+            // fused at 5px to 8px, because those ports dilate the mask
+            // vertically before the profile and this one does not. Their
+            // measurements do not transfer; these are this port's.
+            let is_text = hist[y as usize] > gap_threshold;
 
             if is_text && start.is_none() {
                 start = Some(y);
@@ -1206,5 +1234,129 @@ mod tests {
             );
             assert_eq!(got, u32_field(&probe, "expected_cut"), "probe '{name}'");
         }
+    }
+
+    /// A page of `bands` dense bands plus one faint band carrying exactly
+    /// `faint_ink` ink pixels per row, used to probe the threshold LEVEL rather
+    /// than the profile the boundaries come from.
+    fn page_with_a_faint_band(
+        bands: u32,
+        gap: u32,
+        glyphs: u32,
+        faint_ink: u32,
+        faint_h: u32,
+    ) -> GrayImage {
+        let height = T_MARGIN * 2 + T_BAND * bands + gap * bands + faint_h;
+        let mut img = GrayImage::from_pixel(T_WIDTH, height, Luma([255u8]));
+        let mut y = T_MARGIN;
+        for _ in 0..bands {
+            for yy in y..y + T_BAND {
+                for k in 0..glyphs {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..T_GLYPH_W {
+                        if x0 + i < T_WIDTH {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+            y += T_BAND + gap;
+        }
+        for yy in y..y + faint_h {
+            for i in 0..faint_ink {
+                img.put_pixel(100 + i, yy, Luma([0u8]));
+            }
+        }
+        img
+    }
+
+    /// THE CASE THE DUAL HISTOGRAM EXISTS FOR, measured at this port's own
+    /// parameters rather than borrowed from another port.
+    ///
+    /// With the default `smooth_window` of 3 the smoother averages three rows,
+    /// so a gap of 1px or 2px never reaches zero in the smoothed profile — the
+    /// ink either side bleeds into it and clears the threshold. Reading
+    /// boundaries there returned 1 band against 29 drawn. 3px is the first gap
+    /// the smoothed profile survives, which is why it is the control here and
+    /// not the interesting case.
+    #[test]
+    fn lines_two_pixels_apart_are_not_fused() {
+        let seg = LineSegmenter::new(10, 3);
+        for gap in [1u32, 2] {
+            let got = seg.segment_image(&drawn_page(29, gap, 30, false)).unwrap();
+            assert_eq!(
+                got.len(),
+                29,
+                "29 bands {gap}px apart came back as {} — boundaries are being \
+                 read off the smoothed profile again",
+                got.len()
+            );
+        }
+        let control = seg.segment_image(&drawn_page(29, 3, 30, false)).unwrap();
+        assert_eq!(
+            control.len(),
+            29,
+            "the 3px control failed, so the regression is not the profile choice"
+        );
+    }
+
+    /// The opposite failure, and the reason this needs its own test: the raw
+    /// profile is the more sensitive of the two, so the risk of reading it is
+    /// splitting where no gap exists. Bands that touch share ink on every row,
+    /// there is no clean row anywhere, and one band is the honest answer.
+    #[test]
+    fn touching_bands_stay_one_line() {
+        let seg = LineSegmenter::new(10, 3);
+        let got = seg.segment_image(&drawn_page(29, 0, 30, false)).unwrap();
+        assert_eq!(got.len(), 1, "touching bands were split into {}", got.len());
+    }
+
+    /// `smooth_window` is a constructor argument, and on the smoothed profile
+    /// raising it widened the damage: the break point is the smoother's full
+    /// width, so at 15 every page whose lines sat closer than 15px collapsed to
+    /// one band. Measured at 5px and 12px, both of which the old form lost.
+    #[test]
+    fn a_wide_smoother_does_not_fuse_the_page() {
+        let seg = LineSegmenter::new(10, 15);
+        for gap in [5u32, 12] {
+            let got = seg.segment_image(&drawn_page(29, gap, 30, false)).unwrap();
+            assert_eq!(
+                got.len(),
+                29,
+                "at smooth_window 15, 29 bands {gap}px apart came back as {}",
+                got.len()
+            );
+        }
+    }
+
+    /// The other half of the dual histogram: the LEVEL still comes off the
+    /// smoothed profile.
+    ///
+    /// Calibrating on the raw profile instead raises the threshold, because
+    /// smoothing spreads ink into the rows either side of every band and those
+    /// partial rows pull the non-zero mean down. A band faint enough to sit
+    /// between the two thresholds is then dropped, and dropping a line is the
+    /// failure this pipeline is built to avoid.
+    ///
+    /// The fixture is tuned, and the tuning is the finding: at the default ratio
+    /// of 0.05 the two thresholds sit 0.86px apart on this page, and no whole
+    /// number of ink pixels lands between them, so no test at the default can
+    /// tell the two calibrations apart. At 0.5 — the ratio the reference
+    /// recommends for wide-spaced layouts, and a constructor argument rather
+    /// than a default — they are 165.6 (smoothed) and 174.4 (raw). Measured: a
+    /// faint band of 166 to 174 ink pixels per row is found by the smoothed
+    /// calibration and missed by the raw one. 170 is the middle of that window.
+    #[test]
+    fn the_gap_threshold_is_calibrated_on_the_smoothed_profile() {
+        let seg = LineSegmenter::with_density_ratio(10, 3, 0.5);
+        let img = page_with_a_faint_band(8, 12, 30, 170, 20);
+        let got = seg.segment_image(&img).unwrap();
+        assert_eq!(
+            got.len(),
+            9,
+            "expected 8 dense bands plus the faint one, got {} — the threshold \
+             is being calibrated on the raw profile",
+            got.len()
+        );
     }
 }
