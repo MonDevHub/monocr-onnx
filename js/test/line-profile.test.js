@@ -407,7 +407,7 @@ test('a fragment is judged against the page median, not against its neighbour', 
     //
     // Judging against the neighbour cascades, because each merge makes the accumulated
     // run taller and the next line then looks more like a fragment. Measured on this
-    // binding's 56-page corpus, that form costs 28 bands and 3.4 points more sub-0.6x
+    // binding's 56-page corpus, that form costs 28 bands and 2.2 points more sub-0.6x
     // fragments (1921 bands, 17.4%) than this one (1893, 15.2%).
     const runs = [[10, 50], [100, 142], [144, 165], [200, 240], [260, 300]];
     const hist = profile(400, runs);
