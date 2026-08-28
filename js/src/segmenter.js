@@ -8,11 +8,12 @@
 // later. js/test/ now holds eight files, and test/page-rules.test.js requires this
 // module directly.
 //
-// What is tested as of 2026-08-27: printed-rule suppression, in both directions and
-// at the exact-length bound on each axis, including a behavioural case driving
-// segment() end to end. What is still NOT tested: the projection profile itself,
-// the gap threshold, the histogram smoothing and the padding — the parts that
-// decide where a line begins.
+// What is tested as of 2026-08-28: printed-rule suppression, in both directions and
+// at the exact-length bound on each axis, including two behavioural cases driving
+// segment() end to end — one on the band count, one on the crop COLUMN extents,
+// which pins the horizontal padding with it. What is still NOT tested: the
+// projection profile itself, the gap threshold, the histogram smoothing and the
+// vertical padding — the parts that decide where a line begins.
 //
 // They diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
 // are recorded in that file's Canonical Algorithm Spec header — most of all the
@@ -175,20 +176,39 @@ class LineSegmenter {
             } else if (!isText && start !== null) {
                 const end = y;
                 if (end - start >= this.minLineH) {
-                    await this._extractLine(image, grayBuffer, width, height, start, end, results);
+                    await this._extractLine(image, binary, width, height, start, end, results);
                 }
                 start = null;
             }
         }
 
         if (start !== null && (height - start) >= this.minLineH) {
-            await this._extractLine(image, grayBuffer, width, height, start, height, results);
+            await this._extractLine(image, binary, width, height, start, height, results);
         }
 
         return results;
     }
 
-    async _extractLine(image, grayBuffer, width, height, rStart, rEnd, results) {
+    // The column extents are read from the SUPPRESSED mask, not from the raw
+    // grayscale buffer.
+    //
+    // Reading `grayBuffer[...] < 128` here threw away half of what the suppression
+    // pass buys. The frame was deleted from the row profile and then reinstated in
+    // every crop's x-range: xMin landed on the left rule and xMax on the right one,
+    // so each crop spanned the full framed area — the same over-wide crop that
+    // squeezes a line into the model window, only now per line instead of per page.
+    //
+    // The reference states the intent at mon_OCR src/monocr/segmenter.py:392 —
+    // suppression runs before the smear because "the crop's column extents come from
+    // `dilated`, so removing rules first also keeps the border out of the crops" —
+    // and its _extract_line sums `dilated` at line 648.
+    // python/monocr_onnx/segmenter.py:140 already sums `binary` for the same reason;
+    // this binding was the odd one out.
+    //
+    // On a page with NO rules this is a byte-for-byte no-op: suppressPageRules leaves
+    // the mask untouched, and the mask is that identical `< 128` test over the same
+    // buffer. Pinned by the tests in test/page-rules.test.js.
+    async _extractLine(image, binary, width, height, rStart, rEnd, results) {
         // Find horizontal bounds within this vertical strip
         let xMin = width;
         let xMax = 0;
@@ -196,7 +216,7 @@ class LineSegmenter {
 
         for (let y = rStart; y < rEnd; y++) {
             for (let x = 0; x < width; x++) {
-                if (grayBuffer[y * width + x] < 128) {
+                if (binary[y * width + x]) {
                     if (x < xMin) xMin = x;
                     if (x > xMax) xMax = x;
                     hasPixels = true;

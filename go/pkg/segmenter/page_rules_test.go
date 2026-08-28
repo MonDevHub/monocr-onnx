@@ -15,6 +15,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"testing"
 )
 
@@ -277,4 +278,91 @@ func decodeAndSegment(s *LineSegmenter, data []byte) ([]SegmentResult, error) {
 		return nil, err
 	}
 	return s.Segment(img)
+}
+
+// ── Crop column extents ───────────────────────────────────────────────────────
+//
+// Suppression buys two things, and this binding used to collect only one. The row
+// profile was read from the suppressed mask, but each crop's x-range was recomputed
+// by re-thresholding img.At(), so the frame was deleted from the profile and then
+// reinstated in every crop. See the comment on extractLine, and mon_OCR
+// src/monocr/segmenter.py:392 for the reference's statement of the intent.
+
+// TestFrameDoesNotWidenTheCrops requires the framed page and the same page unframed
+// to produce IDENTICAL x-extents. Exact, not approximate: every frame pixel belongs
+// to a full-width row run or a full-height column run, so suppression leaves the
+// framed mask byte-identical to the clean one and the crops have nothing to differ
+// over.
+func TestFrameDoesNotWidenTheCrops(t *testing.T) {
+	seg := NewLineSegmenter(10, 3)
+
+	cleanMask, ch := maskOf(4, 40, 8, false)
+	framedMask, fh := maskOf(4, 40, 8, true)
+
+	clean, err := decodeAndSegment(seg, pngOf(cleanMask, ch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	framed, err := decodeAndSegment(seg, pngOf(framedMask, fh))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clean) != 4 {
+		t.Fatalf("the unframed control segmented into %d lines, expected 4", len(clean))
+	}
+	if len(framed) != len(clean) {
+		t.Fatalf("framed page gave %d lines, the same page unframed gave %d", len(framed), len(clean))
+	}
+
+	for i := range clean {
+		if framed[i].BBox.Min.X != clean[i].BBox.Min.X || framed[i].BBox.Max.X != clean[i].BBox.Max.X {
+			t.Errorf("line %d x-extent moved: framed [%d,%d), clean [%d,%d)",
+				i, framed[i].BBox.Min.X, framed[i].BBox.Max.X,
+				clean[i].BBox.Min.X, clean[i].BBox.Max.X)
+		}
+	}
+
+	// And name the failure rather than only reporting "not equal": before the fix
+	// xMin landed on the left rule and xMax on the right one, so a crop 165px wide
+	// came back spanning the whole framed area.
+	for i, r := range framed {
+		if r.BBox.Min.X <= 10+truleW {
+			t.Errorf("line %d starts at x=%d, inside the left rule at x=10..%d",
+				i, r.BBox.Min.X, 10+truleW-1)
+		}
+		if r.BBox.Max.X >= tw-10-truleW {
+			t.Errorf("line %d ends at x=%d, inside the right rule", i, r.BBox.Max.X)
+		}
+	}
+}
+
+// TestRuleFreeCropExtentsAreUnchanged pins the no-op claim with numbers rather than
+// asserting it in prose. On a page with no rules suppressPageRules returns the mask
+// untouched, and the mask is the same `< 128` test over the same pixels the old
+// img.At() scan read — so these are the values that scan produced too.
+//
+// Glyphs run x=100 .. 100+7*tpitch+tglyphW-1 = 251. The band measures tband+2 rows,
+// not tband: smoothing over a 3-wide window pulls the profile above the 0.05 gap
+// threshold one row either side of the ink. padX = ceil(42*0.15) = 7.
+func TestRuleFreeCropExtentsAreUnchanged(t *testing.T) {
+	seg := NewLineSegmenter(10, 3)
+	m, h := maskOf(4, 40, 8, false)
+	lines, err := decodeAndSegment(seg, pngOf(m, h))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 4 {
+		t.Fatalf("segmented into %d lines, expected 4", len(lines))
+	}
+
+	x0, x1 := 100, 100+7*tpitch+tglyphW-1
+	padX := int(math.Ceil(float64(tband+2) * 0.15))
+	for i, r := range lines {
+		if r.BBox.Min.X != x0-padX {
+			t.Errorf("line %d starts at x=%d, expected %d", i, r.BBox.Min.X, x0-padX)
+		}
+		if r.BBox.Max.X != x1+padX {
+			t.Errorf("line %d ends at x=%d, expected %d", i, r.BBox.Max.X, x1+padX)
+		}
+	}
 }

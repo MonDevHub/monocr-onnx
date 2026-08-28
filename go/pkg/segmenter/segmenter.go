@@ -227,35 +227,49 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 		} else if !isText && start != nil {
 			end := y
 			if (end - *start) >= s.MinLineH {
-				s.extractLine(img, bounds, *start, end, &results)
+				s.extractLine(img, bounds, mask, *start, end, &results)
 			}
 			start = nil
 		}
 	}
 
 	if start != nil && (height-*start) >= s.MinLineH {
-		s.extractLine(img, bounds, *start, height, &results)
+		s.extractLine(img, bounds, mask, *start, height, &results)
 	}
 
 	return results, nil
 }
 
-func (s *LineSegmenter) extractLine(img image.Image, bounds image.Rectangle, rStart, rEnd int, results *[]SegmentResult) {
-	// Find horizontal bounds within strip
-	// strip corresponds to y inside [bounds.Min.Y + rStart, bounds.Min.Y + rEnd)
-	// We need to sum columns to find x range.
-
+// extractLine crops one detected band. The column extents come from the SUPPRESSED
+// mask, not from a fresh read of the image.
+//
+// Re-thresholding img.At() here threw away half of what the suppression pass buys.
+// The frame was deleted from the row profile and then reinstated in every crop's
+// x-range: xMin landed on the left rule and xMax on the right one, so each crop
+// spanned the full framed area — the same over-wide crop that squeezes a line into
+// the model window, only now once per line instead of once per page.
+//
+// The reference states the intent at mon_OCR src/monocr/segmenter.py:392 —
+// suppression runs before the smear because "the crop's column extents come from
+// `dilated`, so removing rules first also keeps the border out of the crops" — and
+// its _extract_line sums `dilated` at line 648. python/monocr_onnx/segmenter.py:140
+// already sums `binary` for the same reason; this binding was the odd one out.
+//
+// On a page with NO rules this is a byte-for-byte no-op: suppressPageRules leaves the
+// mask untouched, and the mask is that identical `< 128` test over the same pixels.
+// It also drops width*height GrayModel conversions per band, which At() made the
+// expensive part of this function. Pinned by page_rules_test.go.
+func (s *LineSegmenter) extractLine(img image.Image, bounds image.Rectangle, mask []uint8, rStart, rEnd int, results *[]SegmentResult) {
+	// Find horizontal bounds within strip. mask is row-major over bounds, so mask
+	// index y*width+x is the pixel at (bounds.Min.X+x, bounds.Min.Y+y).
 	width := bounds.Dx()
 	colSum := make([]int, width)
 
 	// Optimize: Only loop through the strip rows
 	for y := rStart; y < rEnd; y++ {
-		actualY := bounds.Min.Y + y
+		row := y * width
 		for x := 0; x < width; x++ {
-			actualX := bounds.Min.X + x
-			c := img.At(actualX, actualY)
-			gray := color.GrayModel.Convert(c).(color.Gray)
-			if gray.Y < 128 {
+			if mask[row+x] != 0 {
 				colSum[x]++
 			}
 		}

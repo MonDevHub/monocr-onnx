@@ -202,3 +202,61 @@ test('segment wires in the suppression', () => {
     // points at the wiring rather than at the segmentation result.
     assert.ok(LineSegmenter.prototype.segment.toString().includes('suppressPageRules'));
 });
+
+// ── Crop column extents ───────────────────────────────────────────────────────
+//
+// Suppression buys two things, and this binding used to collect only one. The row
+// profile was read from the suppressed mask, but each crop's x-range was recomputed
+// from the RAW grayscale, so the frame was deleted from the profile and then
+// reinstated in every crop. See the comment on _extractLine, and mon_OCR
+// src/monocr/segmenter.py:392 for the reference's statement of the intent.
+
+test('a frame does not widen the crops', async () => {
+    // The framed page and the same page unframed must produce IDENTICAL x-extents.
+    // Exact, not approximate: every frame pixel belongs to a full-width row run or a
+    // full-height column run, so suppression leaves the framed mask byte-identical to
+    // the clean one and there is nothing left for the crops to differ over.
+    const seg = new LineSegmenter();
+
+    const clean = await seg.segment(await pagePng(4, 40, 8, false));
+    const framed = await seg.segment(await pagePng(4, 40, 8, true));
+
+    assert.strictEqual(clean.length, 4, 'the unframed control must segment into 4 lines');
+    assert.strictEqual(framed.length, clean.length, 'framed page must segment like the clean one');
+
+    for (let i = 0; i < clean.length; i++) {
+        assert.strictEqual(framed[i].bbox.x, clean[i].bbox.x, `line ${i} x moved`);
+        assert.strictEqual(framed[i].bbox.w, clean[i].bbox.w, `line ${i} width moved`);
+    }
+
+    // And say the failure out loud rather than only as "not equal": before the fix
+    // xMin landed on the left rule and xMax on the right one, so a crop 163px wide
+    // came back 791px wide, spanning the whole framed area.
+    for (const { bbox } of framed) {
+        assert.ok(bbox.x > 10 + RULE_W,
+            `crop starts at ${bbox.x}, inside the left rule at x=10..${10 + RULE_W - 1}`);
+        assert.ok(bbox.x + bbox.w < WIDTH - 10 - RULE_W,
+            `crop ends at ${bbox.x + bbox.w}, inside the right rule`);
+    }
+});
+
+test('the crop extents of a rule-free page are unchanged by the fix', async () => {
+    // The no-op claim, pinned with numbers rather than asserted in prose. On a page
+    // with no rules suppressPageRules returns the mask untouched, and the mask is the
+    // same `< 128` test over the same buffer the old code read — so these are the
+    // values the raw-grayscale scan produced too.
+    //
+    // Glyphs run x=100 .. 100+7*PITCH+GLYPH_W-1 = 251. The band measures BAND+2
+    // rows, not BAND: smoothing over a 3-wide window pulls the profile above the
+    // 0.05 gap threshold one row either side of the ink. padX = ceil(42*0.15) = 7.
+    const seg = new LineSegmenter();
+    const lines = await seg.segment(await pagePng(4, 40, 8, false));
+
+    const x0 = 100, x1 = 100 + 7 * PITCH + GLYPH_W - 1;
+    const padX = Math.ceil((BAND + 2) * 0.15);
+    assert.strictEqual(lines.length, 4);
+    for (const { bbox } of lines) {
+        assert.strictEqual(bbox.x, x0 - padX);
+        assert.strictEqual(bbox.x + bbox.w, x1 + padX);
+    }
+});
