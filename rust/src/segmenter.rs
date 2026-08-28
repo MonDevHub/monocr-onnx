@@ -193,6 +193,93 @@ const RULE_MIN_SPAN_PX: usize = 15;
 /// legitimate case and 1.23x below the true positive.
 const RULE_MAX_INK_SHARE: f64 = 0.80;
 
+/// Two runs separated by at most this many rows are one text line, provided the
+/// raw profile never reaches zero inside the gap.
+///
+/// WHY THIS EXISTS, measured 2026-08-28 on a 300 DPI render of a real Mon page.
+/// Detecting boundaries on the raw profile splits a single line wherever one row
+/// dips below the gap threshold, and in Mon that happens between the upper
+/// diacritic zone and the consonant bodies. On the measured page the line spanned
+/// rows 260-324, the threshold was `0.05 * 139.9 = 7.0`, and **row 280 carried 6
+/// ink pixels** — one pixel under, one row wide. That split every line on the page
+/// into a 28px strip of glyph tops, which decoded to `0069...` because a row of
+/// circle-tops IS digits, and a decapitated 52px body, which decoded missing its
+/// asats because the asat went with the strip.
+///
+/// A 1-row gap holding ink is not a line boundary at any resolution. This is the
+/// reference's rule (`mon_OCR` `_MIN_GAP_MERGE`, `segmenter.py` step 8), ported
+/// with its value, and it is the half of the dual histogram the ports left behind:
+/// raw detection needs a merge to be safe, and every port took the first without
+/// the second.
+///
+/// The two clauses do different jobs. The size bound refuses to merge real
+/// inter-line spacing even when overlapping diacritics hold the raw profile above
+/// zero across it — upstream that unmerged case collapsed 3 PDF lines into 1. The
+/// zero test refuses to merge across a genuine clean break, which always has at
+/// least one empty row.
+const MIN_GAP_MERGE: u32 = 10;
+
+/// Fuse runs that a single sub-threshold row split apart.
+///
+/// Merges `runs[i]` into `runs[i-1]` when the gap between them is at most
+/// `max_gap` rows AND every row in the gap carries ink. See [`MIN_GAP_MERGE`] for
+/// why, and for the measurement.
+///
+/// A free function taking the profile rather than a method, so the arithmetic is
+/// testable without a page, a mask or a model.
+fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32) -> Vec<(u32, u32)> {
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    // The page's own typical line height, from the runs as detected. Both tests
+    // below are relative to this rather than to the neighbouring run, and that is
+    // a correction rather than a preference: judging a fragment against its
+    // neighbour CASCADES. The merge mutates the accumulated run, so every merge
+    // makes it taller, and a taller run makes the next line look more like a
+    // fragment. Measured 2026-08-28 on page 47 of a 56-page book: 36 bands
+    // collapsed to 10, with single bands of 534, 632 and 732 rows holding a dozen
+    // text lines each, and the page lost 92% of its readable characters.
+    let mut heights: Vec<u32> = runs.iter().map(|&(a, b)| b - a).collect();
+    heights.sort_unstable();
+    let typical = heights[heights.len() / 2].max(1);
+
+    // No merge may produce a band more than twice a typical line. This is the
+    // backstop for the cascade above: the fragment test alone cannot bound the
+    // result, and one runaway band costs a whole page. Twice rather than tighter
+    // because a legitimate merge of two halves lands at about one typical line and
+    // must not be refused; the value is the loosest one that still stopped page
+    // 47, checked by re-measuring all 56 pages rather than by argument.
+    let ceiling = typical * 2;
+
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(runs.len());
+    for &(r0, r1) in runs {
+        if let Some(last) = merged.last_mut() {
+            let gap_start = last.1;
+            let gap_size = r0.saturating_sub(gap_start);
+            // An empty gap cannot occur from the run collector, but a caller can
+            // hand us touching runs; treat those as already one line.
+            let gap_has_ink =
+                (gap_start..r0).all(|y| hist.get(y as usize).is_some_and(|&v| v > 0.0));
+
+            // A run at most half a typical line is a fragment of a line, not a
+            // line. This is the clause that crosses a gap of genuinely ZERO ink,
+            // which `gap_has_ink` refuses and which a floating Mon diacritic
+            // produces: measured, runs `341-360` and `362-404` are the upper marks
+            // and the body of one line separated by two empty rows. Two REAL lines
+            // two rows apart are each a full line by this test, so they stay apart.
+            let fragment = 2 * (r1 - r0) <= typical || 2 * (last.1 - last.0) <= typical;
+
+            if gap_size <= max_gap && (gap_has_ink || fragment) && r1 - last.0 <= ceiling {
+                last.1 = r1;
+                continue;
+            }
+        }
+        merged.push((r0, r1));
+    }
+    merged
+}
+
 /// Zero out printed rules in `mask` (1 = ink), in place, and report whether
 /// anything was removed.
 ///
@@ -500,6 +587,7 @@ impl LineSegmenter {
             binary: &binary,
         };
         let mut results = Vec::new();
+        let mut runs: Vec<(u32, u32)> = Vec::new();
         let mut start: Option<u32> = None;
 
         for y in 0..height {
@@ -537,21 +625,25 @@ impl LineSegmenter {
             if is_text && start.is_none() {
                 start = Some(y);
             } else if !is_text && start.is_some() {
-                let end = y;
-                let line_height = end - start.unwrap();
-
-                if line_height >= self.min_line_height {
-                    self.extract_line(&page, start.unwrap()..end, &mut results)?;
-                }
+                runs.push((start.unwrap(), y));
                 start = None;
             }
         }
 
         // Handle last line if image ends with text
         if let Some(s) = start {
-            let line_height = height - s;
-            if line_height >= self.min_line_height {
-                self.extract_line(&page, s..height, &mut results)?;
+            runs.push((s, height));
+        }
+
+        // 4.5 Fuse runs a single sub-threshold row split apart, BEFORE the height
+        // filter. The order is the reference's and it matters: a diacritic strip
+        // can be shorter than `min_line_height`, and filtering first would discard
+        // the strip and leave the decapitated body behind as a whole line.
+        let runs = merge_runs(&runs, &hist, MIN_GAP_MERGE);
+
+        for (r0, r1) in runs {
+            if r1 - r0 >= self.min_line_height {
+                self.extract_line(&page, r0..r1, &mut results)?;
             }
         }
 
@@ -1343,6 +1435,149 @@ mod tests {
             control.len(),
             29,
             "the 3px control failed, so the regression is not the profile choice"
+        );
+    }
+
+    /// The merge must be reached THROUGH `segment_image`, not only unit-tested.
+    ///
+    /// Added after a mutation that deleted the `merge_runs` call from the pipeline
+    /// SURVIVED all four unit tests below — they call the helper directly, so the
+    /// call site was unguarded. That is the gap `se-brain`
+    /// `rules/standards/testing.md` names: a tested helper does not make its call
+    /// site safe.
+    ///
+    /// Geometry is the measured one: a 20-row strip of upper marks, two empty
+    /// rows, then a 44-row body. One line, and it must come back as one band.
+    #[test]
+    fn a_diacritic_strip_is_returned_joined_to_its_line() {
+        let (w, h) = (T_WIDTH, 200u32);
+        let mut img = GrayImage::from_pixel(w, h, Luma([255u8]));
+        let ink = |img: &mut GrayImage, y0: u32, y1: u32, every: u32| {
+            for yy in y0..y1 {
+                for k in 0..30u32 {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..every {
+                        if x0 + i < w {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+        };
+        // Sparse marks above, solid body below, two blank rows between.
+        ink(&mut img, 60, 80, 2);
+        ink(&mut img, 82, 126, T_GLYPH_W);
+
+        let got = LineSegmenter::new(10, 3).segment_image(&img).unwrap();
+        assert_eq!(
+            got.len(),
+            1,
+            "the strip and its body came back as {} bands — the merge is not \
+             reached from segment_image",
+            got.len()
+        );
+        assert!(
+            got[0].bbox.h >= 60,
+            "the returned band is {}px tall, so it holds the body without the \
+             marks above it",
+            got[0].bbox.h
+        );
+    }
+
+    /// The ink clause on its own, which the four cases below do not isolate: in
+    /// the measured dip case the fragment clause ALSO fires, so dropping
+    /// `gap_has_ink` survived. Here the runs are the same height, so `fragment`
+    /// is false and only the ink test can merge them.
+    #[test]
+    fn a_dip_between_equal_halves_merges_on_ink_alone() {
+        // The fixture carries two ORDINARY lines as well as the split pair, and
+        // that is load-bearing rather than decoration. `merge_runs` judges a
+        // fragment against the page's typical line height, so a page consisting of
+        // nothing but two halves is degenerate — there is no evidence in it that
+        // they are halves rather than two short lines, and an earlier version of
+        // this test asserted a merge the code had no grounds to make.
+        let mut hist = vec![0f32; 400];
+        hist[20..60].fill(300.0);
+        hist[60..62].fill(5.0); // two rows of ink: below any threshold, above zero
+        hist[62..102].fill(300.0);
+        hist[150..232].fill(300.0);
+        hist[260..342].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (62u32, 102u32),
+            (150u32, 232u32),
+            (260u32, 342u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(20, 102), (150, 232), (260, 342)],
+            "an ink-holding 2-row dip between two halves of a typical line did \
+             not merge"
+        );
+    }
+
+    /// `merge_runs`, both clauses, on the numbers that were measured rather than
+    /// on invented ones. See `MIN_GAP_MERGE`.
+    #[test]
+    fn a_sub_threshold_dip_does_not_end_a_line() {
+        // The measured case: one line, rows 260-324, split by row 280 carrying 6
+        // ink pixels against a threshold of 7.0.
+        let mut hist = vec![0f32; 400];
+        hist[260..325].fill(200.0);
+        hist[280] = 6.0; // above zero, below the gap threshold
+        let runs = [(260u32, 280u32), (281u32, 325u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(260, 325)],
+            "a 1-row dip holding ink split one line in two"
+        );
+    }
+
+    #[test]
+    fn a_zero_gap_still_merges_a_fragment_into_its_line() {
+        // The other measured case: rows 341-360 are the upper marks and 362-404
+        // the body of one line, separated by TWO rows of genuinely zero ink. The
+        // ink clause cannot cross that; the height ratio is what does.
+        let mut hist = vec![0f32; 500];
+        hist[341..360].fill(40.0);
+        hist[362..404].fill(300.0);
+        let runs = [(341u32, 360u32), (362u32, 404u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(341, 404)],
+            "a 19-row fragment two empty rows from a 42-row line stayed separate"
+        );
+    }
+
+    #[test]
+    fn two_real_lines_two_rows_apart_stay_separate() {
+        // The case the fragment clause must NOT swallow, and the reason it is a
+        // ratio: same gap, same emptiness, but both runs are full height.
+        let mut hist = vec![0f32; 200];
+        hist[20..60].fill(300.0);
+        hist[62..102].fill(300.0);
+        let runs = [(20u32, 60u32), (62u32, 102u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(20, 60), (62, 102)],
+            "two 40-row lines were fused, which is what SMEAR_Y would have done"
+        );
+    }
+
+    #[test]
+    fn a_wide_gap_is_a_line_boundary_however_much_ink_it_holds() {
+        // The size bound on its own. Overlapping diacritics can hold the raw
+        // profile above zero right across real inter-line spacing; upstream that
+        // collapsed 3 PDF lines into 1.
+        let mut hist = vec![0f32; 200];
+        hist[20..60].fill(300.0);
+        hist[60..75].fill(5.0); // 15 rows of ink between two lines
+        hist[75..115].fill(300.0);
+        let runs = [(20u32, 60u32), (75u32, 115u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(20, 60), (75, 115)],
+            "a 15-row gap merged, so the size bound is not being applied"
         );
     }
 
