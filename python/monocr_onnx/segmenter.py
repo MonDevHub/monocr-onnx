@@ -59,6 +59,30 @@ def suppress_page_rules(binary):
     return cv2.subtract(binary, rules)
 
 
+def smooth_profile(raw_hist, window):
+    """Box-filter the row profile. Returns `raw_hist` itself for window <= 1.
+
+    A TRUE `window`-tap box, and the one binding of the four that is. numpy's
+    kernel has exactly `window` taps whatever the parity, and `mode='same'`
+    zero-pads the ends and divides by `window`, so a run of `window` zero rows
+    always drives at least one output row to zero.
+
+    MEASURED on 29 drawn glyph-blob bands (min_line_h 10, threshold_ratio 0.02),
+    driving the pre-fix form that read boundaries off this profile: the first gap
+    that returned all 29 bands was exactly `window`, at every window from 1 to 12
+    -- 1,2,3,4,...,12. The three sibling bindings loop [-window//2, +window//2]
+    instead, which is 2*(window//2)+1 taps, so their break points run
+    1,3,3,5,5,7,7,9,9,11,11,13 -- an even window there spans window+1 rows, one
+    MORE than asked, and behaves as the odd window ABOVE it. Their numbers are
+    not this one's; see js/src/segmenter.js and
+    go/pkg/segmenter/segmenter.go, which record their own.
+    """
+    if window <= 1:
+        return raw_hist
+    kernel = np.ones(window) / window
+    return np.convolve(raw_hist, kernel, mode='same')
+
+
 class LineSegmenter:
     """
     Robust line segmenter using Horizontal Projection Profiles with Smoothing.
@@ -112,11 +136,7 @@ class LineSegmenter:
         # only where the tallest row is thinner than the window. The bindings that
         # calibrate on a non-zero MEAN keep a real dependence on it. Not reconciled
         # here: the basis is a tuning constant, and the reference forbids moving it.
-        if self.smooth_window > 1:
-            kernel = np.ones(self.smooth_window) / self.smooth_window
-            smoothed_hist = np.convolve(raw_hist, kernel, mode='same')
-        else:
-            smoothed_hist = raw_hist
+        smoothed_hist = smooth_profile(raw_hist, self.smooth_window)
 
         # 4. Gap Detection
         non_zero_vals = smoothed_hist[smoothed_hist > 0]
@@ -144,8 +164,11 @@ class LineSegmenter:
             # smooth_window 5, threshold_ratio 0.02) on 29 drawn bands: reading the
             # smoothed profile returned 1 band for gaps of 1px, 2px, 3px and 4px
             # against 29 drawn, and matched the raw profile from 5px up. The break
-            # point is the smoother's full width, so this binding's exposure is
-            # twice the Rust port's -- its default window is 5 and Rust's is 3.
+            # point is the smoother's full width at EVERY window from 1 to 12,
+            # even ones included, because `smooth_profile` is a true window-tap
+            # box -- the sibling bindings round the width down to odd and their
+            # tables differ; see that docstring. This binding's exposure is twice
+            # the Rust port's, its default window being 5 against Rust's 3.
             # `smooth_window` is a constructor argument, so a caller who raises it
             # widens the failure with it: at 15 the smoothed profile lost every
             # page whose lines sat closer than 15px while the raw profile kept all

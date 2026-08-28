@@ -12,7 +12,7 @@ taking the profile.
 import cv2
 import numpy as np
 
-from monocr_onnx.segmenter import LineSegmenter, suppress_page_rules
+from monocr_onnx.segmenter import LineSegmenter, smooth_profile, suppress_page_rules
 
 WIDTH = 800
 BAND = 40
@@ -161,3 +161,72 @@ def test_the_two_thresholds_really_do_straddle_the_faint_band():
         f"the faint band's {faint} no longer sits between the smoothed threshold "
         f"{smoothed.max() * 0.02:.0f} and the raw one {raw.max() * 0.02:.0f}"
     )
+
+
+# The smoother's own arithmetic, pinned separately from the segmenter that reads
+# it. Three bindings of the four diverge here and nothing caught it, because no
+# test used an even window.
+
+
+def test_the_box_has_one_tap_per_window_row_at_every_parity():
+    """The divergence an odd-window-only test cannot see.
+
+    numpy's kernel has exactly `window` taps whatever the parity, so a run of
+    `window` zero rows always drives at least one output row to zero. The three
+    sibling bindings loop [-window//2, +window//2] -- 2*(window//2)+1 taps -- so an
+    even window there spans window+1 rows, one MORE than asked, and behaves as the
+    odd window ABOVE it. Measured through the pre-fix form on 29 drawn bands, the
+    first gap returning all 29 bands was `window` here and 2*(window//2)+1 there.
+
+    Even windows are the whole point of this test. An odd window makes the two
+    formulas agree, which is why the divergence survived four ports.
+    """
+    for window in range(2, 13):
+        hist = np.array([9.0] * 20 + [0.0] * window + [9.0] * 20, np.float32)
+        smoothed = smooth_profile(hist, window)
+        gap = smoothed[20 : 20 + window]
+        assert gap.min() == 0.0, (
+            f"window {window} left no zero row across a gap of exactly {window} "
+            f"rows (min {gap.min()}) -- the box is no longer window taps wide"
+        )
+        narrower = smooth_profile(
+            np.array([9.0] * 20 + [0.0] * (window - 1) + [9.0] * 20, np.float32),
+            window,
+        )
+        assert narrower[20 : 20 + window - 1].min() > 0.0, (
+            f"window {window} reached zero across a gap of only {window - 1} rows, "
+            "so the box is narrower than it claims"
+        )
+
+
+def test_the_divisor_is_the_window_and_the_ends_are_zero_padded():
+    """Edge handling, and the formula difference the sibling bindings carry.
+
+    `mode='same'` zero-pads and divides by `window`, so a row near the top or
+    bottom is the sum of the rows in range over the FULL window: at row 0 with
+    window 3 that is 2/3 of the true mean of the two rows it could see, and with
+    window 15 it is 8/15. Go matches this exactly at odd windows; JS and Rust
+    divide by the number of rows they actually visited and so report the true local
+    mean instead. Recorded, not reconciled -- see go/pkg/segmenter/segmenter.go.
+    """
+    hist = np.full(60, 300.0, np.float32)
+    assert smooth_profile(hist, 3)[0] == 200.0
+    assert smooth_profile(hist, 15)[0] == 160.0
+    assert smooth_profile(hist, 3)[-1] == 200.0
+
+
+def test_smoothing_never_lifts_the_profile_above_its_raw_peak():
+    """Go's even-window bug, asserted absent here.
+
+    Go sums 2*(window/2)+1 terms and divides by the requested `window`, so at an
+    even window every interior row is inflated by (window+1)/window and the
+    smoothed peak exceeds the raw one -- 1.5x at window 2. A box that divides by
+    what it summed cannot do that, and this pins that it does not.
+    """
+    hist = np.array([0.0] * 10 + [300.0] * 30 + [0.0] * 10, np.float32)
+    for window in range(2, 13):
+        smoothed = smooth_profile(hist, window)
+        assert smoothed.max() <= hist.max(), (
+            f"window {window} smoothed to a peak of {smoothed.max()}, above the "
+            f"raw {hist.max()} -- the divisor is smaller than the tap count"
+        )
