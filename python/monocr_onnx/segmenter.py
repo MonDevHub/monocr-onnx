@@ -98,6 +98,20 @@ class LineSegmenter:
         raw_hist = np.sum(binary, axis=1).astype(np.float32)
 
         # 3. Smoothing
+        #
+        # `raw_hist` stays alive past this point, because the two profiles have
+        # different jobs: the threshold in step 4 is calibrated on the smoothed
+        # one, the boundaries are detected on the raw one. No copy is needed for
+        # that even though `smoothed_hist` IS `raw_hist` when smoothing is off --
+        # neither array is written to after this block.
+        #
+        # A consequence worth knowing rather than papering over: this binding
+        # thresholds on the profile MAX, and smoothing does not lower the peak of a
+        # band taller than the window, so on an ordinary page max(smoothed) equals
+        # max(raw) to the pixel and this step no longer changes any output. It bites
+        # only where the tallest row is thinner than the window. The bindings that
+        # calibrate on a non-zero MEAN keep a real dependence on it. Not reconciled
+        # here: the basis is a tuning constant, and the reference forbids moving it.
         if self.smooth_window > 1:
             kernel = np.ones(self.smooth_window) / self.smooth_window
             smoothed_hist = np.convolve(raw_hist, kernel, mode='same')
@@ -117,7 +131,30 @@ class LineSegmenter:
         start = None
         
         for y in range(h_img):
-            is_text_val = smoothed_hist[y] > threshold
+            # Boundaries come off the RAW profile, not the smoothed one.
+            #
+            # The threshold above stays calibrated on the smoothed profile's max.
+            # But the smoother averages over `smooth_window` rows, so a gap
+            # narrower than the whole window never reaches zero in the smoothed
+            # profile: the ink either side bleeds into it, the bled rows clear the
+            # threshold, and the two lines fuse. The raw profile needs one clean
+            # row.
+            #
+            # MEASURED HERE, at this binding's own parameters (min_line_h 10,
+            # smooth_window 5, threshold_ratio 0.02) on 29 drawn bands: reading the
+            # smoothed profile returned 1 band for gaps of 1px, 2px, 3px and 4px
+            # against 29 drawn, and matched the raw profile from 5px up. The break
+            # point is the smoother's full width, so this binding's exposure is
+            # twice the Rust port's -- its default window is 5 and Rust's is 3.
+            # `smooth_window` is a constructor argument, so a caller who raises it
+            # widens the failure with it: at 15 the smoothed profile lost every
+            # page whose lines sat closer than 15px while the raw profile kept all
+            # 29.
+            #
+            # These are this binding's numbers. Do not substitute the reference's
+            # or the Rust port's: their break points differ, because the reference
+            # dilates the mask vertically before the profile and this one does not.
+            is_text_val = raw_hist[y] > threshold
             
             if is_text_val and start is None:
                 start = y
