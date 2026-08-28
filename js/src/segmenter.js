@@ -142,6 +142,13 @@ class LineSegmenter {
         }
 
         // 3. Smoothing projection profile
+        //
+        // `hist` stays alive past this point, because the two profiles have
+        // different jobs: the gap threshold below is calibrated on the smoothed one,
+        // the boundaries are detected on the raw one. No copy is needed for that
+        // even though `smoothedHist` IS `hist` when smoothing is off -- the
+        // smoothing branch allocates a new array rather than writing into `hist`,
+        // and nothing after this block mutates either.
         let smoothedHist = hist;
         if (this.smoothWindow > 1) {
             smoothedHist = new Float32Array(height);
@@ -170,7 +177,28 @@ class LineSegmenter {
         let start = null;
 
         for (let y = 0; y < height; y++) {
-            const isText = smoothedHist[y] > gapThreshold;
+            // Boundaries come off the RAW profile, not the smoothed one.
+            //
+            // The threshold above stays calibrated on the smoothed profile, because
+            // its non-zero mean is the steadier of the two. But the smoother
+            // averages over `smoothWindow` rows, so a gap narrower than the whole
+            // window never reaches zero in the smoothed profile: the ink either side
+            // bleeds into it, the bled rows clear the threshold, and the two lines
+            // fuse. The raw profile needs one clean row.
+            //
+            // MEASURED HERE, at this binding's own parameters (minLineH 10,
+            // smoothWindow 3, ratio 0.05 of the non-zero mean) on 29 drawn bands:
+            // reading the smoothed profile returned 1 band against 29 drawn at gaps
+            // of 1px and 2px, and matched the raw profile from 3px up. The break
+            // point is the smoother's full width, so a caller who raises
+            // `smoothWindow` widens the failure with it -- at 15 the smoothed
+            // profile lost every page whose lines sat closer than 15px while the raw
+            // profile kept all 29.
+            //
+            // These are this binding's numbers. Do not substitute the reference's:
+            // mon_OCR dilates the mask vertically before taking the profile and this
+            // one does not, so its break point is 5px to 8px, not 3px.
+            const isText = hist[y] > gapThreshold;
             if (isText && start === null) {
                 start = y;
             } else if (!isText && start !== null) {

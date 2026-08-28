@@ -246,14 +246,21 @@ test('the crop extents of a rule-free page are unchanged by the fix', async () =
     // same `< 128` test over the same buffer the old code read — so these are the
     // values the raw-grayscale scan produced too.
     //
-    // Glyphs run x=100 .. 100+7*PITCH+GLYPH_W-1 = 251. The band measures BAND+2
-    // rows, not BAND: smoothing over a 3-wide window pulls the profile above the
-    // 0.05 gap threshold one row either side of the ink. padX = ceil(42*0.15) = 7.
+    // Glyphs run x=100 .. 100+7*PITCH+GLYPH_W-1 = 251.
+    //
+    // The band measures exactly BAND rows, and it used to measure BAND+2. That
+    // changed on 2026-08-28 when boundary detection moved from the smoothed row
+    // profile to the raw one (see the comment in src/segmenter.js): smoothing over
+    // a 3-wide window pulled the profile above the 0.05 gap threshold one row
+    // either side of the ink, so every band came back two rows taller than it is.
+    // padX is derived from the band height, so it went from ceil(42*0.15) = 7 to
+    // ceil(40*0.15) = 6 and each crop narrowed by one pixel per side. Measured, not
+    // assumed: bbox.x moved from 93 to 94 on this fixture.
     const seg = new LineSegmenter();
     const lines = await seg.segment(await pagePng(4, 40, 8, false));
 
     const x0 = 100, x1 = 100 + 7 * PITCH + GLYPH_W - 1;
-    const padX = Math.ceil((BAND + 2) * 0.15);
+    const padX = Math.ceil(BAND * 0.15);
     assert.strictEqual(lines.length, 4);
     for (const { bbox } of lines) {
         assert.strictEqual(bbox.x, x0 - padX);
