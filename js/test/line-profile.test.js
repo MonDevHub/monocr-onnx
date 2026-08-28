@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const sharp = require('sharp');
 const LineSegmenter = require('../src/segmenter');
+const { smoothProfile } = require('../src/segmenter');
 
 const WIDTH = 800, BAND = 40, MARGIN = 30, GLYPH_W = 12, PITCH = 20;
 
@@ -71,9 +72,12 @@ test('a wide smoother does not fuse the page', async () => {
     // smoothWindow is a constructor argument, so the exposure is caller-settable and
     // not fixed at the default's 2px.
     //
-    // On the smoothed profile the break point is the smoother's full width, so
-    // raising it widened the damage in step: measured here, smoothWindow 15 returned
-    // 1 band for every gap from 1px to 14px. 5px and 12px are two the old form lost.
+    // On the smoothed profile the break point is the smoother's EFFECTIVE span,
+    // 2*floor(smoothWindow/2)+1 and not the requested window, so raising it widened
+    // the damage in step: measured here, smoothWindow 15 returned 1 band for every
+    // gap from 1px to 14px. 5px and 12px are two the old form lost. 15 is odd, so
+    // span and window coincide; the even-window case is pinned below against
+    // smoothProfile directly.
     const seg = new LineSegmenter(10, 15);
     for (const gap of [5, 12]) {
         const got = await seg.segment(await drawnPage(29, gap));
@@ -129,4 +133,76 @@ test('the gap threshold is calibrated on the smoothed profile', async () => {
     assert.strictEqual(got.length, 9,
         `expected 8 dense bands plus the faint one, got ${got.length} — the threshold `
         + 'is being calibrated on the raw profile');
+});
+
+
+// The smoother's own arithmetic, pinned separately from the segmenter that reads
+// it. Three of the four bindings diverge from Python here and nothing caught it,
+// because no test used an even window.
+
+/** `lead` rows of `ink`, then `gap` zero rows, then `lead` rows of `ink`. */
+function bandedProfile(lead, gap, ink) {
+    const out = new Float32Array(lead * 2 + gap);
+    for (let i = 0; i < lead; i++) out[i] = ink;
+    for (let i = lead + gap; i < out.length; i++) out[i] = ink;
+    return out;
+}
+
+test('the box spans 2*floor(window/2)+1 rows, not window', () => {
+    // THE DIVERGENCE AN ODD-WINDOW-ONLY TEST CANNOT SEE, and the reason it survived
+    // four ports: at an odd window this formula and Python's agree exactly.
+    //
+    // The loop is [i-half, i+half] with half = floor(window/2), so an even window
+    // spans window+1 rows — one MORE than asked — and is byte-identical to the odd
+    // window ABOVE it. A gap of exactly `window` zero rows therefore still reaches
+    // zero at odd windows and does NOT at even ones. Measured end-to-end through
+    // the pre-fix form, that is why the break-point table reads
+    // 1,3,3,5,5,7,7,9,9,11,11,13 here against Python's 1,2,...,12.
+    for (let window = 2; window <= 12; window++) {
+        const span = 2 * Math.floor(window / 2) + 1;
+        const atSpan = smoothProfile(bandedProfile(20, span, 9), window);
+        assert.ok(Math.min(...atSpan.slice(20, 20 + span)) === 0,
+            `window ${window} left no zero row across a gap of ${span} rows — its `
+            + 'span is no longer 2*floor(window/2)+1');
+        const under = smoothProfile(bandedProfile(20, span - 1, 9), window);
+        assert.ok(Math.min(...under.slice(20, 20 + span - 1)) > 0,
+            `window ${window} reached zero across a gap of only ${span - 1} rows, so `
+            + 'the box is narrower than measured');
+        if (window % 2 === 0) {
+            const profile = bandedProfile(20, span - 1, 9);
+            assert.deepStrictEqual(
+                Array.from(smoothProfile(profile, window)),
+                Array.from(smoothProfile(profile, window + 1)),
+                `window ${window} no longer matches window ${window + 1} — the `
+                + 'even-window rounding changed');
+        }
+    }
+});
+
+test('the divisor is the rows visited, so edge rows keep their true mean', () => {
+    // The formula difference against Python and Go, asserted rather than assumed.
+    //
+    // numpy's mode='same' zero-pads and divides by the window, so row 0 comes back
+    // at (floor(window/2)+1)/window of the true local mean — 200 not 300 at window
+    // 3, 160 not 300 at window 15. This binding divides by the rows it actually
+    // visited and reports 300. Recorded, not reconciled: see smoothProfile's header.
+    const flat = new Float32Array(60).fill(300);
+    assert.strictEqual(smoothProfile(flat, 3)[0], 300);
+    assert.strictEqual(smoothProfile(flat, 15)[0], 300);
+    assert.strictEqual(smoothProfile(flat, 3)[59], 300);
+    assert.strictEqual(smoothProfile(flat, 15)[59], 300);
+});
+
+test('smoothing never lifts the profile above its raw peak', () => {
+    // Go's even-window bug, asserted absent here. Go sums 2*(window/2)+1 terms and
+    // divides by the requested window, so at an even window every interior row is
+    // inflated by (window+1)/window and the smoothed peak clears the raw one — 1.5x
+    // at window 2, 1.25x at window 4. Dividing by what you summed cannot do that.
+    const profile = bandedProfile(30, 0, 300);
+    for (let window = 2; window <= 12; window++) {
+        const smoothed = smoothProfile(profile, window);
+        assert.ok(Math.max(...smoothed) <= 300,
+            `window ${window} smoothed to a peak of ${Math.max(...smoothed)}, above `
+            + 'the raw 300 — the divisor is smaller than the row count');
+    }
 });

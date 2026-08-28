@@ -90,6 +90,53 @@ function suppressPageRules(binary, width, height) {
     return true;
 }
 
+/** Box-filter the row profile. Returns `hist` itself for window <= 1.
+ *
+ *  TWO DELIBERATE DIVERGENCES FROM THE PYTHON BINDING, both measured, neither
+ *  reconciled here — the formula is published API for anyone reading the profile.
+ *
+ *  1. EFFECTIVE WIDTH IS 2*floor(window/2)+1, NOT `window`. The loop is
+ *     [i-half, i+half], so an even window spans window+1 rows -- one MORE than
+ *     asked -- and is byte-identical to the odd window ABOVE it. Python convolves a
+ *     true `window`-tap kernel and spans exactly what it was given.
+ *     Measured through the pre-fix form that read boundaries off this profile, on
+ *     29 drawn glyph-blob bands at minLineH 10: the first gap returning all 29
+ *     bands, for windows 1 to 12, was 1,3,3,5,5,7,7,9,9,11,11,13. Python's was
+ *     1,2,3,4,5,6,7,8,9,10,11,12. So the break point here is the EFFECTIVE width,
+ *     not the requested one: at window 4 a gap of exactly 4px still fused. Rust
+ *     and Go measure the same table; only Python differs.
+ *  2. THE DIVISOR IS THE ROWS VISITED, NOT THE WINDOW. Near the top and bottom
+ *     edges fewer rows are in range, and dividing by that count reports the true
+ *     local mean. numpy's mode='same' zero-pads and divides by the window, which
+ *     attenuates those rows to (floor(window/2)+1)/window of the true mean —
+ *     two-thirds at window 3, 8/15 at window 15. Go matches numpy; Rust matches
+ *     this. Measured cost, now that the smoothed profile only sets the threshold
+ *     LEVEL: on a page with a blank margin of at least floor(window/2) rows the
+ *     affected rows are zero either way and the two formulas agree to the bit. On
+ *     a page cropped flush to the ink, the threshold moved 0.21% at window 3
+ *     (17.2455 here against Go's 17.2096) and 1.17% at window 15, and no band
+ *     count changed. Unifying the divisors would change output for users of at
+ *     least one binding, so it is an owner decision, not a cleanup.
+ */
+function smoothProfile(hist, window) {
+    if (window <= 1) return hist;
+    const height = hist.length;
+    const smoothed = new Float32Array(height);
+    const half = Math.floor(window / 2);
+    for (let i = 0; i < height; i++) {
+        let sum = 0;
+        let count = 0;
+        for (let j = i - half; j <= i + half; j++) {
+            if (j >= 0 && j < height) {
+                sum += hist[j];
+                count++;
+            }
+        }
+        smoothed[i] = sum / count;
+    }
+    return smoothed;
+}
+
 class LineSegmenter {
     /**
      * @param {number} minLineH Minimum height of a line to be considered valid.
@@ -146,25 +193,11 @@ class LineSegmenter {
         // `hist` stays alive past this point, because the two profiles have
         // different jobs: the gap threshold below is calibrated on the smoothed one,
         // the boundaries are detected on the raw one. No copy is needed for that
-        // even though `smoothedHist` IS `hist` when smoothing is off -- the
-        // smoothing branch allocates a new array rather than writing into `hist`,
-        // and nothing after this block mutates either.
-        let smoothedHist = hist;
-        if (this.smoothWindow > 1) {
-            smoothedHist = new Float32Array(height);
-            const half = Math.floor(this.smoothWindow / 2);
-            for (let i = 0; i < height; i++) {
-                let sum = 0;
-                let count = 0;
-                for (let j = i - half; j <= i + half; j++) {
-                    if (j >= 0 && j < height) {
-                        sum += hist[j];
-                        count++;
-                    }
-                }
-                smoothedHist[i] = sum / count;
-            }
-        }
+        // even though `smoothedHist` IS `hist` when smoothing is off -- smoothProfile
+        // allocates a new array rather than writing into `hist`, and nothing after
+        // this block mutates either. That function's header carries the two measured
+        // divergences from the Python binding, width and divisor.
+        const smoothedHist = smoothProfile(hist, this.smoothWindow);
 
         // 4. Gap Detection
         const nonZeroVals = smoothedHist.filter(v => v > 0);
@@ -181,19 +214,25 @@ class LineSegmenter {
             //
             // The threshold above stays calibrated on the smoothed profile, because
             // its non-zero mean is the steadier of the two. But the smoother
-            // averages over `smoothWindow` rows, so a gap narrower than the whole
-            // window never reaches zero in the smoothed profile: the ink either side
-            // bleeds into it, the bled rows clear the threshold, and the two lines
-            // fuse. The raw profile needs one clean row.
+            // averages several rows together, so a gap narrower than its span never
+            // reaches zero in the smoothed profile: the ink either side bleeds into
+            // it, the bled rows clear the threshold, and the two lines fuse. The raw
+            // profile needs one clean row.
             //
-            // MEASURED HERE, at this binding's own parameters (minLineH 10,
-            // smoothWindow 3, ratio 0.05 of the non-zero mean) on 29 drawn bands:
-            // reading the smoothed profile returned 1 band against 29 drawn at gaps
-            // of 1px and 2px, and matched the raw profile from 3px up. The break
-            // point is the smoother's full width, so a caller who raises
-            // `smoothWindow` widens the failure with it -- at 15 the smoothed
-            // profile lost every page whose lines sat closer than 15px while the raw
-            // profile kept all 29.
+            // MEASURED HERE, at this binding's own parameters (minLineH 10, ratio
+            // 0.05 of the non-zero mean) on 29 drawn bands, driving the pre-fix form
+            // that read boundaries off the smoothed profile. First gap that returned
+            // all 29 bands, by smoothWindow 1 to 12:
+            //
+            //   1 3 3 5 5 7 7 9 9 11 11 13
+            //
+            // So the break point is smoothProfile's EFFECTIVE span,
+            // 2*floor(smoothWindow/2)+1, and NOT the requested window: at
+            // smoothWindow 4 a gap of exactly 4px still fused. Python's table is
+            // 1,2,...,12 because its kernel is a true window-tap box. `smoothWindow`
+            // is a constructor argument, so a caller who raises it widens the failure
+            // with it -- at 15 the smoothed profile lost every page whose lines sat
+            // closer than 15px while the raw profile kept all 29.
             //
             // These are this binding's numbers. Do not substitute the reference's:
             // mon_OCR dilates the mask vertically before taking the profile and this
@@ -280,3 +319,4 @@ module.exports = LineSegmenter;
 
 // Exported for tests.
 module.exports.suppressPageRules = suppressPageRules;
+module.exports.smoothProfile = smoothProfile;
