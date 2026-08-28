@@ -301,3 +301,266 @@ func TestAnEvenWindowInflatesTheProfileAboveItsRawPeak(t *testing.T) {
 		}
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The other half of the dual histogram: the gap merge.
+//
+// Raw-profile detection alone splits one Mon line wherever a single row dips below the
+// gap threshold, between the upper diacritic zone and the consonant bodies. See
+// minGapMerge and mergeRuns in segmenter.go for the measurement, taken through THIS
+// binding.
+//
+// Every fixture below carries ORDINARY full-height lines as well as the case under
+// test, and that is load-bearing rather than decoration. mergeRuns judges a fragment
+// against the page's typical line height, so a page consisting of nothing but the two
+// halves of one split line is degenerate -- the median IS the half-height, and there is
+// no evidence in it that they are halves rather than two short lines. Each test also
+// says which clause is the sole reason its assertion holds, so a mutation to that
+// clause cannot be masked by another.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// splitLinePage renders one split text line: a strip of sparse upper marks, a blank
+// gap, then a 44-row body.
+//
+// The measured geometry. Marks 2px wide against the body's tglyphW so the strip's row
+// profile is faint but well clear of the gap threshold, and so the strip is a run in
+// its own right rather than noise.
+func splitLinePage(stripH, gapH int) image.Image {
+	const height = 200
+	img := image.NewGray(image.Rect(0, 0, tw, height))
+	for i := range img.Pix {
+		img.Pix[i] = 255
+	}
+	stripY := 60
+	bodyY := stripY + stripH + gapH
+	for _, band := range [][3]int{{stripY, stripY + stripH, 2}, {bodyY, bodyY + 44, tglyphW}} {
+		for yy := band[0]; yy < band[1]; yy++ {
+			for k := 0; k < 30; k++ {
+				x := 100 + k*tpitch
+				if x+band[2] <= tw {
+					for i := 0; i < band[2]; i++ {
+						img.SetGray(x+i, yy, color.Gray{Y: 0})
+					}
+				}
+			}
+		}
+	}
+	return img
+}
+
+// profileOf builds a raw row profile with ink on the given bands and nowhere else.
+// Each band is {from, to, value}.
+func profileOf(length int, bands [][3]int) []int {
+	hist := make([]int, length)
+	for _, b := range bands {
+		for y := b[0]; y < b[1]; y++ {
+			hist[y] = b[2]
+		}
+	}
+	return hist
+}
+
+func sameRuns(got, want [][2]int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestADiacriticStripIsReturnedJoinedToItsLine drives the merge THROUGH Segment, not
+// only through the helper.
+//
+// A mutation deleting the mergeRuns call from the pipeline survives every helper test
+// below, because they call the helper directly and leave the call site unguarded. That
+// is the gap se-brain rules/standards/testing.md names: a tested helper does not make
+// its call site safe.
+//
+// Geometry is the measured one: a 20-row strip of upper marks, two empty rows, then a
+// 44-row body. One line, and it must come back as one band.
+func TestADiacriticStripIsReturnedJoinedToItsLine(t *testing.T) {
+	got, err := NewLineSegmenter(10, 3).Segment(splitLinePage(20, 2))
+	if err != nil {
+		t.Fatalf("Segment: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the strip and its body came back as %d bands -- the merge is not "+
+			"reached from Segment", len(got))
+	}
+	if got[0].BBox.Dy() < 66 {
+		t.Errorf("the returned band is %dpx tall, so it does not span the strip and "+
+			"the body together", got[0].BBox.Dy())
+	}
+}
+
+// TestAStripShorterThanMinLineHSurvivesTheMerge pins the ORDER of the merge and the
+// height filter, which no band count reveals.
+//
+// Filtering first also returns one band here -- the body, with its diacritics deleted
+// -- so a count assertion passes either way. What separates them is where the band
+// STARTS: merged first it opens above the strip, filtered first the 6-row strip is
+// discarded and the band opens at the body.
+func TestAStripShorterThanMinLineHSurvivesTheMerge(t *testing.T) {
+	got, err := NewLineSegmenter(10, 3).Segment(splitLinePage(6, 4))
+	if err != nil {
+		t.Fatalf("Segment: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected one band, got %d", len(got))
+	}
+	if got[0].BBox.Min.Y > 60 {
+		t.Errorf("the band starts at row %d, below the strip at row 60 -- the height "+
+			"filter ran before the merge and ate the diacritics", got[0].BBox.Min.Y)
+	}
+}
+
+// TestASubThresholdDipDoesNotEndALine uses measured numbers rather than invented ones:
+// one line, rows 260-324, split by row 280 carrying 6 ink pixels against a threshold of
+// 7.0. Upstream's measurement, kept because it is the case F-69 diagnosed; this
+// binding's own instance is page 9 of the same book, where the threshold is 6.8163 and
+// row 377 carries 5.
+func TestASubThresholdDipDoesNotEndALine(t *testing.T) {
+	hist := profileOf(400, [][3]int{{260, 325, 200}, {280, 281, 6}})
+	want := [][2]int{{260, 325}}
+	if got := mergeRuns([][2]int{{260, 280}, {281, 325}}, hist, minGapMerge); !sameRuns(got, want) {
+		t.Errorf("a 1-row dip holding ink split one line in two: got %v, want %v", got, want)
+	}
+}
+
+// TestAZeroInkGapStillMergesAFragmentIntoItsLine is the other measured case: rows
+// 341-360 are the upper marks and 362-404 the body of one line, separated by TWO rows
+// of genuinely zero ink. No ink test can cross that; the fragment clause is what does,
+// and it is the sole reason this merge happens.
+func TestAZeroInkGapStillMergesAFragmentIntoItsLine(t *testing.T) {
+	hist := profileOf(500, [][3]int{{341, 360, 40}, {362, 404, 300}})
+	want := [][2]int{{341, 404}}
+	if got := mergeRuns([][2]int{{341, 360}, {362, 404}}, hist, minGapMerge); !sameRuns(got, want) {
+		t.Errorf("a 19-row fragment two empty rows from a 42-row line stayed separate: "+
+			"got %v, want %v", got, want)
+	}
+}
+
+// TestTwoRealLinesTwoRowsApartStaySeparate is the case the fragment clause must NOT
+// swallow, and the reason it is a 2x ratio and not a 1x one: same gap, same emptiness,
+// but both runs are full height.
+//
+// The three 60-row lines make this test mean something. Without them the page median
+// would be 40, the merged band would be 82 against a ceiling of 80, and the SIZE BOUND
+// would refuse the merge whatever the ratio said -- so a ratio loosened to 1x would
+// survive. With them the median is 60, the ceiling is 120, and the fragment clause is
+// the only thing holding the two lines apart.
+//
+// A vertical smear cannot tell these apart at all, which is why one was not used: at
+// reach 1 it closes 2-row gaps, and 2 rows is the tightest real line spacing.
+func TestTwoRealLinesTwoRowsApartStaySeparate(t *testing.T) {
+	runs := [][2]int{{20, 60}, {62, 102}, {150, 210}, {250, 310}, {350, 410}}
+	hist := profileOf(500, [][3]int{
+		{20, 60, 300}, {62, 102, 300}, {150, 210, 300}, {250, 310, 300}, {350, 410, 300},
+	})
+	if got := mergeRuns(runs, hist, minGapMerge); !sameRuns(got, runs) {
+		t.Errorf("two 40-row lines were fused on a page whose typical line is 60 -- "+
+			"the fragment ratio is no longer 2x: got %v", got)
+	}
+}
+
+// TestAWideGapIsALineBoundaryHoweverMuchInkItHolds is the size bound on its own.
+// Overlapping diacritics can hold the raw profile above zero right across real
+// inter-line spacing; upstream that collapsed 3 PDF lines into 1.
+//
+// The 60-row lines are again what makes the assertion about maxGap: they put the ceiling
+// at 120, and the merged band would be 95, so maxGap is the only clause refusing this
+// merge. Sized the other way the test would pass for a maxGap of any value at all.
+func TestAWideGapIsALineBoundaryHoweverMuchInkItHolds(t *testing.T) {
+	runs := [][2]int{{20, 60}, {75, 115}, {150, 210}, {250, 310}, {350, 410}}
+	hist := profileOf(500, [][3]int{
+		{20, 60, 300}, {60, 75, 5}, {75, 115, 300},
+		{150, 210, 300}, {250, 310, 300}, {350, 410, 300},
+	})
+	if got := mergeRuns(runs, hist, minGapMerge); !sameRuns(got, runs) {
+		t.Errorf("a 15-row gap merged, so the size bound is not being applied: got %v", got)
+	}
+}
+
+// TestADipBetweenEqualHalvesMergesOnInkAlone isolates the ink clause, which no other
+// case here does: in the measured dip cases the fragment clause ALSO fires, so dropping
+// the ink test survives them.
+//
+// Here the two halves are 40 rows each on a page whose typical line is 60, so neither is
+// a fragment by the 2x ratio, and only the two rows of surviving ink in the dip can
+// merge them.
+func TestADipBetweenEqualHalvesMergesOnInkAlone(t *testing.T) {
+	hist := profileOf(400, [][3]int{
+		{20, 60, 300}, {60, 62, 5}, {62, 102, 300}, {150, 210, 300}, {260, 320, 300},
+	})
+	want := [][2]int{{20, 102}, {150, 210}, {260, 320}}
+	got := mergeRuns([][2]int{{20, 60}, {62, 102}, {150, 210}, {260, 320}}, hist, minGapMerge)
+	if !sameRuns(got, want) {
+		t.Errorf("an ink-holding 2-row dip between two halves of a typical line did "+
+			"not merge: got %v, want %v", got, want)
+	}
+}
+
+// TestAMergeMayNotBuildABandPastTwiceATypicalLine pins the ceiling, and the cascade it
+// is the backstop for.
+//
+// Four 20-row fragments separated by single inked rows would chain into one 83-row band,
+// and each merge makes the accumulated run taller. Upstream, with a fragment test judged
+// against the NEIGHBOUR and no ceiling, page 47 of a 56-page book collapsed from 36
+// bands to 10 with single bands of 534, 632 and 732 rows, losing 92% of its readable
+// characters.
+//
+// The typical line here is 40, so the chain is cut when it would pass 80: the first
+// three fragments become one 62-row band and the fourth stays its own.
+func TestAMergeMayNotBuildABandPastTwiceATypicalLine(t *testing.T) {
+	runs := [][2]int{
+		{0, 20}, {21, 41}, {42, 62}, {63, 83},
+		{150, 190}, {210, 250}, {270, 310}, {330, 370}, {390, 430},
+	}
+	bands := make([][3]int, 0, len(runs)+3)
+	for _, r := range runs {
+		bands = append(bands, [3]int{r[0], r[1], 300})
+	}
+	// One inked row in each gap of the chain, so the gap clause allows the merge and the
+	// ceiling is the only thing that can refuse it.
+	for _, y := range []int{20, 41, 62} {
+		bands = append(bands, [3]int{y, y + 1, 5})
+	}
+	want := [][2]int{
+		{0, 62}, {63, 83},
+		{150, 190}, {210, 250}, {270, 310}, {330, 370}, {390, 430},
+	}
+	if got := mergeRuns(runs, profileOf(500, bands), minGapMerge); !sameRuns(got, want) {
+		t.Errorf("the fragment chain grew past twice a typical line -- the ceiling is "+
+			"gone: got %v, want %v", got, want)
+	}
+}
+
+// TestAFragmentIsJudgedAgainstThePageMedian is the only case that separates the two
+// yardsticks while the ceiling still allows the merge.
+//
+// The 21-row run is exactly half its 42-row neighbour, so a neighbour-relative ratio
+// calls it a fragment and fuses them. Against the page median of 40 it is NOT a fragment
+// -- 21 is over half a typical line -- and it stays its own band. The merged band would
+// be 65 against a ceiling of 80, so the ceiling is not what refuses this: the yardstick
+// is.
+//
+// Judging against the neighbour cascades, because each merge makes the accumulated run
+// taller and the next line then looks more like a fragment. Measured on this binding's
+// 56-page corpus, that form costs 28 bands and 2.2 points more sub-0.6x fragments (1921
+// bands, 17.4%) than this one (1893, 15.2%).
+func TestAFragmentIsJudgedAgainstThePageMedian(t *testing.T) {
+	runs := [][2]int{{10, 50}, {100, 142}, {144, 165}, {200, 240}, {260, 300}}
+	bands := make([][3]int, 0, len(runs))
+	for _, r := range runs {
+		bands = append(bands, [3]int{r[0], r[1], 300})
+	}
+	if got := mergeRuns(runs, profileOf(400, bands), minGapMerge); !sameRuns(got, runs) {
+		t.Errorf("a 21-row run was fused into its 42-row neighbour on a page whose "+
+			"typical line is 40 -- the fragment test is measuring against the "+
+			"neighbour again: got %v", got)
+	}
+}
