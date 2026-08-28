@@ -115,6 +115,17 @@ def smooth_profile(raw_hist, window):
 # raw detection needs a merge to be safe, and the raw-only change shipped without
 # it.
 #
+# WHAT IS THE REFERENCE'S AND WHAT IS NOT. Only this constant and the ordering --
+# merge, then filter by height -- come from mon_OCR. Its merge has exactly two
+# clauses, gap at most 10 and raw minimum above zero, and its comment argues
+# AGAINST anything like the fragment clause below: "If in doubt, we keep lines
+# SEPARATE... A split diacritic-only sub-line decodes to empty or near-empty text,
+# which is harmless." Measurement falsified that premise -- a split sub-line
+# decodes to a confident run of Mon DIGITS, not to empty -- so the fragment clause
+# and the ceiling are this repository's additions, carrying this repository's
+# evidence. An earlier version of this comment called them the reference's, which
+# borrowed authority the reference declines to give.
+#
 # THIS BINDING'S OWN MEASUREMENT is in `merge_runs` below. Do not substitute the
 # Rust port's or the reference's: the threshold here is a fraction of the profile
 # MAX at ratio 0.02, where JS, Go and Rust take a fraction of the non-zero MEAN
@@ -122,13 +133,19 @@ def smooth_profile(raw_hist, window):
 MIN_GAP_MERGE = 10
 
 
-def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
+def merge_runs(runs, raw_hist, max_gap, min_line):
     """Fuse runs that a single sub-threshold row split apart.
 
     Merges ``runs[i]`` into ``runs[i-1]`` when the gap between them is at most
-    ``max_gap`` rows AND (every row in the gap carries ink OR one of the two is a
-    fragment of a line), AND the merged band stays within twice a typical line.
-    See ``MIN_GAP_MERGE`` for why.
+    ``max_gap`` rows AND (every row in the gap carries ink OR one is a fragment
+    being attached to something that could BE a line), AND the merged band stays
+    within twice a typical line. See ``MIN_GAP_MERGE`` for why.
+
+    ``min_line`` is the caller's minimum line height. It is needed twice, and both
+    uses exist because this function runs BEFORE the height filter and so sees
+    every speck the profile picked up: it bounds which runs may set the page's
+    typical line height, and it stops two runs that are each too short to be a line
+    from becoming one by being adjacent.
 
     A module-level function taking the profile rather than a method, so the
     arithmetic is testable without a page, a mask or a model.
@@ -137,8 +154,19 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
     smooth_window 5, threshold_ratio 0.02 of the profile MAX), over the 56 pages
     of a real Mon book rendered at 300 DPI:
 
-        no merge      1974 bands   438 under 0.6x the page median (22.2%)
-        this merge    1920 bands   323 under 0.6x the page median (16.8%)
+        no merge                 1974 bands   438 sub-0.6x-median (22.2%)
+        merge, all-runs median   1920 bands   323 sub-0.6x-median (16.8%)
+        this merge               1796 bands   208 sub-0.6x-median (11.6%)
+
+    The middle row is this function as first written, medianing over every run,
+    and it is here because the difference is this binding's largest single effect.
+    This corpus is heavily speckled: 1791 of 3765 collected runs are under
+    min_line_h, 47.6%, and on 9 of the 56 pages the all-runs median put `typical`
+    below 10 -- page 1 reached `typical` 1 and a ceiling of 2 against a real line
+    height of 24. On 6 of those 9 the merge was a bit-for-bit no-op, returning the
+    unmerged band count exactly (22, 15, 25, 25, 18 and 32 bands unchanged). The
+    sibling port that found this measured 30% of runs under the minimum; here it
+    is half again as bad.
 
     The sub-0.6x share is the fragment proxy, and not a metric invented here:
     F-69 read a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of
@@ -146,15 +174,16 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
     mean digit share -- a different column of the same table.) Each arm is
     scored against its OWN page median above, and that could have flattered the
     merge, because merging raises the median. It does not: scored against the
-    unmerged arm's medians as a fixed yardstick the merged count is 320 (16.7%).
+    unmerged arm's medians as a fixed yardstick the merged count is 157 (8.7%).
 
     Two things this does NOT claim. It does not remove every suspect band --
     285 of F-69's 990 sub-0.6x bands were page numbers and watermarks, read
     correctly, which is why the merge is not a thin-band filter. And the total
-    band count is not monotone: 16 of the 56 pages come back with MORE bands,
-    because a merge lifts a pair of fragments that were each below min_line_h
-    over the filter. That is content recovered, and it is why step 4.5 runs
-    before the height filter rather than after it.
+    band count is not monotone: 6 of the 56 pages come back with MORE bands than
+    the unmerged arm, because a merge lifts a pair of fragments that were each
+    below min_line_h over the filter. That is content recovered, and it is why
+    step 4.5 runs before the height filter rather than after it. On page 1 that
+    effect is large: 22 bands unmerged, 48 merged.
     """
     if not runs:
         return []
@@ -168,15 +197,27 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
     # collapsed to 10, with single bands of 534, 632 and 732 rows holding a dozen
     # text lines each, and the page lost 92% of its readable characters.
     #
-    # Measured HERE, and recorded because it qualifies that: with the ceiling
-    # below in place, judging against the neighbour instead lands within one band
-    # of this over the whole 56-page corpus (1921 bands and 16.9% sub-0.6x
-    # against 1920 and 16.8%). In THIS binding it is the ceiling that contains
-    # the cascade, not the choice of yardstick. The median is kept anyway: it is
-    # the form the Rust port and the reference carry, it is what makes the
-    # ceiling's own yardstick page-relative, and the upstream page-47 collapse
-    # happened with no ceiling at all.
-    heights = sorted(r1 - r0 for r0, r1 in runs)
+    # Measured HERE: judging a fragment against the accumulated neighbour instead
+    # costs 7 bands and 0.4 points of fragments over the 56-page corpus (1803
+    # bands and 12.0% sub-0.6x against this form's 1796 and 11.6%). Small, and it
+    # was smaller still before the height-filtered median below: with the
+    # all-runs median the two forms landed within one band of each other, because
+    # the ceiling was contained so tightly that neither yardstick got to matter.
+    #
+    # And medianed over runs that could BE a line, not over every run. The merge
+    # deliberately runs before the height filter, so `runs` still holds every
+    # speckle: measured on a sibling port, 30% of collected runs were under the
+    # minimum, and on 8 of 55 pages that drove `typical` below 10 -- one page
+    # reached a `typical` of 2 and a ceiling of 4 against a real line height of 35.
+    # The ceiling then refuses every merge, so the pass switches itself OFF on
+    # exactly the pages that need it most.
+    #
+    # Falling back to the unfiltered median when nothing clears the minimum is safe
+    # rather than principled: on such a page the height filter discards everything
+    # anyway, so no crop depends on the value.
+    heights = sorted(h for h in (r1 - r0 for r0, r1 in runs) if h >= min_line)
+    if not heights:
+        heights = sorted(r1 - r0 for r0, r1 in runs)
     typical = max(1, heights[len(heights) // 2])
 
     # No merge may produce a band more than twice a typical line. This is the
@@ -185,11 +226,13 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
     # because a legitimate merge of two halves lands at about one typical line
     # and must not be refused.
     #
-    # This is the clause with the largest measured effect in this binding. Over
-    # the 56-page corpus, dropping it takes the page from 1920 bands to 1177 --
-    # 743 bands, 39%, swallowed into chains of merges. The sub-0.6x share even
-    # IMPROVES to 15.5% while that happens, which is the reason a fragment-share
-    # metric cannot be the only one watched.
+    # Measured here: over the 56-page corpus, dropping it takes 1796 bands down to
+    # 1167 -- 629 bands, 35%, swallowed into chains of merges. The sub-0.6x share
+    # moves to 14.8% while that happens, WORSE on this metric as well as on the
+    # count, which is the clearest form the argument takes: under the all-runs
+    # median the same mutation improved the share to 15.5% while destroying 743
+    # bands, and a fragment-share metric watched alone would have called that
+    # progress.
     ceiling = typical * 2
 
     merged = []
@@ -198,9 +241,21 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
             gap_start = merged[-1][1]
             gap_size = max(0, r0 - gap_start)
             # An empty gap cannot occur from the run collector, but a caller can
-            # hand us touching runs; treat those as already one line.
-            gap_slice = raw_hist[gap_start:r0]
-            gap_has_ink = len(gap_slice) == 0 or bool(np.min(gap_slice) > 0)
+            # hand us touching or overlapping runs; treat those as already one
+            # line.
+            #
+            # The bounds test is explicit because a numpy slice would not do it.
+            # `raw_hist[gap_start:r0]` TRUNCATES silently past the end, so a gap
+            # reaching beyond the profile would read as fully inked here while
+            # Rust (`hist.get`), JS (`undefined > 0` is false) and Go (an explicit
+            # length test) all read it as not inked. Unreachable through
+            # `segment`, where runs are bounded by the profile, but `merge_runs`
+            # is a public entry point with its own tests, and three bindings
+            # agreeing against a fourth is a divergence whichever way it is
+            # resolved.
+            gap_has_ink = r0 <= len(raw_hist) and all(
+                raw_hist[y] > 0 for y in range(gap_start, r0)
+            )
 
             # A run at most half a typical line is a fragment of a line, not a
             # line. This is the clause that crosses a gap of genuinely ZERO ink,
@@ -211,10 +266,16 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
             # stay apart -- which is what a vertical smear could not do, because
             # at reach 1 it closes 2-row gaps and 2 rows is the tightest real
             # line spacing.
-            fragment = (
-                2 * (r1 - r0) <= typical
-                or 2 * (merged[-1][1] - merged[-1][0]) <= typical
-            )
+            #
+            # A fragment attaches to a LINE, never to another fragment. Without
+            # the second half of this, a run of speckle merges with itself:
+            # measured on a 12-speck fixture, twelve 2-row specks fused into one
+            # 46-row band, which then CLEARS the height filter and is handed to
+            # the recogniser as a line. Two pieces that are both too short to be
+            # a line do not become one by being adjacent.
+            ha = merged[-1][1] - merged[-1][0]
+            hb = r1 - r0
+            fragment = 2 * min(ha, hb) <= typical and max(ha, hb) >= min_line
 
             if (
                 gap_size <= max_gap
@@ -342,7 +403,7 @@ class LineSegmenter:
         # filter. The order is the reference's and it matters: a diacritic strip
         # can be shorter than `min_line_h`, and filtering first would discard the
         # strip and leave the decapitated body behind as a whole line.
-        for r0, r1 in merge_runs(runs, raw_hist, MIN_GAP_MERGE):
+        for r0, r1 in merge_runs(runs, raw_hist, MIN_GAP_MERGE, self.min_line_h):
             if (r1 - r0) >= self.min_line_h:
                 self._extract_line(binary, gray, r0, r1, image, results)
 
