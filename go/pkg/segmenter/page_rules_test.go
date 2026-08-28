@@ -341,9 +341,16 @@ func TestFrameDoesNotWidenTheCrops(t *testing.T) {
 // untouched, and the mask is the same `< 128` test over the same pixels the old
 // img.At() scan read — so these are the values that scan produced too.
 //
-// Glyphs run x=100 .. 100+7*tpitch+tglyphW-1 = 251. The band measures tband+2 rows,
-// not tband: smoothing over a 3-wide window pulls the profile above the 0.05 gap
-// threshold one row either side of the ink. padX = ceil(42*0.15) = 7.
+// Glyphs run x=100 .. 100+7*tpitch+tglyphW-1 = 251.
+//
+// The band measures exactly tband rows, and it used to measure tband+2. That changed
+// on 2026-08-28 when boundary detection moved from the smoothed row profile to the
+// raw one (see the comment in Segment): smoothing over a 3-wide window pulled the
+// profile above the 0.05 gap threshold one row either side of the ink, so every band
+// came back two rows taller than it is. padX is derived from the band height, so it
+// went from ceil(42*0.15) = 7 to ceil(40*0.15) = 6 and each crop narrowed by one
+// pixel per side. Measured, not assumed: Min.X moved from 93 to 94 and Max.X from
+// 258 to 257 on this fixture.
 func TestRuleFreeCropExtentsAreUnchanged(t *testing.T) {
 	seg := NewLineSegmenter(10, 3)
 	m, h := maskOf(4, 40, 8, false)
@@ -356,7 +363,7 @@ func TestRuleFreeCropExtentsAreUnchanged(t *testing.T) {
 	}
 
 	x0, x1 := 100, 100+7*tpitch+tglyphW-1
-	padX := int(math.Ceil(float64(tband+2) * 0.15))
+	padX := int(math.Ceil(float64(tband) * 0.15))
 	for i, r := range lines {
 		if r.BBox.Min.X != x0-padX {
 			t.Errorf("line %d starts at x=%d, expected %d", i, r.BBox.Min.X, x0-padX)

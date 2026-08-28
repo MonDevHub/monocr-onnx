@@ -169,6 +169,13 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	}
 
 	// 2. Smoothing
+	//
+	// `hist` stays alive past this point, because the two profiles have different
+	// jobs: the gap threshold below is calibrated on the smoothed one, the
+	// boundaries are detected on the raw one. No copy is needed for that in Go --
+	// `smoothedHist` is always a fresh []float64 and never aliases `hist`, which is
+	// []int. The Rust port needed a clone() here only because it moved its raw
+	// profile into the smoothed one.
 	smoothedHist := make([]float64, height)
 	if s.SmoothWindow > 1 {
 		window := float64(s.SmoothWindow)
@@ -219,7 +226,28 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 
 	// 4. Extract Lines
 	for y := 0; y < height; y++ {
-		isText := smoothedHist[y] > gapThreshold
+		// Boundaries come off the RAW profile, not the smoothed one.
+		//
+		// The threshold above stays calibrated on the smoothed profile, because its
+		// non-zero mean is the steadier of the two. But the smoother averages over
+		// SmoothWindow rows, so a gap narrower than the whole window never reaches
+		// zero in the smoothed profile: the ink either side bleeds into it, the bled
+		// rows clear the threshold, and the two lines fuse. The raw profile needs one
+		// clean row.
+		//
+		// MEASURED HERE, at this binding's own parameters (MinLineH 10, SmoothWindow
+		// 3, ratio 0.05 of the non-zero mean) on 29 drawn bands: reading the smoothed
+		// profile returned 1 band against 29 drawn at gaps of 1px and 2px, and matched
+		// the raw profile from 3px up. The break point is the smoother's full width,
+		// and SmoothWindow is both a NewLineSegmenter argument and an exported field,
+		// so a caller widens the failure with it -- at 15 the smoothed profile lost
+		// every page whose lines sat closer than 15px while the raw profile kept all
+		// 29.
+		//
+		// These are this binding's numbers. Do not substitute the reference's: mon_OCR
+		// dilates the mask vertically before taking the profile and this one does not,
+		// so its break point is 5px to 8px, not 3px.
+		isText := float64(hist[y]) > gapThreshold
 
 		if isText && start == nil {
 			s := y
