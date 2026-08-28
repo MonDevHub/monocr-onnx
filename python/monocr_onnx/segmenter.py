@@ -141,8 +141,9 @@ def merge_runs(runs, raw_hist, max_gap=MIN_GAP_MERGE):
         this merge    1920 bands   323 under 0.6x the page median (16.8%)
 
     The sub-0.6x share is the fragment proxy, and not a metric invented here:
-    F-69 read a model over 4,115 bands and found that 95.1% of those in
-    [0.4, 0.6) of the page median decoded to majority-digit nonsense. Each arm is
+    F-69 read a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of
+    the page median, 94.4% decoded to majority digits. (95.1% is that bucket's
+    mean digit share -- a different column of the same table.) Each arm is
     scored against its OWN page median above, and that could have flattered the
     merge, because merging raises the median. It does not: scored against the
     unmerged arm's medians as a fixed yardstick the merged count is 320 (16.7%).
