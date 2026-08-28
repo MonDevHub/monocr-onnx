@@ -73,17 +73,21 @@ with no error and no lookup miss.
 
 | SDK                      | Directory            | Registry/Source                                            | Published  | In this tree |
 | :----------------------- | :------------------- | :--------------------------------------------------------- | :--------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.2.1        |
-| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.2.1        |
-| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.2.0     | 0.2.0        |
-| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.2.0     |
+| **JavaScript / Node.js** | [`js/`](js/)         | [npm: monocr](https://www.npmjs.com/package/monocr)        | 0.1.5      | 0.3.0        |
+| **Python**               | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | 0.1.0      | 0.3.0        |
+| **Go**                   | [`go/`](go/)         | `github.com/MonDevHub/monocr-onnx/go`                      | v0.3.0     | 0.3.0        |
+| **Rust**                 | [`rust/`](rust/)     | [`rust/`](rust/) — not on crates.io                        | not published | 0.3.0     |
 
-**0.2.1 is not released yet on npm or PyPI. Go is current.** The table used to
-read "Published" in every row, which was true of the *binding* and not of the
-version beside it. Registry state verified 2026-08-16 against pypi.org,
-registry.npmjs.org and proxy.golang.org; the Go row still said v0.1.1 that
-morning, eleven hours after `go/v0.2.0` was pushed, which sent readers to the
-one release carrying the charset defect.
+**0.3.0 is not on npm or PyPI yet.** The tags `js/v0.3.0` and `python/v0.3.0` are
+pushed and the artifacts are built and verified, but the publish step has not run
+— trusted publishing is not configured on either registry, so the release
+workflows fail after their tests pass. **Go is the exception and is current at
+0.3.0**: Go modules resolve by tag, so pushing `go/v0.3.0` released it.
+
+Registry state re-verified 2026-08-28 against pypi.org and registry.npmjs.org.
+The "Published" column is the registry's answer, not this repository's — those
+are different questions, and conflating them is what let 0.2.0 and 0.2.1 sit
+tagged-but-unpublished for months.
 
 This matters more than a version number usually does: the published 0.1.x
 releases are the ones carrying the 225-character charset defect that the commits
@@ -93,11 +97,13 @@ in this tree fix. Installing from a registry today gets the broken charset.
 
 ### Python
 
-> **Pin 0.3.0 or newer.** The 0.1.x releases on PyPI target a superseded model —
-> 64px input height, a 225-character charset, `pixel / 255` normalisation — and a
-> charset that size against a 277-class graph returns the wrong characters rather
-> than merely worse ones. The version bound below is what makes the mismatch an
-> install error instead of silently wrong output. See `CHANGELOG.md`.
+> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
+> tagged but not published; the bound below fails loudly rather than installing
+> 0.1.0, which targets a superseded model (64px input height, a 225-character
+> charset against a 277-class graph) and returns wrong characters rather than
+> merely worse ones. Until the publish step runs, install from source:
+> `pip install git+https://github.com/MonDevHub/monocr-onnx.git#subdirectory=python`.
+> See `CHANGELOG.md` and `RELEASING.md`.
 
 ```bash
 pip install "monocr-onnx>=0.3.0"
@@ -107,11 +113,13 @@ uv add "monocr-onnx>=0.3.0"
 
 ### Node.js
 
-> **Pin 0.3.0 or newer.** The 0.1.x releases on npm target a superseded model —
-> 64px input height, a 225-character charset, `pixel / 255` normalisation — and a
-> charset that size against a 277-class graph returns the wrong characters rather
-> than merely worse ones. The version bound below is what makes the mismatch an
-> install error instead of silently wrong output. See `CHANGELOG.md`.
+> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
+> tagged but not published; the bound below fails loudly rather than installing
+> 0.1.5, which targets a superseded model (64px input height, a 225-character
+> charset against a 277-class graph) and returns wrong characters rather than
+> merely worse ones. Until the publish step runs, install from source:
+> `npm install github:MonDevHub/monocr-onnx#main --prefix js`.
+> See `CHANGELOG.md` and `RELEASING.md`.
 
 ```bash
 npm install monocr@^0.3.0

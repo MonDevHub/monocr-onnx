@@ -1,7 +1,7 @@
 # Changelog
 
-All four bindings — Python, JavaScript, Go and Rust — share one model contract
-and are versioned together. A release number means the same contract in every
+All four bindings (Python, JavaScript, Go and Rust) share one model contract and
+are versioned together. A release number means the same contract in every
 language.
 
 ## 0.3.0 — 2026-08-27
@@ -11,8 +11,8 @@ generations behind this release, so upgrading changes results on every input.
 
 ### If you have 0.1.x installed, read this
 
-The published artifacts — npm `monocr@0.1.5` (2026-02-14) and PyPI
-`monocr-onnx==0.1.0` — target a model that no longer exists. Measured by reading
+The published artifacts (npm `monocr@0.1.5` from 2026-02-14, and PyPI
+`monocr-onnx==0.1.0`) target a model that no longer exists. Measured by reading
 the published tarball and wheel, not inferred:
 
 | | published 0.1.x | this release |
@@ -35,8 +35,8 @@ published artifacts rather than assumed:
   `(pixel / 127.5) - 1.0` (`src/monocr.js:83`). Saying both bindings shared the
   old formula was wrong; only the geometry and the charset were common to them.
 - The runtime charset in 0.1.x is **224**, not the 225 the file contains. Both
-  bindings load it with a bare strip — `f.read().strip()` in `predictor.py:20`
-  and `.trim()` in `monocr.js:36` — and the charset's first character is U+0020, a
+  bindings load it with a bare strip (`f.read().strip()` in `predictor.py:20`,
+  `.trim()` in `monocr.js:36`), and the charset's first character is U+0020, a
   class the model emits. Measured on the shipped file: 225 raw, 225 after
   stripping only line terminators, **224** after a bare strip. That is a second,
   independent index shift on top of the wrong charset size.
