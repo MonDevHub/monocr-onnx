@@ -164,14 +164,26 @@ jobs:
           path: .fixtures-monorepo
           sparse-checkout: shared/segmentation-fixtures
           sparse-checkout-cone-mode: false
+      # All THREE shared fixtures the lib tests read, not just the tiling one. Only
+      # `MONOCR_TILING_FIXTURE` was wired when this step was written, and the default
+      # for the other two is a path relative to the crate that resolves to a sibling
+      # `monocr-monorepo` checkout — which exists on a developer's machine and never
+      # on a runner. So `page_rules_match_the_shared_fixture` panicked here for as
+      # long as it has existed, and the merge fixture would have joined it. The
+      # fixtures are already in the sparse checkout above; they were simply not
+      # pointed at.
       - name: Run tests
         env:
           MONOCR_TILING_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/tiling-cases.json
+          MONOCR_RULE_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/rule-cases.json
+          MONOCR_MERGE_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/merge-cases.json
         run: |
-          test -f "$MONOCR_TILING_FIXTURE" || {
-            echo "::error title=Shared fixture missing::$MONOCR_TILING_FIXTURE was not checked out"
-            exit 1
-          }
+          for f in "$MONOCR_TILING_FIXTURE" "$MONOCR_RULE_FIXTURE" "$MONOCR_MERGE_FIXTURE"; do
+            test -f "$f" || {
+              echo "::error title=Shared fixture missing::$f was not checked out"
+              exit 1
+            }
+          done
           cd rust
           set +e
           output="$(cargo test 2>&1)"
