@@ -474,3 +474,31 @@ def test_a_merge_may_not_build_a_band_past_twice_a_typical_line():
         (330, 370),
         (390, 430),
     ], "the fragment chain grew past twice a typical line -- the ceiling is gone"
+
+
+def test_a_fragment_is_judged_against_the_page_median_not_its_neighbour():
+    """The only case that separates the two yardsticks while the ceiling still
+    allows the merge, and the reason it needs constructing: on real pages the
+    ceiling refuses almost everything the neighbour form would add.
+
+    The 21-row run is exactly half its 42-row neighbour, so a neighbour-relative
+    ratio calls it a fragment and fuses them. Against the page median of 40 it is
+    NOT a fragment -- 21 is over half a typical line -- and it stays its own band.
+    The merged band would be 65 against a ceiling of 80, so the ceiling is not
+    what refuses this: the yardstick is.
+
+    Judging against the neighbour cascades, because each merge makes the
+    accumulated run taller and the next line then looks more like a fragment.
+    Over this binding's 56-page corpus the two forms land within one band of each
+    other (1921 and 16.9% sub-0.6x against 1920 and 16.8%), because the ceiling
+    contains the cascade either way -- so without this fixture nothing in the
+    suite tells them apart at all.
+    """
+    hist = np.zeros(400, np.float32)
+    runs = [(10, 50), (100, 142), (144, 165), (200, 240), (260, 300)]
+    for a, b in runs:
+        hist[a:b] = 300.0
+    assert merge_runs(runs, hist) == runs, (
+        "a 21-row run was fused into its 42-row neighbour on a page whose typical "
+        "line is 40 -- the fragment test is measuring against the neighbour again"
+    )
