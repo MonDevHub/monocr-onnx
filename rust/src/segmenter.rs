@@ -163,6 +163,130 @@ struct BinarizedPage<'a> {
     binary: &'a [u8],
 }
 
+/// A printed rule -- a page border, a table rule, an underline -- spans at least
+/// this fraction of the page in one direction.
+///
+/// Deliberately coarse: no Mon, Burmese or Latin glyph holds an unbroken stroke
+/// half a page long, so the false-positive risk against text is structural
+/// rather than merely small. Lowering it toward a glyph's width is what would
+/// make rule suppression dangerous.
+const RULE_SPAN: f64 = 0.5;
+
+/// A rule must span at least this many pixels whatever [`RULE_SPAN`] works out
+/// to. On a 20px-wide crop `width * RULE_SPAN` is 10px, which a single character
+/// can reach; the floor is what keeps the span out of glyph range on small
+/// crops.
+const RULE_MIN_SPAN_PX: usize = 15;
+
+/// Suppression that would remove more than this share of the page's ink has
+/// found text, not rules, and is abandoned.
+///
+/// [`RULE_SPAN`] is a fraction of the page, so on a SHORT page a tall block of
+/// text can exceed it vertically and be deleted wholesale. Upstream that was not
+/// hypothetical: without this guard an existing test -- six 30px bands touching
+/// on a 200px page, so each glyph column is 180px of unbroken ink -- lost 98.7%
+/// of its ink and returned zero lines.
+///
+/// The threshold sits in a measured gap rather than being a round number: real
+/// framed pages classify 21.5%-58.8% of their ink as rules, every page carrying
+/// no rules 0.00%, and that false positive 98.7%. 1.36x above the worst
+/// legitimate case and 1.23x below the true positive.
+const RULE_MAX_INK_SHARE: f64 = 0.80;
+
+/// Zero out printed rules in `mask` (1 = ink), in place, and report whether
+/// anything was removed.
+///
+/// A printed page border adds a constant ink floor to every row it spans, and
+/// once that floor clears the gap threshold no in-frame row reads as a gap: the
+/// page comes back as one band and is squeezed into the model window. Nothing
+/// downstream can recover from that, because the line was never found.
+///
+/// MEASURED WITH THIS PARAMETER SET (global threshold 128, no smear, smoothing
+/// 3, ratio 0.05 of the mean) over twelve real MNEC page-ones: nine collapse to
+/// three bands or fewer, and the twelve together go from 118 bands to 215. Pages
+/// carrying no rules come back byte-identical.
+///
+/// A run-length scan rather than a generic erode-then-dilate: opening with a 1xL
+/// line kernel keeps exactly those ink runs at least L long, which one sweep per
+/// axis computes directly. That is the form `js/src/segmenter.js` and
+/// `go/pkg/segmenter/segmenter.go` use; the reference
+/// (`mon_OCR/src/monocr/segmenter.py` `_suppress_page_rules`) reaches the same
+/// answer with `cv2.morphologyEx`, and the shared fixture
+/// `monocr-monorepo/shared/segmentation-fixtures/rule-cases.json` is what holds
+/// the four together.
+///
+/// There is deliberately NO thickness test. "A rule is long AND thin" was
+/// written, measured and deleted upstream: across twelve real pages the rule
+/// pixels found with a thickness limit and with none were identical to the
+/// pixel.
+fn suppress_page_rules(mask: &mut [u8], width: u32, height: u32) -> bool {
+    let (w, h) = (width as usize, height as usize);
+    // A mask shorter than its own stated dimensions cannot be indexed safely,
+    // and guessing at the real shape would corrupt a page rather than skip it.
+    if w == 0 || h == 0 || mask.len() < w * h {
+        return false;
+    }
+
+    // `as usize` truncates toward zero, matching Python's `int()` and Go's
+    // `int()`, so all four ports pick the same span on an odd page width. The
+    // fixture's "odd width, run at the truncated span" case is what pins it.
+    let min_h = ((width as f64 * RULE_SPAN) as usize).max(RULE_MIN_SPAN_PX);
+    let min_v = ((height as f64 * RULE_SPAN) as usize).max(RULE_MIN_SPAN_PX);
+
+    // Rules are collected into a separate plane and only subtracted at the end.
+    // Clearing them as they are found would let the horizontal sweep break a
+    // vertical rule before the vertical sweep ever sees it, which is
+    // order-dependent and silently loses one axis.
+    let mut rules = vec![0u8; w * h];
+
+    for y in 0..h {
+        let row = y * w;
+        let mut start = 0usize;
+        // The extra step past the end closes a run that reaches the edge; a
+        // border is exactly that run, so stopping at `w` would miss every
+        // full-width rule.
+        for x in 0..=w {
+            if x < w && mask[row + x] != 0 {
+                continue;
+            }
+            if x - start >= min_h {
+                rules[row + start..row + x].fill(1);
+            }
+            start = x + 1;
+        }
+    }
+    for x in 0..w {
+        let mut start = 0usize;
+        for y in 0..=h {
+            if y < h && mask[y * w + x] != 0 {
+                continue;
+            }
+            if y - start >= min_v {
+                for i in start..y {
+                    rules[i * w + x] = 1;
+                }
+            }
+            start = y + 1;
+        }
+    }
+
+    let ink = mask[..w * h].iter().filter(|&&v| v != 0).count();
+    let rule_ink = rules.iter().filter(|&&v| v != 0).count();
+    if ink == 0 || rule_ink == 0 || rule_ink as f64 > ink as f64 * RULE_MAX_INK_SHARE {
+        // Found the text. Leaving the page alone is strictly better than
+        // emptying it, and the caller is no worse off than before this step
+        // existed.
+        return false;
+    }
+
+    for (cell, &rule) in mask.iter_mut().zip(rules.iter()) {
+        if rule != 0 {
+            *cell = 0;
+        }
+    }
+    true
+}
+
 /// Line segmenter using horizontal projection profile
 ///
 /// This segmenter detects text lines in a document image by analyzing the
@@ -171,10 +295,12 @@ struct BinarizedPage<'a> {
 /// # Algorithm
 ///
 /// 1. Convert image to grayscale and binarize (threshold at 128)
-/// 2. Compute horizontal projection profile (sum of dark pixels per row)
-/// 3. Apply smoothing to reduce noise
-/// 4. Find gaps between text regions (where projection is near zero)
-/// 5. Extract each text region as a separate line
+/// 2. Suppress printed rules — page borders, table rules, underlines — so their
+///    ink floor cannot hide every gap; see `suppress_page_rules`
+/// 3. Compute horizontal projection profile (sum of dark pixels per row)
+/// 4. Apply smoothing to reduce noise
+/// 5. Find gaps between text regions (where projection is near zero)
+/// 6. Extract each text region as a separate line
 ///
 /// # Parameters
 ///
@@ -263,22 +389,49 @@ impl LineSegmenter {
     /// # Algorithm Details
     ///
     /// 1. **Binarization**: Convert to grayscale and threshold at 128 (pixels < 128 are text)
-    /// 2. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
-    /// 3. **Smoothing**: Apply moving average filter if smooth_window > 1
-    /// 4. **Gap Detection**: Find gaps where projection is below
+    /// 2. **Rule suppression**: Remove printed rules, so a page border cannot
+    ///    fuse the whole page into one band (`suppress_page_rules`)
+    /// 3. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
+    /// 4. **Smoothing**: Apply moving average filter if smooth_window > 1
+    /// 5. **Gap Detection**: Find gaps where projection is below
     ///    `density_threshold_ratio` of the mean non-empty row density
     ///    (default 5%)
-    /// 5. **Line Extraction**: Extract each region between gaps as a separate line
-    /// 6. **Padding**: Add 4-pixel padding around each line for edge character capture
+    /// 6. **Line Extraction**: Extract each region between gaps as a separate line
+    /// 7. **Padding**: Add 4-pixel padding around each line for edge character capture
+    ///
+    /// # Polarity
+    ///
+    /// The threshold treats dark as ink, so a light-on-dark page must be
+    /// inverted before it reaches here or the BACKGROUND is what gets segmented.
+    /// [`crate::normalize_polarity`] is that step and `MonOcr::predict_page`
+    /// runs it. This method does not, because it is also the entry point for a
+    /// caller who has already corrected polarity.
     pub fn segment(&self, image_path: impl AsRef<Path>) -> Result<Vec<LineSegment>> {
-        let image_path = image_path.as_ref();
-        let img = image::open(image_path)?;
-        let gray_img = img.to_luma8();
+        let img = image::open(image_path.as_ref())?;
+        self.segment_image(&img.to_luma8())
+    }
+
+    /// Segment an image that is already decoded and grayscale.
+    ///
+    /// The path-taking [`Self::segment`] is a thin wrapper over this. The split
+    /// exists because polarity has to be corrected BEFORE segmentation — the
+    /// threshold below treats dark as ink, so a light-on-dark page segments the
+    /// BACKGROUND and returns the gaps between lines — and the caller doing that
+    /// correction is holding an image, not a path. `go/monocr.go`'s
+    /// `predictImage` and `js/src/monocr.js`'s `normalizePageForSegmentation`
+    /// are the same arrangement.
+    pub fn segment_image(&self, gray_img: &GrayImage) -> Result<Vec<LineSegment>> {
         let (width, height) = gray_img.dimensions();
 
         // 1. Get grayscale data and apply threshold
+        //
+        // The mask is materialised before the profile, and the profile is
+        // counted from the mask afterwards rather than in this loop, because
+        // rule suppression needs the 2-D shape of the ink: a per-row count
+        // cannot express "is there an unbroken run this long". Folding the two
+        // back together is what would silently compute the profile from the
+        // unsuppressed page.
         let mut binary = vec![0u8; (width * height) as usize];
-        let mut hist = vec![0f32; height as usize];
 
         for y in 0..height {
             for x in 0..width {
@@ -287,6 +440,28 @@ impl LineSegmenter {
                 // Threshold: 128, inverted so text is high (1)
                 if pixel[0] < 128 {
                     binary[idx] = 1;
+                }
+            }
+        }
+
+        // 1.5 Printed-rule suppression, before the profile.
+        //
+        // See `suppress_page_rules` for what a page border costs: its ink floor
+        // clears the gap threshold on every row it spans, and at THIS parameter
+        // set the twelve measured MNEC pages went from 118 bands to 215. It also
+        // runs before `extract_line` reads the mask for column extents, so
+        // removing rules here keeps the border out of the crops too.
+        //
+        // The character-count figure quoted in the Python binding (3,846 to
+        // 5,924) belongs to the reference's adaptive threshold and smear, not to
+        // this one, so it is not repeated here.
+        suppress_page_rules(&mut binary, width, height);
+
+        let mut hist = vec![0f32; height as usize];
+        for y in 0..height {
+            let row = (y * width) as usize;
+            for x in 0..width as usize {
+                if binary[row + x] != 0 {
                     hist[y as usize] += 1.0;
                 }
             }
@@ -315,7 +490,7 @@ impl LineSegmenter {
 
         // 4. Find line regions
         let page = BinarizedPage {
-            gray: &gray_img,
+            gray: gray_img,
             binary: &binary,
         };
         let mut results = Vec::new();
@@ -710,6 +885,312 @@ mod tests {
         }
 
         assert!(checked > 0, "the fixture has no multi-tile case to check");
+    }
+
+    /// Override for the shared printed-rule fixture, for checkouts that do not
+    /// sit next to the monorepo.
+    const RULE_FIXTURE_ENV: &str = "MONOCR_RULE_FIXTURE";
+
+    /// The printed-rule fixture is the oracle four ports share, generated from
+    /// the reference implementation by
+    /// `monocr-monorepo/shared/segmentation-fixtures/generate-rule-cases.py`. It
+    /// describes each mask as a PRNG seed plus a list of rules, so a port builds
+    /// the same 23 masks without shipping any pixels, and checks the result
+    /// against an ink count and a position-weighted checksum.
+    ///
+    /// The checksum is the part that matters: a bare ink count would not notice
+    /// suppression that removed the right NUMBER of pixels in the wrong places,
+    /// which is exactly what an off-by-one in a run-length scan produces.
+    fn rule_fixture_path() -> PathBuf {
+        if let Some(path) = std::env::var_os(RULE_FIXTURE_ENV) {
+            return PathBuf::from(path);
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../monocr-monorepo/shared/segmentation-fixtures/rule-cases.json")
+    }
+
+    /// A missing fixture fails loudly, for the same reason `load_fixture` does:
+    /// skipping would report a green run for a port nothing checked.
+    fn load_rule_fixture() -> Value {
+        let path = rule_fixture_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read the shared printed-rule fixture at {}: {e}\n\
+                 set {RULE_FIXTURE_ENV} to point at \
+                 monocr-monorepo/shared/segmentation-fixtures/rule-cases.json",
+                path.display()
+            )
+        });
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
+    }
+
+    fn i64_field(value: &Value, key: &str) -> i64 {
+        value
+            .get(key)
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| panic!("fixture entry is missing an integer '{key}': {value}"))
+    }
+
+    /// Rebuild one fixture mask: xorshift32 noise, then the rules drawn over it.
+    ///
+    /// The PRNG is transcribed from the fixture's own `prng` field rather than
+    /// invented here: `x ^= x<<13; x ^= x>>17; x ^= x<<5`, seeded 2463534242,
+    /// pixel `i` ink where `x % 100 < density` with `x` taken after the i-th
+    /// step. Rust's `<<` on `u32` discards the high bits, which is the `&
+    /// 0xFFFFFFFF` the generator writes explicitly.
+    fn rule_mask(case: &Value) -> (Vec<u8>, u32, u32) {
+        let width = u32_field(case, "width");
+        let height = u32_field(case, "height");
+        let (w, h) = (width as usize, height as usize);
+        let density = u32_field(case, "density");
+
+        let mut x: u32 = 2_463_534_242;
+        let mut mask = vec![0u8; w * h];
+        for cell in mask.iter_mut() {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            if x % 100 < density {
+                *cell = 1;
+            }
+        }
+
+        let run_length = i64_field(case, "run_length");
+        let run_start = i64_field(case, "run_start") as usize;
+        for row in cases_array(case, "rule_rows") {
+            let row = row as usize;
+            let (len, start) = if run_length < 0 {
+                (w, 0)
+            } else {
+                (run_length as usize, run_start)
+            };
+            for cell in mask[row * w + start..row * w + w.min(start + len)].iter_mut() {
+                *cell = 1;
+            }
+        }
+
+        let col_length = i64_field(case, "col_length");
+        let col_start = i64_field(case, "col_start") as usize;
+        for col in cases_array(case, "rule_cols") {
+            let col = col as usize;
+            let (len, start) = if col_length < 0 {
+                (h, 0)
+            } else {
+                (col_length as usize, col_start)
+            };
+            for y in start..h.min(start + len) {
+                mask[y * w + col] = 1;
+            }
+        }
+
+        (mask, width, height)
+    }
+
+    fn cases_array(case: &Value, key: &str) -> Vec<u64> {
+        case.get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("fixture case has no '{key}' array: {case}"))
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .unwrap_or_else(|| panic!("non-integer entry in '{key}'"))
+            })
+            .collect()
+    }
+
+    /// Ink count and position-weighted checksum of a mask, flattened row-major,
+    /// exactly as the fixture generator's `signature` computes them.
+    fn rule_signature(mask: &[u8], modulus: u64) -> (u64, u64) {
+        let mut ink = 0u64;
+        let mut sum = 0u64;
+        for (i, &v) in mask.iter().enumerate() {
+            if v != 0 {
+                ink += 1;
+                sum += i as u64 + 1;
+            }
+        }
+        (ink, sum % modulus)
+    }
+
+    /// The whole printed-rule contract, against the oracle the other ports use.
+    ///
+    /// 23 cases, including the pair that pins `>=` on each axis (a run of exactly
+    /// the span and one pixel short), the 15px floor on a narrow crop, the
+    /// truncated span on an odd width, and the ink-share ceiling both firing and
+    /// exactly at the boundary.
+    #[test]
+    fn page_rules_match_the_shared_fixture() {
+        let root = load_rule_fixture();
+
+        // The constants live in two places, so pin them to each other here, the
+        // same way `fixture()` does for the tiling constants.
+        assert_eq!(
+            root.get("rule_span").and_then(Value::as_f64),
+            Some(RULE_SPAN),
+            "fixture and port disagree on the rule span"
+        );
+        assert_eq!(
+            root.get("rule_max_ink_share").and_then(Value::as_f64),
+            Some(RULE_MAX_INK_SHARE),
+            "fixture and port disagree on the ink-share ceiling"
+        );
+        let modulus = root
+            .get("checksum_modulus")
+            .and_then(Value::as_u64)
+            .expect("fixture has no checksum_modulus");
+
+        for case in cases(&root, "cases") {
+            let name = case
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>")
+                .to_string();
+            let (mut mask, width, height) = rule_mask(&case);
+
+            let changed = suppress_page_rules(&mut mask, width, height);
+            assert_eq!(
+                changed,
+                case.get("expected_changed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_changed")),
+                "case '{name}': wrong answer on whether anything was suppressed"
+            );
+
+            let (ink, checksum) = rule_signature(&mask, modulus);
+            assert_eq!(
+                ink,
+                case.get("expected_ink")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_ink")),
+                "case '{name}': wrong ink count after suppression"
+            );
+            assert_eq!(
+                checksum,
+                case.get("expected_checksum")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_checksum")),
+                "case '{name}': right ink count, wrong pixels — an off-by-one in \
+                 one of the run-length scans"
+            );
+        }
+    }
+
+    // A realistic page, in the shape `go/pkg/segmenter/page_rules_test.go` uses:
+    // glyph blobs rather than solid bars, because a solid bar the width of a text
+    // column IS a rule by any definition and would prove nothing.
+    const T_WIDTH: u32 = 800;
+    const T_BAND: u32 = 40;
+    const T_MARGIN: u32 = 30;
+    const T_GLYPH_W: u32 = 12;
+    const T_PITCH: u32 = 20;
+    const T_RULE_W: u32 = 4;
+
+    /// Build a page as a grayscale image: ink 0, background 255.
+    fn drawn_page(bands: u32, gap: u32, glyphs: u32, framed: bool) -> GrayImage {
+        let height = T_MARGIN * 2 + T_BAND * bands + gap * (bands - 1);
+        let mut img = GrayImage::from_pixel(T_WIDTH, height, Luma([255u8]));
+        let mut y = T_MARGIN;
+        for _ in 0..bands {
+            for yy in y..y + T_BAND {
+                for k in 0..glyphs {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..T_GLYPH_W {
+                        if x0 + i < T_WIDTH {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+            y += T_BAND + gap;
+        }
+        if framed {
+            for yy in 0..height {
+                for i in 0..T_RULE_W {
+                    img.put_pixel(10 + i, yy, Luma([0u8]));
+                    img.put_pixel(T_WIDTH - 10 - T_RULE_W + i, yy, Luma([0u8]));
+                }
+            }
+            for i in 0..T_RULE_W {
+                for x in 0..T_WIDTH {
+                    img.put_pixel(x, 10 + i, Luma([0u8]));
+                    img.put_pixel(x, height - 10 - T_RULE_W + i, Luma([0u8]));
+                }
+            }
+        }
+        img
+    }
+
+    /// THE PROPERTY THAT MAKES THIS SAFE UNCONDITIONALLY. Every page gets the
+    /// step whether it carries rules or not, so "does nothing" has to be exact
+    /// rather than approximate.
+    #[test]
+    fn a_page_with_no_rules_is_untouched_to_the_pixel() {
+        let img = drawn_page(4, 40, 30, false);
+        let (w, h) = img.dimensions();
+        let mut mask = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if img.get_pixel(x, y)[0] < 128 {
+                    mask[(y * w + x) as usize] = 1;
+                }
+            }
+        }
+        let before = mask.clone();
+
+        assert!(
+            !suppress_page_rules(&mut mask, w, h),
+            "suppression reported a change on a page with no rules"
+        );
+        assert_eq!(
+            mask, before,
+            "glyph-sized ink was classified as a rule and removed"
+        );
+    }
+
+    /// The behavioural test, and the fixture took finding.
+    ///
+    /// A DENSE framed page does not fuse at this parameter set — 30 glyphs per
+    /// line segments the same with or without suppression, which is why a
+    /// structural check on the mask alone cannot catch a profile computed from
+    /// the wrong buffer. SPARSE text reproduces the real mechanism: with 8 glyphs
+    /// per line the profile mean drops far enough that the frame's ink floor
+    /// clears the 0.05 threshold on every row, and the page comes back as one
+    /// band. Ported from `go/pkg/segmenter/page_rules_test.go`
+    /// `TestSegmentRecoversAFramedPage`.
+    #[test]
+    fn segmenting_recovers_a_framed_page() {
+        let seg = LineSegmenter::new(10, 3);
+        let clean = seg.segment_image(&drawn_page(4, 40, 8, false)).unwrap();
+        let framed = seg.segment_image(&drawn_page(4, 40, 8, true)).unwrap();
+
+        assert_eq!(
+            clean.len(),
+            4,
+            "the unframed control must segment into 4 lines, or the comparison \
+             below proves nothing"
+        );
+        assert_eq!(
+            framed.len(),
+            clean.len(),
+            "a framed page came back as {} line(s) where the same page unframed \
+             gave {} — the page border is fusing the profile",
+            framed.len(),
+            clean.len()
+        );
+    }
+
+    /// Degenerate shapes reach this from real callers: a 1px crop, and a mask
+    /// whose length disagrees with its stated dimensions. Indexing is what would
+    /// panic, so the guards are worth a test even though they assert nothing but
+    /// survival.
+    #[test]
+    fn degenerate_masks_do_not_panic() {
+        assert!(!suppress_page_rules(&mut [], 0, 0));
+        assert!(!suppress_page_rules(&mut [], 10, 10));
+        assert!(!suppress_page_rules(&mut vec![0u8; 50 * 50], 50, 50));
+        assert!(!suppress_page_rules(&mut vec![1u8; 50 * 50], 50, 50));
+        assert!(!suppress_page_rules(&mut [1u8; 1], 1, 1));
     }
 
     #[test]
