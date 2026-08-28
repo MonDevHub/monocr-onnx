@@ -176,6 +176,17 @@ function smoothProfile(hist, window) {
 // value, and it is the half of the dual histogram this binding left behind: raw
 // detection needs a merge to be safe, and the raw-only change shipped without it.
 //
+// WHAT IS THE REFERENCE'S AND WHAT IS NOT. Only this constant and the ordering —
+// merge, then filter by height — come from mon_OCR. Its merge has exactly two
+// clauses, gap at most 10 and raw minimum above zero, and its comment argues AGAINST
+// anything like the fragment clause below: "If in doubt, we keep lines SEPARATE... A
+// split diacritic-only sub-line decodes to empty or near-empty text, which is
+// harmless." Measurement falsified that premise — a split sub-line decodes to a
+// confident run of Mon DIGITS, not to empty — so the fragment clause and the ceiling
+// are this repository's additions, carrying this repository's evidence. An earlier
+// version of this comment called them the reference's, which borrowed authority the
+// reference declines to give.
+//
 // THIS BINDING'S OWN MEASUREMENT is in `mergeRuns` below. Do not substitute the
 // Python binding's or the reference's: Python calibrates on the profile MAX at ratio
 // 0.02 where this takes 0.05 of the non-zero MEAN, and its default smoothWindow is 5
@@ -185,9 +196,15 @@ const MIN_GAP_MERGE = 10;
 /** Fuse runs that a single sub-threshold row split apart.
  *
  *  Merges `runs[i]` into `runs[i-1]` when the gap between them is at most `maxGap`
- *  rows AND (every row in the gap carries ink OR one of the two is a fragment of a
- *  line), AND the merged band stays within twice a typical line. See
- *  `MIN_GAP_MERGE` for why.
+ *  rows AND (every row in the gap carries ink OR one is a fragment being attached to
+ *  something that could BE a line), AND the merged band stays within twice a typical
+ *  line. See `MIN_GAP_MERGE` for why.
+ *
+ *  `minLine` is the caller's minimum line height. It is needed twice, and both uses
+ *  exist because this function runs BEFORE the height filter and so sees every speck
+ *  the profile picked up: it bounds which runs may set the page's typical line
+ *  height, and it stops two runs that are each too short to be a line from becoming
+ *  one by being adjacent.
  *
  *  A free function taking the profile rather than a method, so the arithmetic is
  *  testable without a page, a mask or a model. Mutates neither argument; the pairs
@@ -197,8 +214,13 @@ const MIN_GAP_MERGE = 10;
  *  3, ratio 0.05 of the non-zero mean), over the 56 pages of a real Mon book
  *  rendered at 300 DPI:
  *
- *    no merge     2132 bands   576 under 0.6x the page median (27.0%)
- *    this merge   1893 bands   288 under 0.6x the page median (15.2%)
+ *    no merge                 2132 bands   576 sub-0.6x-median (27.0%)
+ *    merge, all-runs median   1893 bands   288 sub-0.6x-median (15.2%)
+ *    this merge               1738 bands   160 sub-0.6x-median  (9.2%)
+ *
+ *  The middle row is this function as first written, medianing over every run. Two of
+ *  the 56 pages had the merge switched off by speckle, and repairing that is most of
+ *  the 288 to 160 improvement.
  *
  *  The sub-0.6x share is the fragment proxy, and not a metric invented here: F-69
  *  read a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of the page
@@ -206,15 +228,15 @@ const MIN_GAP_MERGE = 10;
  *  share — a different column of the same table.) Each arm is scored against its
  *  OWN page median above, and that could have flattered the merge, because merging
  *  raises the median. It does not: scored against the unmerged arm's medians as a
- *  fixed yardstick the merged count is 272 (14.4%).
+ *  fixed yardstick the merged count is 121 (7.0%).
  *
  *  Two things this does NOT claim. It does not remove every suspect band — 285 of
  *  F-69's 990 sub-0.6x bands were page numbers and watermarks, read correctly,
  *  which is why the merge is not a thin-band filter. And the band count is not
- *  monotone: 6 of the 56 pages come back with MORE bands, because a merge lifts a
+ *  monotone: 1 of the 56 pages comes back with MORE bands, because a merge lifts a
  *  pair of fragments that were each below minLineH over the filter. That is content
  *  recovered, and it is why the merge runs before the height filter. */
-function mergeRuns(runs, hist, maxGap) {
+function mergeRuns(runs, hist, maxGap, minLine) {
     if (runs.length === 0) return [];
 
     // The page's own typical line height, from the runs as detected. Both tests
@@ -228,11 +250,31 @@ function mergeRuns(runs, hist, maxGap) {
     //
     // Measured HERE, and it holds up in this binding rather than only upstream:
     // judging a fragment against the accumulated neighbour instead, ceiling and all,
-    // costs both metrics over the 56-page corpus — 1921 bands and 17.4% sub-0.6x
-    // against this form's 1893 and 15.2%. The Python binding measures the two forms
-    // as near-equal, so this is not a shared result; the numbers here are this
-    // binding's own.
-    const heights = runs.map(([r0, r1]) => r1 - r0).sort((a, b) => a - b);
+    // costs both metrics over the 56-page corpus — 1903 bands and 17.7% sub-0.6x
+    // against this form's 1738 and 9.2%. The Python binding measures the same two
+    // forms only 7 bands apart, so this is not a shared result; the numbers here are
+    // this binding's own.
+    // And medianed over runs that could BE a line, not over every run. The merge
+    // deliberately runs before the height filter, so `runs` still holds every
+    // speckle. MEASURED HERE: 470 of 2602 collected runs are under `minLineH`, 18.1%,
+    // and on 2 of the 56 corpus pages the all-runs median put `typical` below 10 —
+    // page 1 reached `typical` 5, so the ceiling was 10 against a real line height of
+    // 27, and every merge on that page was refused. The pass switches itself OFF on
+    // exactly the pages that need it most.
+    //
+    // This binding's exposure is a THIRD of the Python binding's on the same 56 pages
+    // (18.1% of runs against 47.6%, 2 pages against 9), and the reason is the
+    // threshold basis: 0.05 of the non-zero mean sits well above 0.02 of the profile
+    // max on these scans, so most speckle never becomes a run here at all. Same
+    // corpus, same defect, different severity — which is why each binding measures its
+    // own.
+    //
+    // Falling back to the unfiltered median when nothing clears the minimum is safe
+    // rather than principled: on such a page the height filter discards everything
+    // anyway, so no crop depends on the value.
+    const all = runs.map(([r0, r1]) => r1 - r0);
+    const heights = (all.some(h => h >= minLine) ? all.filter(h => h >= minLine) : all)
+        .sort((a, b) => a - b);
     const typical = Math.max(1, heights[Math.floor(heights.length / 2)]);
 
     // No merge may produce a band more than twice a typical line. This is the
@@ -241,10 +283,12 @@ function mergeRuns(runs, hist, maxGap) {
     // because a legitimate merge of two halves lands at about one typical line and
     // must not be refused.
     //
-    // Measured here: over the 56-page corpus, dropping it takes 1893 bands down to
-    // 1670 — 223 bands, 12%, swallowed into chains of merges. The sub-0.6x share
-    // even IMPROVES to 12.8% while that happens, which is the reason a
-    // fragment-share metric cannot be the only one watched.
+    // Measured here: over the 56-page corpus, dropping it takes 1738 bands down to
+    // 1614 — 124 bands, 7%, swallowed into chains of merges. The sub-0.6x share moves
+    // to 10.3%, worse on this metric as well as on the count, which is the clearest
+    // form the argument takes: before the height-filtered median above, the same
+    // mutation IMPROVED the share (15.2% to 12.8%) while destroying 223 bands, and a
+    // fragment-share metric watched alone would have called that progress.
     const ceiling = typical * 2;
 
     const merged = [];
@@ -274,8 +318,16 @@ function mergeRuns(runs, hist, maxGap) {
             // each a full line by this test, so they stay apart — which is what a
             // vertical smear could not do, because at reach 1 it closes 2-row gaps
             // and 2 rows is the tightest real line spacing.
+            // A fragment attaches to a LINE, never to another fragment. Without the
+            // second half of this, a run of speckle merges with itself: measured on a
+            // 12-speck fixture, twelve 2-row specks fused into one 46-row band, which
+            // then CLEARS the height filter and is handed to the recogniser as a
+            // line. Two pieces that are both too short to be a line do not become one
+            // by being adjacent.
+            const ha = last[1] - last[0];
+            const hb = r1 - r0;
             const fragment =
-                2 * (r1 - r0) <= typical || 2 * (last[1] - last[0]) <= typical;
+                2 * Math.min(ha, hb) <= typical && Math.max(ha, hb) >= minLine;
 
             if (gapSize <= maxGap && (gapHasInk || fragment) && r1 - last[0] <= ceiling) {
                 last[1] = r1;
@@ -407,7 +459,7 @@ class LineSegmenter {
         // filter. The order is the reference's and it matters: a diacritic strip can
         // be shorter than `minLineH`, and filtering first would discard the strip and
         // leave the decapitated body behind as a whole line.
-        for (const [r0, r1] of mergeRuns(runs, hist, MIN_GAP_MERGE)) {
+        for (const [r0, r1] of mergeRuns(runs, hist, MIN_GAP_MERGE, this.minLineH)) {
             if (r1 - r0 >= this.minLineH) {
                 await this._extractLine(image, binary, width, height, r0, r1, results);
             }

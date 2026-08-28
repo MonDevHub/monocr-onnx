@@ -245,6 +245,14 @@ test('smoothing never lifts the profile above its raw peak', () => {
 // half-height, and there is no evidence in it that they are halves rather than two
 // short lines. Each test also says which clause is the sole reason its assertion
 // holds, so a mutation to that clause cannot be masked by another.
+//
+// The first version of this paragraph was false of two of its own fixtures. The
+// sub-threshold dip and the zero-ink gap each held only two runs, which is exactly
+// the degenerate page the paragraph warns about, and the zero-ink one passed partly
+// on the median INDEX convention: with two heights `floor(length / 2)` takes the
+// upper, so `typical` was the full line's 42 rather than the fragment's 19, and
+// `(length - 1) / 2` would have failed the test. Both now carry ordinary lines and
+// pass under either convention.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A PNG of one split text line: a strip of sparse upper marks, a blank gap, then a
@@ -312,10 +320,12 @@ test('a sub-threshold dip does not end a line', () => {
     // Upstream's measurement, kept because it is the case F-69 diagnosed; this
     // binding's own instance is page 9 of the same book, where the threshold is 6.8
     // and row 377 carries 5.
-    const hist = profile(400, [[260, 325]]);
+    const hist = profile(600, [[260, 325], [400, 444], [500, 544]]);
     hist[280] = 6; // above zero, below the gap threshold
-    assert.deepStrictEqual(mergeRuns([[260, 280], [281, 325]], hist, MIN_GAP_MERGE),
-        [[260, 325]], 'a 1-row dip holding ink split one line in two');
+    assert.deepStrictEqual(
+        mergeRuns([[260, 280], [281, 325], [400, 444], [500, 544]], hist, MIN_GAP_MERGE, 10),
+        [[260, 325], [400, 444], [500, 544]],
+        'a 1-row dip holding ink split one line in two');
 });
 
 test('a zero-ink gap still merges a fragment into its line', () => {
@@ -323,9 +333,11 @@ test('a zero-ink gap still merges a fragment into its line', () => {
     // of one line, separated by TWO rows of genuinely zero ink. No ink test can cross
     // that; the fragment clause is what does, and it is the sole reason this merge
     // happens.
-    const hist = profile(500, [[341, 360, 40], [362, 404]]);
-    assert.deepStrictEqual(mergeRuns([[341, 360], [362, 404]], hist, MIN_GAP_MERGE),
-        [[341, 404]], 'a 19-row fragment two empty rows from a 42-row line stayed separate');
+    const hist = profile(700, [[341, 360, 40], [362, 404], [450, 492], [550, 592]]);
+    assert.deepStrictEqual(
+        mergeRuns([[341, 360], [362, 404], [450, 492], [550, 592]], hist, MIN_GAP_MERGE, 10),
+        [[341, 404], [450, 492], [550, 592]],
+        'a 19-row fragment two empty rows from a 42-row line stayed separate');
 });
 
 test('two real lines two rows apart stay separate', () => {
@@ -342,7 +354,7 @@ test('two real lines two rows apart stay separate', () => {
     // at reach 1 it closes 2-row gaps, and 2 rows is the tightest real line spacing.
     const runs = [[20, 60], [62, 102], [150, 210], [250, 310], [350, 410]];
     const hist = profile(500, runs);
-    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE, 10), runs,
         'two 40-row lines were fused on a page whose typical line is 60 — the fragment '
         + 'ratio is no longer 2x');
 });
@@ -358,7 +370,7 @@ test('a wide gap is a line boundary however much ink it holds', () => {
     // value at all.
     const runs = [[20, 60], [75, 115], [150, 210], [250, 310], [350, 410]];
     const hist = profile(500, [...runs, [60, 75, 5]]);
-    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE, 10), runs,
         'a 15-row gap merged, so the size bound is not being applied');
 });
 
@@ -371,7 +383,7 @@ test('a dip between equal halves merges on ink alone', () => {
     // the dip can merge them.
     const hist = profile(400, [[20, 60], [60, 62, 5], [62, 102], [150, 210], [260, 320]]);
     assert.deepStrictEqual(
-        mergeRuns([[20, 60], [62, 102], [150, 210], [260, 320]], hist, MIN_GAP_MERGE),
+        mergeRuns([[20, 60], [62, 102], [150, 210], [260, 320]], hist, MIN_GAP_MERGE, 10),
         [[20, 102], [150, 210], [260, 320]],
         'an ink-holding 2-row dip between two halves of a typical line did not merge');
 });
@@ -390,7 +402,7 @@ test('a merge may not build a band past twice a typical line', () => {
                   [150, 190], [210, 250], [270, 310], [330, 370], [390, 430]];
     const hist = profile(500, runs);
     for (const y of [20, 41, 62]) hist[y] = 5; // one inked row, so the gap clause allows it
-    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE),
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE, 10),
         [[0, 62], [63, 83], [150, 190], [210, 250], [270, 310], [330, 370], [390, 430]],
         'the fragment chain grew past twice a typical line — the ceiling is gone');
 });
@@ -407,11 +419,50 @@ test('a fragment is judged against the page median, not against its neighbour', 
     //
     // Judging against the neighbour cascades, because each merge makes the accumulated
     // run taller and the next line then looks more like a fragment. Measured on this
-    // binding's 56-page corpus, that form costs 28 bands and 2.2 points more sub-0.6x
-    // fragments (1921 bands, 17.4%) than this one (1893, 15.2%).
+    // binding's 56-page corpus, that form costs 165 bands and 8.5 points more sub-0.6x
+    // fragments (1903 bands, 17.7%) than this one (1738, 9.2%).
     const runs = [[10, 50], [100, 142], [144, 165], [200, 240], [260, 300]];
     const hist = profile(400, runs);
-    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE), runs,
+    assert.deepStrictEqual(mergeRuns(runs.map(r => [...r]), hist, MIN_GAP_MERGE, 10), runs,
         'a 21-row run was fused into its 42-row neighbour on a page whose typical line '
         + 'is 40 — the fragment test is measuring against the neighbour again');
+});
+
+test('speckle does not set the typical line height', () => {
+    // Two defects in one fixture, because the second was found by writing the first.
+    // mergeRuns runs BEFORE the height filter, so its input holds every speck the
+    // profile picked up.
+    //
+    // 1. Medianing over ALL runs lets noise set `typical`. Measured on the identical
+    //    corpus through the Python binding, 47.6% of collected runs were under the
+    //    minimum, and on 9 of 56 pages that drove `typical` below 10 — one page
+    //    reached 1, so the ceiling was 2 against a real line height of 24 and every
+    //    merge was refused. The pass switched itself off on the pages needing it most.
+    // 2. A fragment attaching to another fragment chains. Twelve 2-row specks fuse
+    //    into one 46-row band, which CLEARS the height filter and is handed to the
+    //    recogniser as a line.
+    //
+    // ASSERTING THE SPLIT PAIR MERGES IS NOT ENOUGH. That assertion alone passes with
+    // defect 2 still in place — the fragment-to-fragment mutation survived the battery
+    // until the second assertion below was added. Both are needed.
+    const bands = [];
+    const runs = [];
+    for (let i = 0; i < 12; i++) { bands.push([i * 4, i * 4 + 2, 20]); runs.push([i * 4, i * 4 + 2]); }
+    // A split line whose halves really are halves: 24 rows, a 2-row inked dip, 24
+    // rows, summing to the 50 an ordinary line measures here. 50 + 50 would be two
+    // whole lines by this page's own standard and the ceiling would refuse the merge
+    // for the right reason, which is not what this test is about.
+    bands.push([100, 124], [124, 126, 5], [126, 150]);
+    runs.push([100, 124], [126, 150]);
+    // And three ordinary lines, so a real median exists to be found.
+    for (let i = 0; i < 3; i++) { bands.push([200 + i * 60, 250 + i * 60]); runs.push([200 + i * 60, 250 + i * 60]); }
+
+    const merged = mergeRuns(runs, profile(700, bands), MIN_GAP_MERGE, 10);
+
+    assert.ok(merged.some(([a, b]) => a === 100 && b === 150),
+        `the split pair did not merge, so speckle set the ceiling: ${JSON.stringify(merged)}`);
+    const fused = merged.filter(([a, b]) => a < 100 && b - a >= 10);
+    assert.strictEqual(fused.length, 0,
+        `speckle fused into ${fused.length} band(s) tall enough to clear the height `
+        + `filter and be read as lines: ${JSON.stringify(fused)}`);
 });
