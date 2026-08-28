@@ -67,15 +67,24 @@ def smooth_profile(raw_hist, window):
     zero-pads the ends and divides by `window`, so a run of `window` zero rows
     always drives at least one output row to zero.
 
+    An even `window` here is a box that is not CENTRED, which is the price of
+    keeping the tap count exact: `mode='same'` takes the middle `len(hist)` of
+    the full convolution, so an impulse at row 5 comes back at rows {5,6} at
+    window 2 and {4,5,6,7} at window 4 -- half a row forward of the raw profile.
+    Measured not to move the break-point table below, so it is recorded rather
+    than corrected; correcting it would shift this binding's output.
+
     MEASURED on 29 drawn glyph-blob bands (min_line_h 10, threshold_ratio 0.02),
     driving the pre-fix form that read boundaries off this profile: the first gap
     that returned all 29 bands was exactly `window`, at every window from 1 to 12
     -- 1,2,3,4,...,12. The three sibling bindings loop [-window//2, +window//2]
     instead, which is 2*(window//2)+1 taps, so their break points run
     1,3,3,5,5,7,7,9,9,11,11,13 -- an even window there spans window+1 rows, one
-    MORE than asked, and behaves as the odd window ABOVE it. Their numbers are
-    not this one's; see js/src/segmenter.js and
-    go/pkg/segmenter/segmenter.go, which record their own.
+    MORE than asked, and reads the same rows as the odd window ABOVE it. In JS
+    and Rust it is VALUE-identical to that odd window too; in Go it is only
+    tap-identical, because Go divides by the window it was asked for rather than
+    by the rows it summed. Their numbers are not this one's; see
+    js/src/segmenter.js and go/pkg/segmenter/segmenter.go, which record their own.
     """
     if window <= 1:
         return raw_hist
@@ -166,8 +175,9 @@ class LineSegmenter:
             # against 29 drawn, and matched the raw profile from 5px up. The break
             # point is the smoother's full width at EVERY window from 1 to 12,
             # even ones included, because `smooth_profile` is a true window-tap
-            # box -- the sibling bindings round the width down to odd and their
-            # tables differ; see that docstring. This binding's exposure is twice
+            # box -- the sibling bindings round an even span UP to the next odd
+            # number and their tables differ; see that docstring. This binding's
+            # exposure is twice
             # the Rust port's, its default window being 5 against Rust's 3.
             # `smooth_window` is a constructor argument, so a caller who raises it
             # widens the failure with it: at 15 the smoothed profile lost every

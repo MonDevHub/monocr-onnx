@@ -174,9 +174,10 @@ def test_the_box_has_one_tap_per_window_row_at_every_parity():
     numpy's kernel has exactly `window` taps whatever the parity, so a run of
     `window` zero rows always drives at least one output row to zero. The three
     sibling bindings loop [-window//2, +window//2] -- 2*(window//2)+1 taps -- so an
-    even window there spans window+1 rows, one MORE than asked, and behaves as the
-    odd window ABOVE it. Measured through the pre-fix form on 29 drawn bands, the
-    first gap returning all 29 bands was `window` here and 2*(window//2)+1 there.
+    even window there spans window+1 rows, one MORE than asked, and reads the same
+    rows as the odd window ABOVE it. Measured through the pre-fix form on 29 drawn
+    bands, the first gap returning all 29 bands was `window` here and
+    2*(window//2)+1 there.
 
     Even windows are the whole point of this test. An odd window makes the two
     formulas agree, which is why the divergence survived four ports.
@@ -226,7 +227,21 @@ def test_smoothing_never_lifts_the_profile_above_its_raw_peak():
     hist = np.array([0.0] * 10 + [300.0] * 30 + [0.0] * 10, np.float32)
     for window in range(2, 13):
         smoothed = smooth_profile(hist, window)
-        assert smoothed.max() <= hist.max(), (
-            f"window {window} smoothed to a peak of {smoothed.max()}, above the "
-            f"raw {hist.max()} -- the divisor is smaller than the tap count"
+        # Two-sided, not `<=`. A one-sided bound also passes for a smoother that
+        # attenuates everything, or for one that does not smooth at all.
+        #
+        # The tolerance is not slack: numpy multiplies each tap by 1/window and
+        # sums, so it rounds `window` times where a sum-then-divide rounds once.
+        # Measured drift on integer-valued profiles is around 1e-13 -- window 7
+        # here peaks at 299.99999999999994. That is also why Go's identical
+        # formula matches this one mathematically but not to the bit.
+        assert abs(float(smoothed.max()) - float(hist.max())) < 1e-9, (
+            f"window {window} smoothed to a peak of {smoothed.max()}, not the raw "
+            f"{hist.max()} -- the divisor no longer equals the tap count"
+        )
+        # And the profile really was smoothed: the band's own edge rows are pulled
+        # down, which a no-op smoother would leave at 300.
+        assert smoothed[10] < 300.0, (
+            f"window {window} left the band's first row at 300 -- nothing was "
+            "smoothed"
         )

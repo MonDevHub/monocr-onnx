@@ -183,13 +183,27 @@ test('the divisor is the rows visited, so edge rows keep their true mean', () =>
     // The formula difference against Python and Go, asserted rather than assumed.
     //
     // numpy's mode='same' zero-pads and divides by the window, so row 0 comes back
-    // at (floor(window/2)+1)/window of the true local mean — 200 not 300 at window
-    // 3, 160 not 300 at window 15. This binding divides by the rows it actually
-    // visited and reports 300. Recorded, not reconciled: see smoothProfile's header.
+    // at (floor(window/2)+1)/window of the true local mean — 200 not 300 on a flat
+    // profile at window 3, 160 not 300 at window 15. This binding divides by the
+    // rows it visited and reports 300. Recorded, not reconciled: see smoothProfile.
+    //
+    // The profile is NOT flat, deliberately. On a flat 300 the answer is 300 under
+    // this formula AND under no smoothing at all, so a flat fixture cannot tell the
+    // two apart. Row 0 is zeroed instead, which gives three different answers: 150
+    // here (mean of rows 0 and 1), 100 under a window divisor, and 0 under a no-op.
+    const dip = new Float32Array(60).fill(300);
+    dip[0] = 0;
+    dip[59] = 0;
+    assert.strictEqual(smoothProfile(dip, 3)[0], 150,
+        'row 0 is no longer the mean of the rows actually in range');
+    assert.strictEqual(smoothProfile(dip, 3)[59], 150);
+    assert.strictEqual(smoothProfile(dip, 5)[0], 200,
+        'window 5 row 0 should be 600 over the 3 rows in range, not 900 over 5');
+
     const flat = new Float32Array(60).fill(300);
-    assert.strictEqual(smoothProfile(flat, 3)[0], 300);
+    assert.strictEqual(smoothProfile(flat, 3)[0], 300,
+        'a flat profile must come back flat, unattenuated at the edges');
     assert.strictEqual(smoothProfile(flat, 15)[0], 300);
-    assert.strictEqual(smoothProfile(flat, 3)[59], 300);
     assert.strictEqual(smoothProfile(flat, 15)[59], 300);
 });
 
@@ -198,11 +212,20 @@ test('smoothing never lifts the profile above its raw peak', () => {
     // divides by the requested window, so at an even window every interior row is
     // inflated by (window+1)/window and the smoothed peak clears the raw one — 1.5x
     // at window 2, 1.25x at window 4. Dividing by what you summed cannot do that.
-    const profile = bandedProfile(30, 0, 300);
+    // 20 zero rows, 20 rows of ink, 20 zero rows, so the band is wider than the
+    // widest span tested and its middle keeps the full 300.
+    const profile = new Float32Array(60);
+    profile.fill(300, 20, 40);
     for (let window = 2; window <= 12; window++) {
         const smoothed = smoothProfile(profile, window);
-        assert.ok(Math.max(...smoothed) <= 300,
-            `window ${window} smoothed to a peak of ${Math.max(...smoothed)}, above `
-            + 'the raw 300 — the divisor is smaller than the row count');
+        // Two-sided, not `<=`. A one-sided bound also passes for a smoother that
+        // attenuates everything, and for one that does not smooth at all.
+        assert.strictEqual(Math.max(...smoothed), 300,
+            `window ${window} peaked at ${Math.max(...smoothed)}, not the raw 300 — `
+            + 'the divisor no longer equals the row count');
+        // And smoothing really ran: the band's own edge rows are pulled down, which
+        // a no-op smoother would leave at 300.
+        assert.ok(smoothed[20] < 300,
+            `window ${window} left the band's first row at 300 — nothing was smoothed`);
     }
 });

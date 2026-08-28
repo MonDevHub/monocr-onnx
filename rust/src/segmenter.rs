@@ -581,7 +581,10 @@ impl LineSegmenter {
     ///
     /// 1. **Span is `2 * (smooth_window / 2) + 1`, not `smooth_window`.** An EVEN
     ///    window therefore spans one row MORE than asked and is bit-identical to
-    ///    the odd window ABOVE it. Python convolves a true `window`-tap kernel.
+    ///    the odd window ABOVE it — bit-identical here and in JS because both
+    ///    divide by what they summed, but only TAP-identical in Go, which divides
+    ///    by the window it was asked for. Python convolves a true `window`-tap
+    ///    kernel and spans exactly what it was given.
     ///    Measured on 29 drawn glyph-blob bands at `min_line_height` 10, driving
     ///    the pre-fix form that read boundaries off this profile: the first gap
     ///    returning all 29 bands, for windows 1 to 12, was
@@ -592,11 +595,20 @@ impl LineSegmenter {
     ///    bottom edges fewer rows are in range, and dividing by that count reports
     ///    the true local mean. numpy's `mode='same'` zero-pads and divides by the
     ///    window, attenuating those rows to `(window / 2 + 1) / window` of the
-    ///    true mean — two thirds at window 3, 8/15 at window 15. Go matches numpy;
-    ///    this port does not. Measured cost, now that the smoothed profile only
-    ///    sets the threshold LEVEL: on a page with a blank margin of at least
-    ///    `half` rows the affected rows are zero either way and the two formulas
-    ///    agree to the bit. On a page cropped flush to the ink the threshold moved
+    ///    true mean — two thirds at window 3, 8/15 at window 15. Go divides by the
+    ///    window too and so matches numpy, but only at ODD windows: at an even
+    ///    window Go sums `window + 1` rows and still divides by `window`, matching
+    ///    neither numpy nor this port.
+    ///
+    ///    Measured cost, now that the smoothed profile only sets the threshold
+    ///    LEVEL: the two formulas disagree only on rows `0..half-1` and their
+    ///    mirror at the bottom, and the windows of those rows together cover rows
+    ///    `0..2*half-1`, so the blank margin that hides the divergence is
+    ///    `2 * half` rows and NOT `half`. Measured on an 8-band page: a 1-row
+    ///    margin still left window 3 disagreeing (17.1607 here against Go's
+    ///    17.1429) and a 2-row margin made them agree; window 15 needed 14. Every
+    ///    fixture in this repo uses a 30px margin, so all of them sit on the
+    ///    agreeing side. On a page cropped flush to the ink the threshold moved
     ///    0.21% at window 3 and 1.17% at window 15, and no band count changed.
     ///
     /// Dividing by the rows visited also means this port cannot produce Go's
@@ -1376,7 +1388,8 @@ mod tests {
     /// failure this pipeline is built to avoid.
     ///
     /// The fixture is tuned, and the tuning is the finding: at the default ratio
-    /// of 0.05 the two thresholds sit 0.86px apart on this page, and no whole
+    /// of 0.05 the two thresholds sit 0.88px apart on this page (16.5642 smoothed
+    /// against 17.4412 raw), and no whole
     /// number of ink pixels lands between them, so no test at the default can
     /// tell the two calibrations apart. At 0.5 — the ratio the reference
     /// recommends for wide-spaced layouts, and a constructor argument rather
@@ -1463,12 +1476,32 @@ mod tests {
     /// Edge handling, and the formula difference against Python and Go.
     ///
     /// numpy's `mode='same'` zero-pads and divides by the window, so row 0 comes
-    /// back at `(window / 2 + 1) / window` of the true local mean — 200 not 300 at
-    /// window 3, 160 not 300 at window 15. Go does the same. This port divides by
-    /// the rows it actually visited and reports 300. Recorded, not reconciled:
-    /// see `smooth_histogram`'s docs.
+    /// back at `(window / 2 + 1) / window` of the true local mean — 200 not 300 on
+    /// a flat profile at window 3, 160 not 300 at window 15. Go does the same at
+    /// odd windows. This port divides by the rows it actually visited and reports
+    /// 300. Recorded, not reconciled: see `smooth_histogram`'s docs.
+    ///
+    /// The first fixture is NOT flat, deliberately. On a flat 300 the answer is 300
+    /// under this formula AND under no smoothing at all, so a flat profile cannot
+    /// tell the two apart. Zeroing row 0 gives three different answers: 150 here
+    /// (the mean of rows 0 and 1), 100 under a window divisor, and 0 under a no-op.
     #[test]
     fn the_divisor_is_the_rows_visited_so_edge_rows_keep_their_true_mean() {
+        let mut dip = vec![300f32; 60];
+        dip[0] = 0.0;
+        dip[59] = 0.0;
+        let smoothed = LineSegmenter::new(10, 3).smooth_histogram(&dip);
+        assert_eq!(
+            smoothed[0], 150.0,
+            "row 0 is no longer the mean of the rows actually in range"
+        );
+        assert_eq!(smoothed[59], 150.0, "the last row lost the same property");
+        assert_eq!(
+            LineSegmenter::new(10, 5).smooth_histogram(&dip)[0],
+            200.0,
+            "window 5 row 0 should be 600 over the 3 rows in range, not 900 over 5"
+        );
+
         let flat = vec![300f32; 60];
         for window in [3u32, 5, 15] {
             let smoothed = LineSegmenter::new(10, window).smooth_histogram(&flat);
@@ -1494,17 +1527,26 @@ mod tests {
     /// and this pins that it does not.
     #[test]
     fn smoothing_never_lifts_the_profile_above_its_raw_peak() {
-        let profile = banded_profile(30, 0, 300.0);
+        // 20 zero rows, 20 rows of ink, 20 zero rows, so the band is wider than the
+        // widest span tested and its middle keeps the full 300.
+        let mut profile = vec![0f32; 60];
+        profile[20..40].fill(300.0);
         for window in 2u32..=12 {
-            let peak = LineSegmenter::new(10, window)
-                .smooth_histogram(&profile)
-                .iter()
-                .cloned()
-                .fold(f32::MIN, f32::max);
+            let smoothed = LineSegmenter::new(10, window).smooth_histogram(&profile);
+            let peak = smoothed.iter().cloned().fold(f32::MIN, f32::max);
+            // Two-sided, not `<=`. A one-sided bound also passes for a smoother that
+            // attenuates everything, and for one that does not smooth at all.
+            assert_eq!(
+                peak, 300.0,
+                "window {window} peaked at {peak}, not the raw 300 — the divisor no \
+                 longer equals the row count"
+            );
+            // And smoothing really ran: the band's own edge rows are pulled down,
+            // which a no-op smoother would leave at 300.
             assert!(
-                peak <= 300.0,
-                "window {window} smoothed to a peak of {peak}, above the raw 300 — \
-                 the divisor is smaller than the row count"
+                smoothed[20] < 300.0,
+                "window {window} left the band's first row at 300 — nothing was \
+                 smoothed"
             );
         }
     }

@@ -91,9 +91,11 @@ func TestTouchingBandsStayOneLine(t *testing.T) {
 // argument and an exported field, so the exposure is caller-settable and not fixed
 // at the default's 2px.
 //
-// On the smoothed profile the break point is the smoother's full width, so raising it
-// widened the damage in step: measured here, SmoothWindow 15 returned 1 band for
-// every gap from 1px to 14px. 5px and 12px are two the old form lost.
+// On the smoothed profile the break point is the smoother's SPAN,
+// 2*(SmoothWindow/2)+1 and not the requested window, so raising it widened the
+// damage in step: measured here, SmoothWindow 15 returned 1 band for every gap from
+// 1px to 14px. 5px and 12px are two the old form lost. 15 is odd, so span and window
+// coincide; the even-window case is pinned against smoothProfile directly, below.
 func TestAWideSmootherDoesNotFuseThePage(t *testing.T) {
 	seg := NewLineSegmenter(10, 15)
 	for _, gap := range []int{5, 12} {
@@ -246,9 +248,10 @@ func TestTheBoxSpansOneMoreRowThanAnEvenWindowAsks(t *testing.T) {
 }
 
 // TestTheDivisorIsTheRequestedWindow pins the edge handling, which at ODD windows is
-// numpy's mode='same' to the bit: zero-padded ends divided by the window. Row 0 at
-// window 3 is 2/3 of the true mean of the two rows in range, and at window 15 it is
-// 8/15 of it. JS and Rust divide by the rows they visited and report the true mean.
+// numpy's mode='same' formula exactly -- zero-padded ends divided by the window --
+// though not bit-identical to numpy, which rounds once per tap. Row 0 at window 3 is
+// 2/3 of the true mean of the two rows in range, and at window 15 it is 8/15 of it.
+// JS and Rust divide by the rows they visited and report the true mean.
 // Recorded, not reconciled -- unifying the divisors changes output for at least one
 // binding's users, so it is an owner decision. See smoothProfile's header.
 func TestTheDivisorIsTheRequestedWindow(t *testing.T) {

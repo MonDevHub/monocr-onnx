@@ -109,14 +109,23 @@ function suppressPageRules(binary, width, height) {
  *     edges fewer rows are in range, and dividing by that count reports the true
  *     local mean. numpy's mode='same' zero-pads and divides by the window, which
  *     attenuates those rows to (floor(window/2)+1)/window of the true mean —
- *     two-thirds at window 3, 8/15 at window 15. Go matches numpy; Rust matches
- *     this. Measured cost, now that the smoothed profile only sets the threshold
- *     LEVEL: on a page with a blank margin of at least floor(window/2) rows the
- *     affected rows are zero either way and the two formulas agree to the bit. On
- *     a page cropped flush to the ink, the threshold moved 0.21% at window 3
- *     (17.2455 here against Go's 17.2096) and 1.17% at window 15, and no band
- *     count changed. Unifying the divisors would change output for users of at
- *     least one binding, so it is an owner decision, not a cleanup.
+ *     two-thirds at window 3, 8/15 at window 15. Rust divides by the rows visited
+ *     as this does; Go divides by the window and so matches numpy, but only at ODD
+ *     windows -- at an even window Go matches neither, because it then sums
+ *     window+1 rows and still divides by window.
+ *
+ *     Measured cost, now that the smoothed profile only sets the threshold LEVEL:
+ *     the two formulas agree once every row they disagree on is zero, and the rows
+ *     they disagree on are rows 0..half-1 and the mirror at the bottom, whose
+ *     windows together cover rows 0..2*half-1. So the blank margin that hides the
+ *     divergence is 2*floor(window/2) rows, NOT floor(window/2) -- measured on an
+ *     8-band page, a margin of 1 row still left window 3 disagreeing (17.1607 here
+ *     against Go's 17.1429) and 2 rows made them agree, and window 15 needed 14.
+ *     The repo's own fixtures use a 30px margin, so they are all on the agreeing
+ *     side. On a page cropped flush to the ink the threshold moved 0.21% at
+ *     window 3 (17.2455 here against Go's 17.2096) and 1.17% at window 15, and no
+ *     band count changed. Unifying the divisors would change output for users of
+ *     at least one binding, so it is an owner decision, not a cleanup.
  */
 function smoothProfile(hist, window) {
     if (window <= 1) return hist;

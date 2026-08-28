@@ -138,23 +138,42 @@ func suppressPageRules(mask []uint8, width, height int) bool {
 //
 //  1. SPAN IS 2*(window/2)+1, NOT window. The loop is [-overflow, +overflow] with
 //     overflow = window/2, so an EVEN window spans window+1 rows -- one MORE than
-//     asked -- and behaves exactly as the odd window ABOVE it. Python convolves a
-//     true window-tap kernel. Measured on 29 drawn glyph-blob bands at MinLineH 10,
-//     driving the pre-fix form that read boundaries off this profile: the first gap
-//     that returned all 29 bands, for windows 1 to 12, was
-//     1,3,3,5,5,7,7,9,9,11,11,13. Python's was 1,2,...,12. So at SmoothWindow 4 a
-//     gap of exactly 4px still fused. JS and Rust measure the same table as this.
+//     asked -- and reads exactly the same rows as the odd window ABOVE it. Only the
+//     rows, not the values: see divergence 3, which divides that same sum by a
+//     different number. In JS and Rust the two windows ARE value-identical, because
+//     they divide by what they summed. Here, on an 8-band page carrying a faint band
+//     of 18 ink pixels per row, SmoothWindow 2 returns 8 bands and SmoothWindow 3
+//     returns 9.
+//
+//     Python convolves a true window-tap kernel and spans exactly what it was
+//     given. Measured on 29 drawn glyph-blob bands at MinLineH 10, driving the
+//     pre-fix form that read boundaries off this profile: the first gap that
+//     returned all 29 bands, for windows 1 to 12, was 1,3,3,5,5,7,7,9,9,11,11,13.
+//     Python's was 1,2,...,12. So at SmoothWindow 4 a gap of exactly 4px still
+//     fused. JS and Rust measure the same table as this.
+//
 //  2. THE DIVISOR IS THE REQUESTED WINDOW, NOT THE ROWS SUMMED. This is edge
-//     handling, and at ODD windows it matches numpy's mode='same' to the bit --
-//     zero-padded ends, divided by the window. Row 0 at window 3 therefore comes
-//     back at 2/3 of the true mean of the two rows in range, and at window 15 at
-//     8/15 of it. JS and Rust divide by the rows they visited and report the true
-//     local mean instead. Measured cost, now that this profile only sets the
-//     threshold LEVEL: on a page with a blank margin of at least window/2 rows the
-//     affected rows are zero either way and the thresholds agree to the bit; on a
-//     page cropped flush to the ink the threshold sat 0.21% below JS's at window 3
-//     (17.2096 against 17.2455) and 1.17% below at window 15, and no band count
-//     changed in any case measured.
+//     handling, and at ODD windows it is numpy's mode='same' formula exactly --
+//     zero-padded ends, divided by the window. Mathematically exactly, not to the
+//     bit: numpy multiplies each tap by 1/window and sums, rounding window times
+//     where this rounds once, which measured about 1e-13 of drift on an
+//     integer-valued profile. At EVEN windows it matches neither numpy nor the
+//     siblings, for the reason in divergence 3.
+//
+//     Row 0 at window 3 comes back at 2/3 of the true mean of the two rows in
+//     range, and at window 15 at 8/15 of it. JS and Rust divide by the rows they
+//     visited and report the true local mean instead. Measured cost, now that this
+//     profile only sets the threshold LEVEL: the two formulas disagree only on rows
+//     0..overflow-1 and their mirror at the bottom, and the windows of those rows
+//     together cover rows 0..2*overflow-1, so the blank margin that hides the
+//     divergence is 2*(window/2) rows and NOT window/2. Measured on an 8-band page:
+//     a 1-row margin still left window 3 disagreeing (17.1429 here against JS's
+//     17.1607) and a 2-row margin made them agree, and window 15 needed 14. Every
+//     fixture in this repo uses a 30px margin, so all of them sit on the agreeing
+//     side. On a page cropped flush to the ink the threshold sat 0.21% below JS's at
+//     window 3 (17.2096 against 17.2455) and 1.17% below at window 15, and no band
+//     count changed in any case measured.
+//
 //  3. AT AN EVEN WINDOW THIS DIVIDES BY LESS THAN IT SUMMED, and that one is a
 //     defect rather than a difference. It sums window+1 terms and divides by
 //     window, so every interior row is inflated by exactly (window+1)/window and
