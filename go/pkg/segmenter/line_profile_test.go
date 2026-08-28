@@ -317,6 +317,13 @@ func TestAnEvenWindowInflatesTheProfileAboveItsRawPeak(t *testing.T) {
 // no evidence in it that they are halves rather than two short lines. Each test also
 // says which clause is the sole reason its assertion holds, so a mutation to that
 // clause cannot be masked by another.
+//
+// The first version of this paragraph was false of two of its own fixtures. The
+// sub-threshold dip and the zero-ink gap each held only two runs, which is exactly the
+// degenerate page the paragraph warns about, and the zero-ink one passed partly on the
+// median INDEX convention: with two heights len/2 takes the upper, so typical was the
+// full line's 42 rather than the fragment's 19, and (len-1)/2 would have failed the
+// test. Both now carry ordinary lines and pass under either convention.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // splitLinePage renders one split text line: a strip of sparse upper marks, a blank
@@ -424,9 +431,12 @@ func TestAStripShorterThanMinLineHSurvivesTheMerge(t *testing.T) {
 // binding's own instance is page 9 of the same book, where the threshold is 6.8163 and
 // row 377 carries 5.
 func TestASubThresholdDipDoesNotEndALine(t *testing.T) {
-	hist := profileOf(400, [][3]int{{260, 325, 200}, {280, 281, 6}})
-	want := [][2]int{{260, 325}}
-	if got := mergeRuns([][2]int{{260, 280}, {281, 325}}, hist, minGapMerge); !sameRuns(got, want) {
+	hist := profileOf(600, [][3]int{
+		{260, 325, 200}, {280, 281, 6}, {400, 444, 200}, {500, 544, 200},
+	})
+	runs := [][2]int{{260, 280}, {281, 325}, {400, 444}, {500, 544}}
+	want := [][2]int{{260, 325}, {400, 444}, {500, 544}}
+	if got := mergeRuns(runs, hist, minGapMerge, 10); !sameRuns(got, want) {
 		t.Errorf("a 1-row dip holding ink split one line in two: got %v, want %v", got, want)
 	}
 }
@@ -436,9 +446,12 @@ func TestASubThresholdDipDoesNotEndALine(t *testing.T) {
 // of genuinely zero ink. No ink test can cross that; the fragment clause is what does,
 // and it is the sole reason this merge happens.
 func TestAZeroInkGapStillMergesAFragmentIntoItsLine(t *testing.T) {
-	hist := profileOf(500, [][3]int{{341, 360, 40}, {362, 404, 300}})
-	want := [][2]int{{341, 404}}
-	if got := mergeRuns([][2]int{{341, 360}, {362, 404}}, hist, minGapMerge); !sameRuns(got, want) {
+	hist := profileOf(700, [][3]int{
+		{341, 360, 40}, {362, 404, 300}, {450, 492, 300}, {550, 592, 300},
+	})
+	runs := [][2]int{{341, 360}, {362, 404}, {450, 492}, {550, 592}}
+	want := [][2]int{{341, 404}, {450, 492}, {550, 592}}
+	if got := mergeRuns(runs, hist, minGapMerge, 10); !sameRuns(got, want) {
 		t.Errorf("a 19-row fragment two empty rows from a 42-row line stayed separate: "+
 			"got %v, want %v", got, want)
 	}
@@ -461,7 +474,7 @@ func TestTwoRealLinesTwoRowsApartStaySeparate(t *testing.T) {
 	hist := profileOf(500, [][3]int{
 		{20, 60, 300}, {62, 102, 300}, {150, 210, 300}, {250, 310, 300}, {350, 410, 300},
 	})
-	if got := mergeRuns(runs, hist, minGapMerge); !sameRuns(got, runs) {
+	if got := mergeRuns(runs, hist, minGapMerge, 10); !sameRuns(got, runs) {
 		t.Errorf("two 40-row lines were fused on a page whose typical line is 60 -- "+
 			"the fragment ratio is no longer 2x: got %v", got)
 	}
@@ -480,7 +493,7 @@ func TestAWideGapIsALineBoundaryHoweverMuchInkItHolds(t *testing.T) {
 		{20, 60, 300}, {60, 75, 5}, {75, 115, 300},
 		{150, 210, 300}, {250, 310, 300}, {350, 410, 300},
 	})
-	if got := mergeRuns(runs, hist, minGapMerge); !sameRuns(got, runs) {
+	if got := mergeRuns(runs, hist, minGapMerge, 10); !sameRuns(got, runs) {
 		t.Errorf("a 15-row gap merged, so the size bound is not being applied: got %v", got)
 	}
 }
@@ -497,7 +510,7 @@ func TestADipBetweenEqualHalvesMergesOnInkAlone(t *testing.T) {
 		{20, 60, 300}, {60, 62, 5}, {62, 102, 300}, {150, 210, 300}, {260, 320, 300},
 	})
 	want := [][2]int{{20, 102}, {150, 210}, {260, 320}}
-	got := mergeRuns([][2]int{{20, 60}, {62, 102}, {150, 210}, {260, 320}}, hist, minGapMerge)
+	got := mergeRuns([][2]int{{20, 60}, {62, 102}, {150, 210}, {260, 320}}, hist, minGapMerge, 10)
 	if !sameRuns(got, want) {
 		t.Errorf("an ink-holding 2-row dip between two halves of a typical line did "+
 			"not merge: got %v, want %v", got, want)
@@ -533,7 +546,7 @@ func TestAMergeMayNotBuildABandPastTwiceATypicalLine(t *testing.T) {
 		{0, 62}, {63, 83},
 		{150, 190}, {210, 250}, {270, 310}, {330, 370}, {390, 430},
 	}
-	if got := mergeRuns(runs, profileOf(500, bands), minGapMerge); !sameRuns(got, want) {
+	if got := mergeRuns(runs, profileOf(500, bands), minGapMerge, 10); !sameRuns(got, want) {
 		t.Errorf("the fragment chain grew past twice a typical line -- the ceiling is "+
 			"gone: got %v, want %v", got, want)
 	}
@@ -550,17 +563,78 @@ func TestAMergeMayNotBuildABandPastTwiceATypicalLine(t *testing.T) {
 //
 // Judging against the neighbour cascades, because each merge makes the accumulated run
 // taller and the next line then looks more like a fragment. Measured on this binding's
-// 56-page corpus, that form costs 28 bands and 2.2 points more sub-0.6x fragments (1921
-// bands, 17.4%) than this one (1893, 15.2%).
+// 56-page corpus, that form costs 165 bands and 8.5 points more sub-0.6x fragments
+// (1903 bands, 17.7%) than this one (1738, 9.2%).
 func TestAFragmentIsJudgedAgainstThePageMedian(t *testing.T) {
 	runs := [][2]int{{10, 50}, {100, 142}, {144, 165}, {200, 240}, {260, 300}}
 	bands := make([][3]int, 0, len(runs))
 	for _, r := range runs {
 		bands = append(bands, [3]int{r[0], r[1], 300})
 	}
-	if got := mergeRuns(runs, profileOf(400, bands), minGapMerge); !sameRuns(got, runs) {
+	if got := mergeRuns(runs, profileOf(400, bands), minGapMerge, 10); !sameRuns(got, runs) {
 		t.Errorf("a 21-row run was fused into its 42-row neighbour on a page whose "+
 			"typical line is 40 -- the fragment test is measuring against the "+
 			"neighbour again: got %v", got)
+	}
+}
+
+// TestSpeckleDoesNotSetTheTypicalLineHeight pins two defects in one fixture, because
+// the second was found by writing the first. mergeRuns runs BEFORE the height filter,
+// so its input holds every speck the profile picked up.
+//
+//  1. Medianing over ALL runs lets noise set typical. Measured here, 470 of 2602
+//     collected runs are under MinLineH and on 2 of 56 pages that drove typical below
+//     10 -- page 1 reached 5, so the ceiling was 10 against a real line height of 27
+//     and every merge was refused. The pass switched itself off on the pages that
+//     needed it most.
+//  2. A fragment attaching to another fragment chains. Twelve 2-row specks fuse into
+//     one 46-row band, which CLEARS the height filter and is handed to the recogniser
+//     as a line.
+//
+// ASSERTING THE SPLIT PAIR MERGES IS NOT ENOUGH. That assertion alone passes with
+// defect 2 still in place -- the fragment-to-fragment mutation survived the battery
+// until the second assertion below was added. Both are needed.
+func TestSpeckleDoesNotSetTheTypicalLineHeight(t *testing.T) {
+	var bands [][3]int
+	var runs [][2]int
+	// Specks first, so they dominate the count.
+	for i := 0; i < 12; i++ {
+		y := i * 4
+		bands = append(bands, [3]int{y, y + 2, 20})
+		runs = append(runs, [2]int{y, y + 2})
+	}
+	// A split line whose halves really are halves: 24 rows, a 2-row inked dip, 24 rows,
+	// summing to the 50 an ordinary line measures here. 50 + 50 would be two whole lines
+	// by this page's own standard and the ceiling would refuse the merge for the right
+	// reason, which is not what this test is about.
+	bands = append(bands, [3]int{100, 124, 300}, [3]int{124, 126, 5}, [3]int{126, 150, 300})
+	runs = append(runs, [2]int{100, 124}, [2]int{126, 150})
+	// And three ordinary lines, so a real median exists to be found.
+	for i := 0; i < 3; i++ {
+		y := 200 + i*60
+		bands = append(bands, [3]int{y, y + 50, 300})
+		runs = append(runs, [2]int{y, y + 50})
+	}
+
+	merged := mergeRuns(runs, profileOf(700, bands), minGapMerge, 10)
+
+	joined := false
+	for _, m := range merged {
+		if m[0] == 100 && m[1] == 150 {
+			joined = true
+		}
+	}
+	if !joined {
+		t.Errorf("the split pair did not merge, so speckle set the ceiling: %v", merged)
+	}
+	fused := 0
+	for _, m := range merged {
+		if m[0] < 100 && m[1]-m[0] >= 10 {
+			fused++
+		}
+	}
+	if fused != 0 {
+		t.Errorf("speckle fused into %d band(s) tall enough to clear the height filter "+
+			"and be read as lines: %v", fused, merged)
 	}
 }

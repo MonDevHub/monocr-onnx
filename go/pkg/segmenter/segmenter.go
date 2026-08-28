@@ -230,25 +230,50 @@ func smoothProfile(hist []int, window int) []float64 {
 // value, and it is the half of the dual histogram this binding left behind: raw
 // detection needs a merge to be safe, and the raw-only change shipped without it.
 //
+// WHAT IS THE REFERENCE'S AND WHAT IS NOT. Only this constant and the ordering --
+// merge, then filter by height -- come from mon_OCR. Its merge has exactly two
+// clauses, gap at most 10 and raw minimum above zero, and its comment argues AGAINST
+// anything like the fragment clause below: "If in doubt, we keep lines SEPARATE... A
+// split diacritic-only sub-line decodes to empty or near-empty text, which is
+// harmless." Measurement falsified that premise -- a split sub-line decodes to a
+// confident run of Mon DIGITS, not to empty -- so the fragment clause and the ceiling
+// are this repository's additions, carrying this repository's evidence. An earlier
+// version of this comment called them the reference's, which borrowed authority the
+// reference declines to give.
+//
 // THIS BINDING'S OWN MEASUREMENT is in mergeRuns below. Do not substitute the Python
 // binding's or the reference's: Python calibrates on the profile MAX at ratio 0.02
 // where this takes 0.05 of the non-zero MEAN, and its default smooth window is 5
 // against this one's 3, so its threshold on this same page is 13.7 rather than 6.8.
 //
 // The figures below were measured through THIS binding and then found to equal the JS
-// binding's to the band. That is a result, not a transplant: JS shares the parameter
-// set but divides the smoother by the rows it visited rather than by the window, and
-// per smoothProfile's own header the two formulas disagree only on rows within
-// window/2 of a page edge. These renders carry blank margins, so every disagreeing row
-// is zero and both bindings compute a threshold of 6.8163 on page 9. A page cropped
-// flush to its ink would separate them.
+// binding's band-height array on every one of the 56 pages, not merely in aggregate.
+// That is a result, not a transplant: JS shares the parameter set but divides the
+// smoother by the rows it visited rather than by the window, and
+// the two formulas differ only near a page edge. Precisely -- and an earlier version
+// of this sentence got it wrong by a factor of two, offering as its justification the
+// very off-by-two smoothProfile's header exists to correct: the rows whose smoothed
+// VALUES differ are 0..overflow-1 and their mirror, but the divergence disappears only
+// once rows 0..2*overflow-1 are all zero, because those are the rows those differing
+// windows READ. The header records the measurement that settles it -- at window 3 a
+// 1-row margin still left this binding at 17.1429 against JS's 17.1607, and 2 rows
+// were needed. These renders carry 30px margins, comfortably past that, so both
+// bindings compute 6.8163 on page 9. A page cropped flush to its ink would separate
+// them.
 const minGapMerge = 10
 
 // mergeRuns fuses runs that a single sub-threshold row split apart.
 //
 // Merges runs[i] into runs[i-1] when the gap between them is at most maxGap rows AND
-// (every row in the gap carries ink OR one of the two is a fragment of a line), AND
-// the merged band stays within twice a typical line. See minGapMerge for why.
+// (every row in the gap carries ink OR one is a fragment being attached to something
+// that could BE a line), AND the merged band stays within twice a typical line. See
+// minGapMerge for why.
+//
+// minLine is the caller's minimum line height. It is needed twice, and both uses exist
+// because this function runs BEFORE the height filter and so sees every speck the
+// profile picked up: it bounds which runs may set the page's typical line height, and
+// it stops two runs that are each too short to be a line from becoming one by being
+// adjacent.
 //
 // A free function taking the profile rather than a method, so the arithmetic is
 // testable without a page, a mask or a model. It writes into a fresh slice and leaves
@@ -258,8 +283,13 @@ const minGapMerge = 10
 // ratio 0.05 of the non-zero mean), over the 56 pages of a real Mon book rendered at
 // 300 DPI:
 //
-//	no merge    2132 bands   576 under 0.6x the page median (27.0%)
-//	this merge  1893 bands   288 under 0.6x the page median (15.2%)
+//	no merge                 2132 bands   576 sub-0.6x-median (27.0%)
+//	merge, all-runs median   1893 bands   288 sub-0.6x-median (15.2%)
+//	this merge               1738 bands   160 sub-0.6x-median  (9.2%)
+//
+// The middle row is this function as first written, medianing over every run. Two of
+// the 56 pages had the merge switched off by speckle, and repairing that is most of
+// the 288 to 160 improvement.
 //
 // The sub-0.6x share is the fragment proxy, and not a metric invented here: F-69 read
 // a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of the page median,
@@ -267,15 +297,15 @@ const minGapMerge = 10
 // different column of the same table.) Each arm is scored against its OWN page
 // median above, and that could have flattered the merge, because merging raises the
 // median. It does not: scored against the unmerged arm's medians as a fixed yardstick
-// the merged count is 272 (14.4%).
+// the merged count is 121 (7.0%).
 //
 // Two things this does NOT claim. It does not remove every suspect band -- 285 of
 // F-69's 990 sub-0.6x bands were page numbers and watermarks, read correctly, which is
-// why the merge is not a thin-band filter. And the band count is not monotone: 6 of
-// the 56 pages come back with MORE bands, because a merge lifts a pair of fragments
+// why the merge is not a thin-band filter. And the band count is not monotone: 1 of
+// the 56 pages comes back with MORE bands, because a merge lifts a pair of fragments
 // that were each below MinLineH over the filter. That is content recovered, and it is
 // why the merge runs before the height filter.
-func mergeRuns(runs [][2]int, hist []int, maxGap int) [][2]int {
+func mergeRuns(runs [][2]int, hist []int, maxGap, minLine int) [][2]int {
 	if len(runs) == 0 {
 		return nil
 	}
@@ -291,12 +321,35 @@ func mergeRuns(runs [][2]int, hist []int, maxGap int) [][2]int {
 	//
 	// Measured HERE, and it holds up in this binding rather than only upstream: judging
 	// a fragment against the accumulated neighbour instead, ceiling and all, costs both
-	// metrics over the 56-page corpus -- 1921 bands and 17.4% sub-0.6x against this
-	// form's 1893 and 15.2%. The Python binding measures the two forms as near-equal,
-	// so this is not a shared result; the numbers here are this binding's own.
-	heights := make([]int, len(runs))
-	for i, r := range runs {
-		heights[i] = r[1] - r[0]
+	// metrics over the 56-page corpus -- 1903 bands and 17.7% sub-0.6x against this
+	// form's 1738 and 9.2%. The Python binding measures the same two forms only 7 bands
+	// apart, so this is not a shared result; the numbers here are this binding's own.
+	// And medianed over runs that could BE a line, not over every run. The merge
+	// deliberately runs before the height filter, so runs still holds every speckle.
+	// MEASURED HERE: 470 of 2602 collected runs are under MinLineH, 18.1%, and on 2 of
+	// the 56 corpus pages the all-runs median put typical below 10 -- page 1 reached
+	// typical 5, so the ceiling was 10 against a real line height of 27, and every
+	// merge on that page was refused. The pass switches itself OFF on exactly the pages
+	// that need it most.
+	//
+	// This binding's exposure is a THIRD of the Python binding's on the same 56 pages
+	// (18.1% of runs against 47.6%, 2 pages against 9), because 0.05 of the non-zero
+	// mean sits well above 0.02 of the profile max on these scans, so most speckle
+	// never becomes a run here at all.
+	//
+	// Falling back to the unfiltered median when nothing clears the minimum is safe
+	// rather than principled: on such a page the height filter discards everything
+	// anyway, so no crop depends on the value.
+	heights := make([]int, 0, len(runs))
+	for _, r := range runs {
+		if r[1]-r[0] >= minLine {
+			heights = append(heights, r[1]-r[0])
+		}
+	}
+	if len(heights) == 0 {
+		for _, r := range runs {
+			heights = append(heights, r[1]-r[0])
+		}
 	}
 	sort.Ints(heights)
 	typical := heights[len(heights)/2]
@@ -309,10 +362,12 @@ func mergeRuns(runs [][2]int, hist []int, maxGap int) [][2]int {
 	// runaway band costs a whole page. Twice rather than tighter because a legitimate
 	// merge of two halves lands at about one typical line and must not be refused.
 	//
-	// Measured here: over the 56-page corpus, dropping it takes 1893 bands down to
-	// 1670 -- 223 bands, 12%, swallowed into chains of merges. The sub-0.6x share even
-	// IMPROVES to 12.8% while that happens, which is the reason a fragment-share metric
-	// cannot be the only one watched.
+	// Measured here: over the 56-page corpus, dropping it takes 1738 bands down to
+	// 1614 -- 124 bands, 7%, swallowed into chains of merges. The sub-0.6x share moves
+	// to 10.3%, worse on this metric as well as on the count, which is the clearest form
+	// the argument takes: before the height-filtered median above, the same mutation
+	// IMPROVED the share (15.2% to 12.8%) while destroying 223 bands, and a
+	// fragment-share metric watched alone would have called that progress.
 	ceiling := typical * 2
 
 	merged := make([][2]int, 0, len(runs))
@@ -345,7 +400,14 @@ func mergeRuns(runs [][2]int, hist []int, maxGap int) [][2]int {
 			// line by this test, so they stay apart -- which is what a vertical smear
 			// could not do, because at reach 1 it closes 2-row gaps and 2 rows is the
 			// tightest real line spacing.
-			fragment := 2*(r[1]-r[0]) <= typical || 2*(last[1]-last[0]) <= typical
+			// A fragment attaches to a LINE, never to another fragment. Without the
+			// second half of this, a run of speckle merges with itself: measured on a
+			// 12-speck fixture, twelve 2-row specks fused into one 46-row band, which
+			// then CLEARS the height filter and is handed to the recogniser as a line.
+			// Two pieces that are both too short to be a line do not become one by
+			// being adjacent.
+			ha, hb := last[1]-last[0], r[1]-r[0]
+			fragment := 2*min(ha, hb) <= typical && max(ha, hb) >= minLine
 
 			if gapSize <= maxGap && (gapHasInk || fragment) && r[1]-last[0] <= ceiling {
 				last[1] = r[1]
@@ -482,7 +544,7 @@ func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
 	// The order is the reference's and it matters: a diacritic strip can be shorter than
 	// MinLineH, and filtering first would discard the strip and leave the decapitated
 	// body behind as a whole line.
-	for _, r := range mergeRuns(runs, hist, minGapMerge) {
+	for _, r := range mergeRuns(runs, hist, minGapMerge, s.MinLineH) {
 		if r[1]-r[0] >= s.MinLineH {
 			s.extractLine(img, bounds, mask, r[0], r[1], &results)
 		}
