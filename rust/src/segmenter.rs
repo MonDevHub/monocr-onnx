@@ -1438,6 +1438,78 @@ mod tests {
         );
     }
 
+    /// The ceiling, isolated: every other clause says merge and only the height
+    /// cap refuses.
+    ///
+    /// Two 60-row runs two rows apart with ink in the gap, on a page whose typical
+    /// run is 60. `gap_size` is inside the bound, `gap_has_ink` is true, so without
+    /// the cap this merges. The merged span would be 122 against a ceiling of 120.
+    #[test]
+    fn no_merge_may_exceed_twice_a_typical_line() {
+        let mut hist = vec![0f32; 400];
+        hist[20..80].fill(300.0);
+        hist[80..82].fill(5.0); // ink in the gap: the ink clause would merge
+        hist[82..142].fill(300.0);
+        hist[200..260].fill(300.0);
+        hist[300..360].fill(300.0);
+        let runs = [
+            (20u32, 80u32),
+            (82u32, 142u32),
+            (200u32, 260u32),
+            (300u32, 360u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE),
+            vec![(20, 80), (82, 142), (200, 260), (300, 360)],
+            "a merge produced a band taller than twice a typical line"
+        );
+    }
+
+    /// The cascade the page median exists to prevent.
+    ///
+    /// Judging a fragment against the NEIGHBOUR's height snowballs: the merge
+    /// mutates the accumulated run, and a taller accumulation makes the next line
+    /// look more like a fragment. Measured on real input before this was fixed —
+    /// one page went from 36 bands to 10, with single bands of 534, 632 and 732
+    /// rows, and lost 92% of its readable characters.
+    ///
+    /// Here a chain of runs each two rows from the next, with ink throughout, must
+    /// not collapse into one band. The assertion is on the property rather than an
+    /// exact list, because what matters is that nothing runs away.
+    #[test]
+    fn merging_does_not_cascade_down_a_page() {
+        // One run is 100 rows and the rest 50, so the page MEDIAN is 50 while its
+        // MAX is 100. That difference is the test: with the median, `typical` is 50
+        // and the ceiling 100, so the first merge would reach 102 and is refused.
+        // Read `typical` off the max instead and the ceiling doubles to 200, the
+        // fragment clause starts firing on every 50-row line, and the chain
+        // collapses. A fixture of equal-height runs cannot see that at all — the
+        // median and the max are the same number — which is how this survived a
+        // battery once.
+        let mut hist = vec![0f32; 700];
+        let mut runs = Vec::new();
+        let mut y = 20u32;
+        for i in 0..8 {
+            let h = if i == 3 { 100 } else { 50 };
+            hist[y as usize..(y + h) as usize].fill(300.0);
+            hist[(y + h) as usize..(y + h + 2) as usize].fill(5.0); // ink in every gap
+            runs.push((y, y + h));
+            y += h + 2;
+        }
+        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE);
+        let tallest = merged.iter().map(|&(a, b)| b - a).max().unwrap();
+        assert!(
+            tallest <= 100,
+            "a chain of 50-row runs collapsed into a band {tallest} rows tall, so \
+             the merge is cascading"
+        );
+        assert!(
+            merged.len() >= 4,
+            "8 runs became {} bands, so the merge is cascading",
+            merged.len()
+        );
+    }
+
     /// The merge must be reached THROUGH `segment_image`, not only unit-tested.
     ///
     /// Added after a mutation that deleted the `merge_runs` call from the pipeline
@@ -1496,21 +1568,31 @@ mod tests {
         // nothing but two halves is degenerate — there is no evidence in it that
         // they are halves rather than two short lines, and an earlier version of
         // this test asserted a merge the code had no grounds to make.
+        // The companion lines are 60 rows, not 82, and the arithmetic is the whole
+        // point of the test. Median run height is 60, so `2 * 40 > 60` and the
+        // FRAGMENT clause is false — only `gap_has_ink` can merge this pair, and
+        // the merged 82 rows still fit the 120-row ceiling.
+        //
+        // At 82-row companions, which is what this fixture held until 2026-08-28,
+        // the median rose to 82, `2 * 40 <= 82` fired, and dropping the ink clause
+        // left the test passing. It was written to isolate one clause and silently
+        // stopped doing so when the fixture changed to satisfy the ceiling, and the
+        // mutation battery was not re-run afterwards. Found by a sibling port.
         let mut hist = vec![0f32; 400];
         hist[20..60].fill(300.0);
         hist[60..62].fill(5.0); // two rows of ink: below any threshold, above zero
         hist[62..102].fill(300.0);
-        hist[150..232].fill(300.0);
-        hist[260..342].fill(300.0);
+        hist[150..210].fill(300.0);
+        hist[260..320].fill(300.0);
         let runs = [
             (20u32, 60u32),
             (62u32, 102u32),
-            (150u32, 232u32),
-            (260u32, 342u32),
+            (150u32, 210u32),
+            (260u32, 320u32),
         ];
         assert_eq!(
             merge_runs(&runs, &hist, MIN_GAP_MERGE),
-            vec![(20, 102), (150, 232), (260, 342)],
+            vec![(20, 102), (150, 210), (260, 320)],
             "an ink-holding 2-row dip between two halves of a typical line did \
              not merge"
         );
@@ -1553,13 +1635,28 @@ mod tests {
     fn two_real_lines_two_rows_apart_stay_separate() {
         // The case the fragment clause must NOT swallow, and the reason it is a
         // ratio: same gap, same emptiness, but both runs are full height.
-        let mut hist = vec![0f32; 200];
+        // 60-row companions so the FRAGMENT test is the only thing refusing this.
+        // Median 60, ceiling 120, merged span 82 — inside the ceiling. The gap holds
+        // no ink, so `gap_has_ink` is false. `2 * 40 > 60`, so `fragment` is false
+        // and the pair stays apart for that reason alone.
+        //
+        // Without the companions the ceiling refused it independently (median 40,
+        // ceiling 80, merged 82), so loosening the fragment ratio from 2x to 1x
+        // left this test passing.
+        let mut hist = vec![0f32; 400];
         hist[20..60].fill(300.0);
         hist[62..102].fill(300.0);
-        let runs = [(20u32, 60u32), (62u32, 102u32)];
+        hist[180..240].fill(300.0);
+        hist[280..340].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (62u32, 102u32),
+            (180u32, 240u32),
+            (280u32, 340u32),
+        ];
         assert_eq!(
             merge_runs(&runs, &hist, MIN_GAP_MERGE),
-            vec![(20, 60), (62, 102)],
+            vec![(20, 60), (62, 102), (180, 240), (280, 340)],
             "two 40-row lines were fused, which is what SMEAR_Y would have done"
         );
     }
@@ -1569,14 +1666,30 @@ mod tests {
         // The size bound on its own. Overlapping diacritics can hold the raw
         // profile above zero right across real inter-line spacing; upstream that
         // collapsed 3 PDF lines into 1.
-        let mut hist = vec![0f32; 200];
+        // Companions at 60 rows so the SIZE BOUND is the only thing refusing this
+        // merge. Median 60, ceiling 120, and the merged span would be 95 — inside
+        // the ceiling. `2 * 40 > 60`, so the fragment clause is false. The gap
+        // holds ink throughout, so `gap_has_ink` is true and WOULD merge. Only
+        // `gap_size <= max_gap` stands in the way.
+        //
+        // Without the companions the ceiling refused it independently (median 40,
+        // ceiling 80, merged 95), so removing the size bound left this test
+        // passing and its coverage came incidentally from an unrelated test.
+        let mut hist = vec![0f32; 400];
         hist[20..60].fill(300.0);
         hist[60..75].fill(5.0); // 15 rows of ink between two lines
         hist[75..115].fill(300.0);
-        let runs = [(20u32, 60u32), (75u32, 115u32)];
+        hist[180..240].fill(300.0);
+        hist[280..340].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (75u32, 115u32),
+            (180u32, 240u32),
+            (280u32, 340u32),
+        ];
         assert_eq!(
             merge_runs(&runs, &hist, MIN_GAP_MERGE),
-            vec![(20, 60), (75, 115)],
+            vec![(20, 60), (75, 115), (180, 240), (280, 340)],
             "a 15-row gap merged, so the size bound is not being applied"
         );
     }
