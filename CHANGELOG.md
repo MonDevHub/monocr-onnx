@@ -21,12 +21,25 @@ the published tarball and wheel, not inferred:
 | input width | 1024 | 1024, static |
 | charset | **225 characters** | **276 characters** |
 | output classes | — | 277 (276 + CTC blank at 0) |
-| normalisation | `pixel / 255` | `pixel / 127.5 - 1.0` |
+| normalisation | `pixel / 255` (Python only; the JS binding already did `/127.5 - 1.0`) | `pixel / 127.5 - 1.0` |
 | model revision | pre-v3.5 | `d3d9d5e` |
 
 A 225-character charset against a 277-class graph shifts every decoded index, so
 0.1.x does not merely score worse — it returns the wrong characters. There is no
 compatibility shim and there should not be one: the two are different models.
+
+Two corrections to the first version of this entry, both measured from the
+published artifacts rather than assumed:
+
+- The `/255` normalisation is **Python-only**. npm `monocr@0.1.5` already computed
+  `(pixel / 127.5) - 1.0` (`src/monocr.js:83`). Saying both bindings shared the
+  old formula was wrong; only the geometry and the charset were common to them.
+- The runtime charset in 0.1.x is **224**, not the 225 the file contains. Both
+  bindings load it with a bare strip — `f.read().strip()` in `predictor.py:20`
+  and `.trim()` in `monocr.js:36` — and the charset's first character is U+0020, a
+  class the model emits. Measured on the shipped file: 225 raw, 225 after
+  stripping only line terminators, **224** after a bare strip. That is a second,
+  independent index shift on top of the wrong charset size.
 
 `0.2.0` and `0.2.1` were tagged (`go/v0.2.0`, `js/v0.2.1`, `python/v0.2.1`) and
 never released to npm or PyPI. Nothing is skipped by going straight to 0.3.0;
@@ -67,10 +80,14 @@ charset file and never calls a bare `trim`.
   Rust, Go and JavaScript hardcode 1024. A re-export at a different width would
   fail with an opaque shape error from inside ONNX Runtime rather than a named
   contract error.
-- The Rust crate has never been published to crates.io. `cargo test` could not be
-  run on the release machine — a linker limitation, not a code one — so the Rust
-  binding ships verified by `cargo check --all-targets`, `cargo clippy` and
-  `cargo fmt` only.
+- The Rust crate has never been published to crates.io.
+- **Correction:** this entry first said `cargo test` "could not be run on the
+  release machine — a linker limitation". It can. Command Line Tools 21 removed
+  the clang 17 directory the linker searches while the runtime sits in the clang
+  21 one, so
+  `RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin"`
+  runs the whole suite: 28 lib tests and 14 doc-tests, 0 failures. The binding is
+  verified by execution, not only by `cargo check` and `clippy`.
 
 ## 0.2.1 — 2026-08-16 (tagged, never released)
 
@@ -81,5 +98,7 @@ charset 315 → 276 characters, 316 → 277 classes. Released for Go only.
 
 ## 0.1.5 and earlier — 2026-02
 
-The 64-pixel-height generation, 225-character charset, `pixel / 255`
-normalisation. Live on npm and PyPI until this release.
+The 64-pixel-height generation and the 225-character charset (224 at runtime,
+after a bare strip eats the leading U+0020). `pixel / 255` in the Python binding;
+the JS binding already used `pixel / 127.5 - 1.0`. Live on npm and PyPI until
+this release.

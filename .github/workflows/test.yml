@@ -123,20 +123,55 @@ jobs:
       # steps in both release workflows already echo their own output back as an
       # ::error:: for exactly this reason; this job was the one that did not.
       #
-      # It matters more here than elsewhere because these tests do not run on a
-      # macOS dev machine by default. Command Line Tools 21 removed the clang 17
-      # path the linker searches, so `cargo test` fails locally with
-      # `ld: library 'clang_rt.osx' not found` before running anything. The
-      # runtime is present, just under a different version directory:
+      # The annotation worked, and what it showed corrects what used to be written
+      # here. This block said "whatever fails here is specific to this job and
+      # cannot be reproduced on a Mac". Both halves were wrong.
+      #
+      # Four tests panic in segmenter.rs:
+      #
+      #   cannot read the shared tiling fixture at
+      #   <manifest>/../../monocr-monorepo/shared/segmentation-fixtures/tiling-cases.json
+      #
+      # `fixture_path()` resolves a SIBLING REPOSITORY. It passes on a dev machine
+      # only because monocr-monorepo happens to be checked out beside this one, and
+      # it can never resolve on a runner. Not job-specific, and reproducible
+      # anywhere the sibling is absent — which is everywhere except one laptop.
+      # It has been red since 2026-08-22 (ae4e9ed), not since the merges of the
+      # 27th; the merge only carried it to main.
+      #
+      # Fixed by checking the fixture out and pointing MONOCR_TILING_FIXTURE at it,
+      # not by vendoring a copy. A copy is the exact drift the shared fixture
+      # exists to prevent — it is generated from the Python implementation and read
+      # by the web, Android and iOS ports too. MonDevHub/monocr is public, so no
+      # token is needed. The FIXTURE_ENV escape hatch already existed in
+      # segmenter.rs; nothing had ever set it.
+      #
+      # Separately, and still true: these tests do not run on a macOS dev machine
+      # by default. Command Line Tools 21 removed the clang 17 path the linker
+      # searches, so `cargo test` fails with `ld: library 'clang_rt.osx' not found`
+      # before running anything. The runtime is present under the current version
+      # directory:
       #
       #   RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin" \
       #     cargo test
       #
-      # With that set the full suite passes locally (28 lib + 14 doc-tests), so
-      # whatever fails here is specific to this job and cannot be reproduced on a
-      # Mac. Until this annotation lands, nobody without admin can see what.
+      # With that set the full suite passes locally (28 lib + 14 doc-tests). That
+      # is a real and unrelated issue; it is not why this job was red.
+      - name: Fetch the shared segmentation fixture
+        uses: actions/checkout@v4
+        with:
+          repository: MonDevHub/monocr
+          path: .fixtures-monorepo
+          sparse-checkout: shared/segmentation-fixtures
+          sparse-checkout-cone-mode: false
       - name: Run tests
+        env:
+          MONOCR_TILING_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/tiling-cases.json
         run: |
+          test -f "$MONOCR_TILING_FIXTURE" || {
+            echo "::error title=Shared fixture missing::$MONOCR_TILING_FIXTURE was not checked out"
+            exit 1
+          }
           cd rust
           set +e
           output="$(cargo test 2>&1)"
