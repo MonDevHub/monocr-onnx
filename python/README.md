@@ -4,11 +4,13 @@ The official Python SDK for Mon language OCR, powered by ONNX Runtime. Optimized
 
 ## Installation
 
-> **Pin 0.3.0 or newer.** The 0.1.x releases on PyPI target a superseded model —
-> 64px input height, a 225-character charset, `pixel / 255` normalisation — and a
-> charset that size against a 277-class graph returns the wrong characters rather
-> than merely worse ones. The version bound below is what makes the mismatch an
-> install error instead of silently wrong output. See `CHANGELOG.md`.
+> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
+> tagged but not published; the bound below fails loudly rather than installing
+> 0.1.0, which targets a superseded model (64px input height, a 225-character
+> charset against a 277-class graph) and returns wrong characters rather than
+> merely worse ones. Until the publish step runs, install from source:
+> `pip install git+https://github.com/MonDevHub/monocr-onnx.git#subdirectory=python`.
+> See `CHANGELOG.md` and `RELEASING.md`.
 
 ```bash
 pip install "monocr-onnx>=0.3.0"

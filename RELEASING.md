@@ -30,9 +30,22 @@ cd ../python && .venv/bin/python3 -m pytest -q
 cd ../rust && cargo fmt --check && cargo check --all-targets && cargo clippy --all-targets
 ```
 
-`cargo test` cannot link on macOS with Command Line Tools only (`ld: library
-'clang_rt.osx' not found`). If it does not run, say so in the release notes rather
-than implying Rust was tested.
+`cargo test` fails to link on macOS with `ld: library 'clang_rt.osx' not found`.
+This is **not** a missing-Xcode problem and it is fixable: Command Line Tools 21
+removed the clang 17 directory the linker searches, while the runtime itself is
+present under the current version. Point at it:
+
+```bash
+export RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin"
+cargo test        # 28 lib tests + 14 doc-tests
+```
+
+Adjust `21` to whatever `ls /Library/Developer/CommandLineTools/usr/lib/clang/`
+reports. Earlier releases recorded the Rust binding as "unverified by execution"
+on the strength of this error; that was avoidable.
+
+If it still does not run, say so in the release notes rather than implying Rust
+was tested.
 
 ## 2. Build
 

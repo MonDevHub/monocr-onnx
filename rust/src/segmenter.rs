@@ -163,6 +163,245 @@ struct BinarizedPage<'a> {
     binary: &'a [u8],
 }
 
+/// A printed rule -- a page border, a table rule, an underline -- spans at least
+/// this fraction of the page in one direction.
+///
+/// Deliberately coarse: no Mon, Burmese or Latin glyph holds an unbroken stroke
+/// half a page long, so the false-positive risk against text is structural
+/// rather than merely small. Lowering it toward a glyph's width is what would
+/// make rule suppression dangerous.
+const RULE_SPAN: f64 = 0.5;
+
+/// A rule must span at least this many pixels whatever [`RULE_SPAN`] works out
+/// to. On a 20px-wide crop `width * RULE_SPAN` is 10px, which a single character
+/// can reach; the floor is what keeps the span out of glyph range on small
+/// crops.
+const RULE_MIN_SPAN_PX: usize = 15;
+
+/// Suppression that would remove more than this share of the page's ink has
+/// found text, not rules, and is abandoned.
+///
+/// [`RULE_SPAN`] is a fraction of the page, so on a SHORT page a tall block of
+/// text can exceed it vertically and be deleted wholesale. Upstream that was not
+/// hypothetical: without this guard an existing test -- six 30px bands touching
+/// on a 200px page, so each glyph column is 180px of unbroken ink -- lost 98.7%
+/// of its ink and returned zero lines.
+///
+/// The threshold sits in a measured gap rather than being a round number: real
+/// framed pages classify 21.5%-58.8% of their ink as rules, every page carrying
+/// no rules 0.00%, and that false positive 98.7%. 1.36x above the worst
+/// legitimate case and 1.23x below the true positive.
+const RULE_MAX_INK_SHARE: f64 = 0.80;
+
+/// Two runs separated by at most this many rows are one text line, provided the
+/// raw profile never reaches zero inside the gap.
+///
+/// WHY THIS EXISTS, measured 2026-08-28 on a 300 DPI render of a real Mon page.
+/// Detecting boundaries on the raw profile splits a single line wherever one row
+/// dips below the gap threshold, and in Mon that happens between the upper
+/// diacritic zone and the consonant bodies. On the measured page the line spanned
+/// rows 260-324, the threshold was `0.05 * 139.9 = 7.0`, and **row 280 carried 6
+/// ink pixels** — one pixel under, one row wide. That split every line on the page
+/// into a 28px strip of glyph tops, which decoded to `0069...` because a row of
+/// circle-tops IS digits, and a decapitated 52px body, which decoded missing its
+/// asats because the asat went with the strip.
+///
+/// A 1-row gap holding ink is not a line boundary at any resolution. This is the
+/// reference's rule (`mon_OCR` `_MIN_GAP_MERGE`, `segmenter.py` step 8), ported
+/// with its value, and it is the half of the dual histogram the ports left behind:
+/// raw detection needs a merge to be safe, and every port took the first without
+/// the second.
+///
+/// The two clauses do different jobs. The size bound refuses to merge real
+/// inter-line spacing even when overlapping diacritics hold the raw profile above
+/// zero across it — upstream that unmerged case collapsed 3 PDF lines into 1. The
+/// zero test refuses to merge across a genuine clean break, which always has at
+/// least one empty row.
+const MIN_GAP_MERGE: u32 = 10;
+
+/// Fuse runs that a single sub-threshold row split apart.
+///
+/// Merges `runs[i]` into `runs[i-1]` when the gap between them is at most
+/// `max_gap` rows AND every row in the gap carries ink. See [`MIN_GAP_MERGE`] for
+/// why, and for the measurement.
+///
+/// A free function taking the profile rather than a method, so the arithmetic is
+/// testable without a page, a mask or a model.
+fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32, min_line: u32) -> Vec<(u32, u32)> {
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    // The page's own typical line height, from the runs as detected. Both tests
+    // below are relative to this rather than to the neighbouring run, and that is
+    // a correction rather than a preference: judging a fragment against its
+    // neighbour CASCADES. The merge mutates the accumulated run, so every merge
+    // makes it taller, and a taller run makes the next line look more like a
+    // fragment. Measured 2026-08-28 on page 47 of a 56-page book: 36 bands
+    // collapsed to 10, with single bands of 534, 632 and 732 rows holding a dozen
+    // text lines each, and the page lost 92% of its readable characters.
+    // Median over runs that could BE a line, not over every run.
+    //
+    // The merge deliberately runs before the height filter, so `runs` still holds
+    // every speckle the profile picked up. Medianing over all of them lets noise
+    // decide what a typical line is, and on a heavily speckled scan the noise
+    // wins: measured on a sibling port, 30% of collected runs were under the
+    // minimum, and on 8 of 55 pages that drove `typical` below 10 — one page
+    // reached `typical` 2 and a ceiling of 4, against a real line height of 35. The
+    // ceiling then refuses every merge, so the pass switches itself off on exactly
+    // the pages that need it most.
+    //
+    // Falling back to the unfiltered median when nothing clears the minimum is
+    // safe rather than principled: on such a page the height filter discards
+    // everything anyway, so no crop depends on the value.
+    let mut heights: Vec<u32> = runs
+        .iter()
+        .map(|&(a, b)| b - a)
+        .filter(|&h| h >= min_line)
+        .collect();
+    if heights.is_empty() {
+        heights = runs.iter().map(|&(a, b)| b - a).collect();
+    }
+    heights.sort_unstable();
+    let typical = heights[heights.len() / 2].max(1);
+
+    // No merge may produce a band more than twice a typical line. This is the
+    // backstop for the cascade above: the fragment test alone cannot bound the
+    // result, and one runaway band costs a whole page. Twice rather than tighter
+    // because a legitimate merge of two halves lands at about one typical line and
+    // must not be refused; the value is the loosest one that still stopped page
+    // 47, checked by re-measuring all 56 pages rather than by argument.
+    let ceiling = typical * 2;
+
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(runs.len());
+    for &(r0, r1) in runs {
+        if let Some(last) = merged.last_mut() {
+            let gap_start = last.1;
+            let gap_size = r0.saturating_sub(gap_start);
+            // An empty gap cannot occur from the run collector, but a caller can
+            // hand us touching runs; treat those as already one line.
+            let gap_has_ink =
+                (gap_start..r0).all(|y| hist.get(y as usize).is_some_and(|&v| v > 0.0));
+
+            // A run at most half a typical line is a fragment of a line, not a
+            // line. This is the clause that crosses a gap of genuinely ZERO ink,
+            // which `gap_has_ink` refuses and which a floating Mon diacritic
+            // produces: measured, runs `341-360` and `362-404` are the upper marks
+            // and the body of one line separated by two empty rows. Two REAL lines
+            // two rows apart are each a full line by this test, so they stay apart.
+            // A fragment attaches to a LINE, never to another fragment. Without the
+            // second half of this, a run of speckle merges with itself: measured on
+            // a 12-speck fixture, twelve 2-row specks fused into one 46-row band,
+            // which then CLEARS the height filter and is sent to the recogniser as
+            // a line. Two pieces that are both too short to be a line do not become
+            // one by being adjacent.
+            let (ha, hb) = (last.1 - last.0, r1 - r0);
+            let fragment = 2 * ha.min(hb) <= typical && ha.max(hb) >= min_line;
+
+            if gap_size <= max_gap && (gap_has_ink || fragment) && r1 - last.0 <= ceiling {
+                last.1 = r1;
+                continue;
+            }
+        }
+        merged.push((r0, r1));
+    }
+    merged
+}
+
+/// Zero out printed rules in `mask` (1 = ink), in place, and report whether
+/// anything was removed.
+///
+/// A printed page border adds a constant ink floor to every row it spans, and
+/// once that floor clears the gap threshold no in-frame row reads as a gap: the
+/// page comes back as one band and is squeezed into the model window. Nothing
+/// downstream can recover from that, because the line was never found.
+///
+/// MEASURED WITH THIS PARAMETER SET (global threshold 128, no smear, smoothing
+/// 3, ratio 0.05 of the mean) over twelve real MNEC page-ones: nine collapse to
+/// three bands or fewer, and the twelve together go from 118 bands to 215. Pages
+/// carrying no rules come back byte-identical.
+///
+/// A run-length scan rather than a generic erode-then-dilate: opening with a 1xL
+/// line kernel keeps exactly those ink runs at least L long, which one sweep per
+/// axis computes directly. That is the form `js/src/segmenter.js` and
+/// `go/pkg/segmenter/segmenter.go` use; the reference
+/// (`mon_OCR/src/monocr/segmenter.py` `_suppress_page_rules`) reaches the same
+/// answer with `cv2.morphologyEx`, and the shared fixture
+/// `monocr-monorepo/shared/segmentation-fixtures/rule-cases.json` is what holds
+/// the four together.
+///
+/// There is deliberately NO thickness test. "A rule is long AND thin" was
+/// written, measured and deleted upstream: across twelve real pages the rule
+/// pixels found with a thickness limit and with none were identical to the
+/// pixel.
+fn suppress_page_rules(mask: &mut [u8], width: u32, height: u32) -> bool {
+    let (w, h) = (width as usize, height as usize);
+    // A mask shorter than its own stated dimensions cannot be indexed safely,
+    // and guessing at the real shape would corrupt a page rather than skip it.
+    if w == 0 || h == 0 || mask.len() < w * h {
+        return false;
+    }
+
+    // `as usize` truncates toward zero, matching Python's `int()` and Go's
+    // `int()`, so all four ports pick the same span on an odd page width. The
+    // fixture's "odd width, run at the truncated span" case is what pins it.
+    let min_h = ((width as f64 * RULE_SPAN) as usize).max(RULE_MIN_SPAN_PX);
+    let min_v = ((height as f64 * RULE_SPAN) as usize).max(RULE_MIN_SPAN_PX);
+
+    // Rules are collected into a separate plane and only subtracted at the end.
+    // Clearing them as they are found would let the horizontal sweep break a
+    // vertical rule before the vertical sweep ever sees it, which is
+    // order-dependent and silently loses one axis.
+    let mut rules = vec![0u8; w * h];
+
+    for y in 0..h {
+        let row = y * w;
+        let mut start = 0usize;
+        // The extra step past the end closes a run that reaches the edge; a
+        // border is exactly that run, so stopping at `w` would miss every
+        // full-width rule.
+        for x in 0..=w {
+            if x < w && mask[row + x] != 0 {
+                continue;
+            }
+            if x - start >= min_h {
+                rules[row + start..row + x].fill(1);
+            }
+            start = x + 1;
+        }
+    }
+    for x in 0..w {
+        let mut start = 0usize;
+        for y in 0..=h {
+            if y < h && mask[y * w + x] != 0 {
+                continue;
+            }
+            if y - start >= min_v {
+                for i in start..y {
+                    rules[i * w + x] = 1;
+                }
+            }
+            start = y + 1;
+        }
+    }
+
+    let ink = mask[..w * h].iter().filter(|&&v| v != 0).count();
+    let rule_ink = rules.iter().filter(|&&v| v != 0).count();
+    if ink == 0 || rule_ink == 0 || rule_ink as f64 > ink as f64 * RULE_MAX_INK_SHARE {
+        // Found the text. Leaving the page alone is strictly better than
+        // emptying it, and the caller is no worse off than before this step
+        // existed.
+        return false;
+    }
+
+    for (cell, &rule) in mask.iter_mut().zip(rules.iter()) {
+        if rule != 0 {
+            *cell = 0;
+        }
+    }
+    true
+}
+
 /// Line segmenter using horizontal projection profile
 ///
 /// This segmenter detects text lines in a document image by analyzing the
@@ -171,10 +410,12 @@ struct BinarizedPage<'a> {
 /// # Algorithm
 ///
 /// 1. Convert image to grayscale and binarize (threshold at 128)
-/// 2. Compute horizontal projection profile (sum of dark pixels per row)
-/// 3. Apply smoothing to reduce noise
-/// 4. Find gaps between text regions (where projection is near zero)
-/// 5. Extract each text region as a separate line
+/// 2. Suppress printed rules — page borders, table rules, underlines — so their
+///    ink floor cannot hide every gap; see `suppress_page_rules`
+/// 3. Compute horizontal projection profile (sum of dark pixels per row)
+/// 4. Apply smoothing to reduce noise
+/// 5. Find gaps between text regions (where projection is near zero)
+/// 6. Extract each text region as a separate line
 ///
 /// # Parameters
 ///
@@ -263,22 +504,51 @@ impl LineSegmenter {
     /// # Algorithm Details
     ///
     /// 1. **Binarization**: Convert to grayscale and threshold at 128 (pixels < 128 are text)
-    /// 2. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
-    /// 3. **Smoothing**: Apply moving average filter if smooth_window > 1
-    /// 4. **Gap Detection**: Find gaps where projection is below
-    ///    `density_threshold_ratio` of the mean non-empty row density
-    ///    (default 5%)
-    /// 5. **Line Extraction**: Extract each region between gaps as a separate line
-    /// 6. **Padding**: Add 4-pixel padding around each line for edge character capture
+    /// 2. **Rule suppression**: Remove printed rules, so a page border cannot
+    ///    fuse the whole page into one band (`suppress_page_rules`)
+    /// 3. **Projection**: Compute horizontal projection profile (sum of text pixels per row)
+    /// 4. **Smoothing**: Apply moving average filter if smooth_window > 1
+    /// 5. **Gap Detection**: Find gaps where the RAW projection is below
+    ///    `density_threshold_ratio` of the SMOOTHED profile's mean non-empty row
+    ///    density (default 5%). The two profiles are deliberately different: the
+    ///    smoothed mean is the steadier calibration, and the raw profile is the
+    ///    only one that still reaches zero between tightly set lines
+    /// 6. **Line Extraction**: Extract each region between gaps as a separate line
+    /// 7. **Padding**: Add 4-pixel padding around each line for edge character capture
+    ///
+    /// # Polarity
+    ///
+    /// The threshold treats dark as ink, so a light-on-dark page must be
+    /// inverted before it reaches here or the BACKGROUND is what gets segmented.
+    /// [`crate::normalize_polarity`] is that step and `MonOcr::predict_page`
+    /// runs it. This method does not, because it is also the entry point for a
+    /// caller who has already corrected polarity.
     pub fn segment(&self, image_path: impl AsRef<Path>) -> Result<Vec<LineSegment>> {
-        let image_path = image_path.as_ref();
-        let img = image::open(image_path)?;
-        let gray_img = img.to_luma8();
+        let img = image::open(image_path.as_ref())?;
+        self.segment_image(&img.to_luma8())
+    }
+
+    /// Segment an image that is already decoded and grayscale.
+    ///
+    /// The path-taking [`Self::segment`] is a thin wrapper over this. The split
+    /// exists because polarity has to be corrected BEFORE segmentation — the
+    /// threshold below treats dark as ink, so a light-on-dark page segments the
+    /// BACKGROUND and returns the gaps between lines — and the caller doing that
+    /// correction is holding an image, not a path. `go/monocr.go`'s
+    /// `predictImage` and `js/src/monocr.js`'s `normalizePageForSegmentation`
+    /// are the same arrangement.
+    pub fn segment_image(&self, gray_img: &GrayImage) -> Result<Vec<LineSegment>> {
         let (width, height) = gray_img.dimensions();
 
         // 1. Get grayscale data and apply threshold
+        //
+        // The mask is materialised before the profile, and the profile is
+        // counted from the mask afterwards rather than in this loop, because
+        // rule suppression needs the 2-D shape of the ink: a per-row count
+        // cannot express "is there an unbroken run this long". Folding the two
+        // back together is what would silently compute the profile from the
+        // unsuppressed page.
         let mut binary = vec![0u8; (width * height) as usize];
-        let mut hist = vec![0f32; height as usize];
 
         for y in 0..height {
             for x in 0..width {
@@ -287,16 +557,42 @@ impl LineSegmenter {
                 // Threshold: 128, inverted so text is high (1)
                 if pixel[0] < 128 {
                     binary[idx] = 1;
+                }
+            }
+        }
+
+        // 1.5 Printed-rule suppression, before the profile.
+        //
+        // See `suppress_page_rules` for what a page border costs: its ink floor
+        // clears the gap threshold on every row it spans, and at THIS parameter
+        // set the twelve measured MNEC pages went from 118 bands to 215. It also
+        // runs before `extract_line` reads the mask for column extents, so
+        // removing rules here keeps the border out of the crops too.
+        //
+        // The character-count figure quoted in the Python binding (3,846 to
+        // 5,924) belongs to the reference's adaptive threshold and smear, not to
+        // this one, so it is not repeated here.
+        suppress_page_rules(&mut binary, width, height);
+
+        let mut hist = vec![0f32; height as usize];
+        for y in 0..height {
+            let row = (y * width) as usize;
+            for x in 0..width as usize {
+                if binary[row + x] != 0 {
                     hist[y as usize] += 1.0;
                 }
             }
         }
 
         // 2. Smooth projection profile
+        //
+        // `hist` is kept alive because the two profiles have different jobs: the
+        // threshold below is calibrated on the smoothed one, the boundaries are
+        // detected on the raw one. See step 4 for why.
         let smoothed_hist = if self.smooth_window > 1 {
             self.smooth_histogram(&hist)
         } else {
-            hist
+            hist.clone()
         };
 
         // 3. Gap detection
@@ -315,33 +611,67 @@ impl LineSegmenter {
 
         // 4. Find line regions
         let page = BinarizedPage {
-            gray: &gray_img,
+            gray: gray_img,
             binary: &binary,
         };
         let mut results = Vec::new();
+        let mut runs: Vec<(u32, u32)> = Vec::new();
         let mut start: Option<u32> = None;
 
         for y in 0..height {
-            let is_text = smoothed_hist[y as usize] > gap_threshold;
+            // Boundaries come off the RAW profile, not the smoothed one.
+            //
+            // The threshold above stays calibrated on the smoothed profile,
+            // because its non-zero mean is steadier. But the smoother averages
+            // several rows together, so a gap narrower than its span never
+            // reaches zero in the smoothed profile: the ink either side bleeds
+            // into it, the bled rows clear the threshold, and the two lines
+            // fuse. The raw profile needs one clean row.
+            //
+            // Measured HERE, at this port's own parameters (min_line_height 10,
+            // density_threshold_ratio 0.05) on 29 drawn bands, driving the
+            // pre-fix form that read boundaries off the smoothed profile. First
+            // gap that returned all 29 bands, by `smooth_window` 1 to 12:
+            //
+            //     1 3 3 5 5 7 7 9 9 11 11 13
+            //
+            // So the break point is `smooth_histogram`'s SPAN,
+            // 2 * (smooth_window / 2) + 1, and NOT the requested window: at
+            // `smooth_window` 4 a gap of exactly 4px still fused. Python's table
+            // is 1,2,...,12 because its kernel is a true window-tap box.
+            // `smooth_window` is a constructor argument, so a caller who raises
+            // it widens the failure with it — at 15 the smoothed profile lost
+            // every page whose lines sat closer than 15px while the raw profile
+            // kept all 29.
+            //
+            // Rust's break point is far tighter than the monorepo apps', which
+            // fused at 5px to 8px, because those ports dilate the mask
+            // vertically before the profile and this one does not. Their
+            // measurements do not transfer; these are this port's.
+            let is_text = hist[y as usize] > gap_threshold;
 
             if is_text && start.is_none() {
                 start = Some(y);
             } else if !is_text && start.is_some() {
-                let end = y;
-                let line_height = end - start.unwrap();
-
-                if line_height >= self.min_line_height {
-                    self.extract_line(&page, start.unwrap()..end, &mut results)?;
-                }
+                runs.push((start.unwrap(), y));
                 start = None;
             }
         }
 
         // Handle last line if image ends with text
         if let Some(s) = start {
-            let line_height = height - s;
-            if line_height >= self.min_line_height {
-                self.extract_line(&page, s..height, &mut results)?;
+            runs.push((s, height));
+        }
+
+        // 4.5 Fuse runs a single sub-threshold row split apart, BEFORE the height
+        // filter. The order is the reference's and it matters: a diacritic strip
+        // can be shorter than `min_line_height`, and filtering first would discard
+        // the strip and leave the decapitated body behind as a whole line.
+        let runs = merge_runs(&runs, &hist, MIN_GAP_MERGE, self.min_line_height);
+
+        for (r0, r1) in runs {
+            if r1 - r0 >= self.min_line_height {
+                self.extract_line(&page, r0..r1, &mut results)?;
             }
         }
 
@@ -361,10 +691,49 @@ impl LineSegmenter {
     ///
     /// Smoothed histogram with the same length as input
     ///
-    /// # Algorithm
+    /// # Algorithm, and two measured divergences from the Python binding
     ///
-    /// For each position, computes the average of values within the window:
-    /// `[i - half_window, i + half_window]`
+    /// For each position, the mean of `[i - half, i + half]` with
+    /// `half = smooth_window / 2`, over the rows actually in range. Neither
+    /// divergence below is reconciled here: the formula is published behaviour
+    /// for anyone reading the profile, so changing it changes this port's output
+    /// and that is an owner decision.
+    ///
+    /// 1. **Span is `2 * (smooth_window / 2) + 1`, not `smooth_window`.** An EVEN
+    ///    window therefore spans one row MORE than asked and is bit-identical to
+    ///    the odd window ABOVE it — bit-identical here and in JS because both
+    ///    divide by what they summed, but only TAP-identical in Go, which divides
+    ///    by the window it was asked for. Python convolves a true `window`-tap
+    ///    kernel and spans exactly what it was given.
+    ///    Measured on 29 drawn glyph-blob bands at `min_line_height` 10, driving
+    ///    the pre-fix form that read boundaries off this profile: the first gap
+    ///    returning all 29 bands, for windows 1 to 12, was
+    ///    1,3,3,5,5,7,7,9,9,11,11,13, against Python's 1,2,...,12. So at
+    ///    `smooth_window` 4 a gap of exactly 4px still fused. JS and Go measure
+    ///    the same table as this port.
+    /// 2. **The divisor is the rows visited, not the window.** Near the top and
+    ///    bottom edges fewer rows are in range, and dividing by that count reports
+    ///    the true local mean. numpy's `mode='same'` zero-pads and divides by the
+    ///    window, attenuating those rows to `(window / 2 + 1) / window` of the
+    ///    true mean — two thirds at window 3, 8/15 at window 15. Go divides by the
+    ///    window too and so matches numpy, but only at ODD windows: at an even
+    ///    window Go sums `window + 1` rows and still divides by `window`, matching
+    ///    neither numpy nor this port.
+    ///
+    ///    Measured cost, now that the smoothed profile only sets the threshold
+    ///    LEVEL: the two formulas disagree only on rows `0..half-1` and their
+    ///    mirror at the bottom, and the windows of those rows together cover rows
+    ///    `0..2*half-1`, so the blank margin that hides the divergence is
+    ///    `2 * half` rows and NOT `half`. Measured on an 8-band page: a 1-row
+    ///    margin still left window 3 disagreeing (17.1607 here against Go's
+    ///    17.1429) and a 2-row margin made them agree; window 15 needed 14. Every
+    ///    fixture in this repo uses a 30px margin, so all of them sit on the
+    ///    agreeing side. On a page cropped flush to the ink the threshold moved
+    ///    0.21% at window 3 and 1.17% at window 15, and no band count changed.
+    ///
+    /// Dividing by the rows visited also means this port cannot produce Go's
+    /// even-window defect, where `window + 1` terms are divided by `window` and the
+    /// smoothed peak clears the raw one by up to 1.5x.
     fn smooth_histogram(&self, hist: &[f32]) -> Vec<f32> {
         let height = hist.len();
         let mut smoothed = vec![0f32; height];
@@ -712,6 +1081,312 @@ mod tests {
         assert!(checked > 0, "the fixture has no multi-tile case to check");
     }
 
+    /// Override for the shared printed-rule fixture, for checkouts that do not
+    /// sit next to the monorepo.
+    const RULE_FIXTURE_ENV: &str = "MONOCR_RULE_FIXTURE";
+
+    /// The printed-rule fixture is the oracle four ports share, generated from
+    /// the reference implementation by
+    /// `monocr-monorepo/shared/segmentation-fixtures/generate-rule-cases.py`. It
+    /// describes each mask as a PRNG seed plus a list of rules, so a port builds
+    /// the same 23 masks without shipping any pixels, and checks the result
+    /// against an ink count and a position-weighted checksum.
+    ///
+    /// The checksum is the part that matters: a bare ink count would not notice
+    /// suppression that removed the right NUMBER of pixels in the wrong places,
+    /// which is exactly what an off-by-one in a run-length scan produces.
+    fn rule_fixture_path() -> PathBuf {
+        if let Some(path) = std::env::var_os(RULE_FIXTURE_ENV) {
+            return PathBuf::from(path);
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../monocr-monorepo/shared/segmentation-fixtures/rule-cases.json")
+    }
+
+    /// A missing fixture fails loudly, for the same reason `load_fixture` does:
+    /// skipping would report a green run for a port nothing checked.
+    fn load_rule_fixture() -> Value {
+        let path = rule_fixture_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read the shared printed-rule fixture at {}: {e}\n\
+                 set {RULE_FIXTURE_ENV} to point at \
+                 monocr-monorepo/shared/segmentation-fixtures/rule-cases.json",
+                path.display()
+            )
+        });
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
+    }
+
+    fn i64_field(value: &Value, key: &str) -> i64 {
+        value
+            .get(key)
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| panic!("fixture entry is missing an integer '{key}': {value}"))
+    }
+
+    /// Rebuild one fixture mask: xorshift32 noise, then the rules drawn over it.
+    ///
+    /// The PRNG is transcribed from the fixture's own `prng` field rather than
+    /// invented here: `x ^= x<<13; x ^= x>>17; x ^= x<<5`, seeded 2463534242,
+    /// pixel `i` ink where `x % 100 < density` with `x` taken after the i-th
+    /// step. Rust's `<<` on `u32` discards the high bits, which is the `&
+    /// 0xFFFFFFFF` the generator writes explicitly.
+    fn rule_mask(case: &Value) -> (Vec<u8>, u32, u32) {
+        let width = u32_field(case, "width");
+        let height = u32_field(case, "height");
+        let (w, h) = (width as usize, height as usize);
+        let density = u32_field(case, "density");
+
+        let mut x: u32 = 2_463_534_242;
+        let mut mask = vec![0u8; w * h];
+        for cell in mask.iter_mut() {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            if x % 100 < density {
+                *cell = 1;
+            }
+        }
+
+        let run_length = i64_field(case, "run_length");
+        let run_start = i64_field(case, "run_start") as usize;
+        for row in cases_array(case, "rule_rows") {
+            let row = row as usize;
+            let (len, start) = if run_length < 0 {
+                (w, 0)
+            } else {
+                (run_length as usize, run_start)
+            };
+            for cell in mask[row * w + start..row * w + w.min(start + len)].iter_mut() {
+                *cell = 1;
+            }
+        }
+
+        let col_length = i64_field(case, "col_length");
+        let col_start = i64_field(case, "col_start") as usize;
+        for col in cases_array(case, "rule_cols") {
+            let col = col as usize;
+            let (len, start) = if col_length < 0 {
+                (h, 0)
+            } else {
+                (col_length as usize, col_start)
+            };
+            for y in start..h.min(start + len) {
+                mask[y * w + col] = 1;
+            }
+        }
+
+        (mask, width, height)
+    }
+
+    fn cases_array(case: &Value, key: &str) -> Vec<u64> {
+        case.get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("fixture case has no '{key}' array: {case}"))
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .unwrap_or_else(|| panic!("non-integer entry in '{key}'"))
+            })
+            .collect()
+    }
+
+    /// Ink count and position-weighted checksum of a mask, flattened row-major,
+    /// exactly as the fixture generator's `signature` computes them.
+    fn rule_signature(mask: &[u8], modulus: u64) -> (u64, u64) {
+        let mut ink = 0u64;
+        let mut sum = 0u64;
+        for (i, &v) in mask.iter().enumerate() {
+            if v != 0 {
+                ink += 1;
+                sum += i as u64 + 1;
+            }
+        }
+        (ink, sum % modulus)
+    }
+
+    /// The whole printed-rule contract, against the oracle the other ports use.
+    ///
+    /// 23 cases, including the pair that pins `>=` on each axis (a run of exactly
+    /// the span and one pixel short), the 15px floor on a narrow crop, the
+    /// truncated span on an odd width, and the ink-share ceiling both firing and
+    /// exactly at the boundary.
+    #[test]
+    fn page_rules_match_the_shared_fixture() {
+        let root = load_rule_fixture();
+
+        // The constants live in two places, so pin them to each other here, the
+        // same way `fixture()` does for the tiling constants.
+        assert_eq!(
+            root.get("rule_span").and_then(Value::as_f64),
+            Some(RULE_SPAN),
+            "fixture and port disagree on the rule span"
+        );
+        assert_eq!(
+            root.get("rule_max_ink_share").and_then(Value::as_f64),
+            Some(RULE_MAX_INK_SHARE),
+            "fixture and port disagree on the ink-share ceiling"
+        );
+        let modulus = root
+            .get("checksum_modulus")
+            .and_then(Value::as_u64)
+            .expect("fixture has no checksum_modulus");
+
+        for case in cases(&root, "cases") {
+            let name = case
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>")
+                .to_string();
+            let (mut mask, width, height) = rule_mask(&case);
+
+            let changed = suppress_page_rules(&mut mask, width, height);
+            assert_eq!(
+                changed,
+                case.get("expected_changed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_changed")),
+                "case '{name}': wrong answer on whether anything was suppressed"
+            );
+
+            let (ink, checksum) = rule_signature(&mask, modulus);
+            assert_eq!(
+                ink,
+                case.get("expected_ink")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_ink")),
+                "case '{name}': wrong ink count after suppression"
+            );
+            assert_eq!(
+                checksum,
+                case.get("expected_checksum")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_else(|| panic!("case '{name}' has no expected_checksum")),
+                "case '{name}': right ink count, wrong pixels — an off-by-one in \
+                 one of the run-length scans"
+            );
+        }
+    }
+
+    // A realistic page, in the shape `go/pkg/segmenter/page_rules_test.go` uses:
+    // glyph blobs rather than solid bars, because a solid bar the width of a text
+    // column IS a rule by any definition and would prove nothing.
+    const T_WIDTH: u32 = 800;
+    const T_BAND: u32 = 40;
+    const T_MARGIN: u32 = 30;
+    const T_GLYPH_W: u32 = 12;
+    const T_PITCH: u32 = 20;
+    const T_RULE_W: u32 = 4;
+
+    /// Build a page as a grayscale image: ink 0, background 255.
+    fn drawn_page(bands: u32, gap: u32, glyphs: u32, framed: bool) -> GrayImage {
+        let height = T_MARGIN * 2 + T_BAND * bands + gap * (bands - 1);
+        let mut img = GrayImage::from_pixel(T_WIDTH, height, Luma([255u8]));
+        let mut y = T_MARGIN;
+        for _ in 0..bands {
+            for yy in y..y + T_BAND {
+                for k in 0..glyphs {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..T_GLYPH_W {
+                        if x0 + i < T_WIDTH {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+            y += T_BAND + gap;
+        }
+        if framed {
+            for yy in 0..height {
+                for i in 0..T_RULE_W {
+                    img.put_pixel(10 + i, yy, Luma([0u8]));
+                    img.put_pixel(T_WIDTH - 10 - T_RULE_W + i, yy, Luma([0u8]));
+                }
+            }
+            for i in 0..T_RULE_W {
+                for x in 0..T_WIDTH {
+                    img.put_pixel(x, 10 + i, Luma([0u8]));
+                    img.put_pixel(x, height - 10 - T_RULE_W + i, Luma([0u8]));
+                }
+            }
+        }
+        img
+    }
+
+    /// THE PROPERTY THAT MAKES THIS SAFE UNCONDITIONALLY. Every page gets the
+    /// step whether it carries rules or not, so "does nothing" has to be exact
+    /// rather than approximate.
+    #[test]
+    fn a_page_with_no_rules_is_untouched_to_the_pixel() {
+        let img = drawn_page(4, 40, 30, false);
+        let (w, h) = img.dimensions();
+        let mut mask = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if img.get_pixel(x, y)[0] < 128 {
+                    mask[(y * w + x) as usize] = 1;
+                }
+            }
+        }
+        let before = mask.clone();
+
+        assert!(
+            !suppress_page_rules(&mut mask, w, h),
+            "suppression reported a change on a page with no rules"
+        );
+        assert_eq!(
+            mask, before,
+            "glyph-sized ink was classified as a rule and removed"
+        );
+    }
+
+    /// The behavioural test, and the fixture took finding.
+    ///
+    /// A DENSE framed page does not fuse at this parameter set — 30 glyphs per
+    /// line segments the same with or without suppression, which is why a
+    /// structural check on the mask alone cannot catch a profile computed from
+    /// the wrong buffer. SPARSE text reproduces the real mechanism: with 8 glyphs
+    /// per line the profile mean drops far enough that the frame's ink floor
+    /// clears the 0.05 threshold on every row, and the page comes back as one
+    /// band. Ported from `go/pkg/segmenter/page_rules_test.go`
+    /// `TestSegmentRecoversAFramedPage`.
+    #[test]
+    fn segmenting_recovers_a_framed_page() {
+        let seg = LineSegmenter::new(10, 3);
+        let clean = seg.segment_image(&drawn_page(4, 40, 8, false)).unwrap();
+        let framed = seg.segment_image(&drawn_page(4, 40, 8, true)).unwrap();
+
+        assert_eq!(
+            clean.len(),
+            4,
+            "the unframed control must segment into 4 lines, or the comparison \
+             below proves nothing"
+        );
+        assert_eq!(
+            framed.len(),
+            clean.len(),
+            "a framed page came back as {} line(s) where the same page unframed \
+             gave {} — the page border is fusing the profile",
+            framed.len(),
+            clean.len()
+        );
+    }
+
+    /// Degenerate shapes reach this from real callers: a 1px crop, and a mask
+    /// whose length disagrees with its stated dimensions. Indexing is what would
+    /// panic, so the guards are worth a test even though they assert nothing but
+    /// survival.
+    #[test]
+    fn degenerate_masks_do_not_panic() {
+        assert!(!suppress_page_rules(&mut [], 0, 0));
+        assert!(!suppress_page_rules(&mut [], 10, 10));
+        assert!(!suppress_page_rules(&mut vec![0u8; 50 * 50], 50, 50));
+        assert!(!suppress_page_rules(&mut vec![1u8; 50 * 50], 50, 50));
+        assert!(!suppress_page_rules(&mut [1u8; 1], 1, 1));
+    }
+
     #[test]
     fn cut_column_matches_the_shared_fixture() {
         let f = fixture();
@@ -724,6 +1399,735 @@ mod tests {
                 img.width(),
             );
             assert_eq!(got, u32_field(&probe, "expected_cut"), "probe '{name}'");
+        }
+    }
+
+    /// A page of `bands` dense bands plus one faint band carrying exactly
+    /// `faint_ink` ink pixels per row, used to probe the threshold LEVEL rather
+    /// than the profile the boundaries come from.
+    fn page_with_a_faint_band(
+        bands: u32,
+        gap: u32,
+        glyphs: u32,
+        faint_ink: u32,
+        faint_h: u32,
+    ) -> GrayImage {
+        let height = T_MARGIN * 2 + T_BAND * bands + gap * bands + faint_h;
+        let mut img = GrayImage::from_pixel(T_WIDTH, height, Luma([255u8]));
+        let mut y = T_MARGIN;
+        for _ in 0..bands {
+            for yy in y..y + T_BAND {
+                for k in 0..glyphs {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..T_GLYPH_W {
+                        if x0 + i < T_WIDTH {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+            y += T_BAND + gap;
+        }
+        for yy in y..y + faint_h {
+            for i in 0..faint_ink {
+                img.put_pixel(100 + i, yy, Luma([0u8]));
+            }
+        }
+        img
+    }
+
+    /// THE CASE THE DUAL HISTOGRAM EXISTS FOR, measured at this port's own
+    /// parameters rather than borrowed from another port.
+    ///
+    /// With the default `smooth_window` of 3 the smoother averages three rows,
+    /// so a gap of 1px or 2px never reaches zero in the smoothed profile — the
+    /// ink either side bleeds into it and clears the threshold. Reading
+    /// boundaries there returned 1 band against 29 drawn. 3px is the first gap
+    /// the smoothed profile survives, which is why it is the control here and
+    /// not the interesting case.
+    #[test]
+    fn lines_two_pixels_apart_are_not_fused() {
+        let seg = LineSegmenter::new(10, 3);
+        for gap in [1u32, 2] {
+            let got = seg.segment_image(&drawn_page(29, gap, 30, false)).unwrap();
+            assert_eq!(
+                got.len(),
+                29,
+                "29 bands {gap}px apart came back as {} — boundaries are being \
+                 read off the smoothed profile again",
+                got.len()
+            );
+        }
+        let control = seg.segment_image(&drawn_page(29, 3, 30, false)).unwrap();
+        assert_eq!(
+            control.len(),
+            29,
+            "the 3px control failed, so the regression is not the profile choice"
+        );
+    }
+
+    /// Speckle must not decide what a typical line is.
+    ///
+    /// The merge runs before the height filter, so `runs` holds every speck the
+    /// profile picked up. Twelve 2-row specks against five 50-row lines: a median
+    /// over ALL runs is 2 and the ceiling 4, which refuses every merge and switches
+    /// the pass off on the pages that need it most. Filtering to runs that could be
+    /// a line gives 50 and a ceiling of 100.
+    #[test]
+    fn speckle_does_not_set_the_typical_line_height() {
+        let mut hist = vec![0f32; 700];
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        // Specks first, so they dominate the count.
+        for i in 0..12u32 {
+            let y = i * 4;
+            hist[y as usize..(y + 2) as usize].fill(20.0);
+            runs.push((y, y + 2));
+        }
+        // Then a split line whose halves ARE halves: 24 rows, a 2-row inked dip, 24
+        // rows, summing to the 50 an ordinary line measures here. An earlier version
+        // of this fixture used 50 + 50, which is two whole lines by its own page's
+        // standard, and the ceiling refused the merge for the right reason.
+        hist[100..124].fill(300.0);
+        hist[124..126].fill(5.0);
+        hist[126..150].fill(300.0);
+        runs.push((100, 124));
+        runs.push((126, 150));
+        // And three ordinary lines, so a real median exists.
+        for i in 0..3u32 {
+            let y = 200 + i * 60;
+            hist[y as usize..(y + 50) as usize].fill(300.0);
+            runs.push((y, y + 50));
+        }
+
+        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE, 10);
+        assert!(
+            merged.contains(&(100, 150)),
+            "the split pair did not merge, so speckle set the ceiling: got {merged:?}"
+        );
+        // And the specks must not have fused into something the height filter will
+        // pass. Twelve 2-row specks chaining into one 46-row band is a line the
+        // recogniser is handed and asked to read.
+        let speckle_band = merged
+            .iter()
+            .filter(|&&(a, b)| a < 100 && b - a >= 10)
+            .count();
+        assert_eq!(
+            speckle_band, 0,
+            "speckle fused into {speckle_band} band(s) tall enough to clear the \
+             height filter: got {merged:?}"
+        );
+    }
+
+    /// The ceiling, isolated: every other clause says merge and only the height
+    /// cap refuses.
+    ///
+    /// Two 60-row runs two rows apart with ink in the gap, on a page whose typical
+    /// run is 60. `gap_size` is inside the bound, `gap_has_ink` is true, so without
+    /// the cap this merges. The merged span would be 122 against a ceiling of 120.
+    #[test]
+    fn no_merge_may_exceed_twice_a_typical_line() {
+        let mut hist = vec![0f32; 400];
+        hist[20..80].fill(300.0);
+        hist[80..82].fill(5.0); // ink in the gap: the ink clause would merge
+        hist[82..142].fill(300.0);
+        hist[200..260].fill(300.0);
+        hist[300..360].fill(300.0);
+        let runs = [
+            (20u32, 80u32),
+            (82u32, 142u32),
+            (200u32, 260u32),
+            (300u32, 360u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(20, 80), (82, 142), (200, 260), (300, 360)],
+            "a merge produced a band taller than twice a typical line"
+        );
+    }
+
+    /// The cascade the page median exists to prevent.
+    ///
+    /// Judging a fragment against the NEIGHBOUR's height snowballs: the merge
+    /// mutates the accumulated run, and a taller accumulation makes the next line
+    /// look more like a fragment. Measured on real input before this was fixed —
+    /// one page went from 36 bands to 10, with single bands of 534, 632 and 732
+    /// rows, and lost 92% of its readable characters.
+    ///
+    /// Here a chain of runs each two rows from the next, with ink throughout, must
+    /// not collapse into one band. The assertion is on the property rather than an
+    /// exact list, because what matters is that nothing runs away.
+    #[test]
+    fn merging_does_not_cascade_down_a_page() {
+        // One run is 100 rows and the rest 50, so the page MEDIAN is 50 while its
+        // MAX is 100. That difference is the test: with the median, `typical` is 50
+        // and the ceiling 100, so the first merge would reach 102 and is refused.
+        // Read `typical` off the max instead and the ceiling doubles to 200, the
+        // fragment clause starts firing on every 50-row line, and the chain
+        // collapses. A fixture of equal-height runs cannot see that at all — the
+        // median and the max are the same number — which is how this survived a
+        // battery once.
+        let mut hist = vec![0f32; 700];
+        let mut runs = Vec::new();
+        let mut y = 20u32;
+        for i in 0..8 {
+            let h = if i == 3 { 100 } else { 50 };
+            hist[y as usize..(y + h) as usize].fill(300.0);
+            hist[(y + h) as usize..(y + h + 2) as usize].fill(5.0); // ink in every gap
+            runs.push((y, y + h));
+            y += h + 2;
+        }
+        let merged = merge_runs(&runs, &hist, MIN_GAP_MERGE, 10);
+        let tallest = merged.iter().map(|&(a, b)| b - a).max().unwrap();
+        assert!(
+            tallest <= 100,
+            "a chain of 50-row runs collapsed into a band {tallest} rows tall, so \
+             the merge is cascading"
+        );
+        assert!(
+            merged.len() >= 4,
+            "8 runs became {} bands, so the merge is cascading",
+            merged.len()
+        );
+    }
+
+    /// The merge must be reached THROUGH `segment_image`, not only unit-tested.
+    ///
+    /// Added after a mutation that deleted the `merge_runs` call from the pipeline
+    /// SURVIVED all four unit tests below — they call the helper directly, so the
+    /// call site was unguarded. That is the gap `se-brain`
+    /// `rules/standards/testing.md` names: a tested helper does not make its call
+    /// site safe.
+    ///
+    /// Geometry is the measured one: a 20-row strip of upper marks, two empty
+    /// rows, then a 44-row body. One line, and it must come back as one band.
+    #[test]
+    fn a_diacritic_strip_is_returned_joined_to_its_line() {
+        let (w, h) = (T_WIDTH, 200u32);
+        let mut img = GrayImage::from_pixel(w, h, Luma([255u8]));
+        let ink = |img: &mut GrayImage, y0: u32, y1: u32, every: u32| {
+            for yy in y0..y1 {
+                for k in 0..30u32 {
+                    let x0 = 100 + k * T_PITCH;
+                    for i in 0..every {
+                        if x0 + i < w {
+                            img.put_pixel(x0 + i, yy, Luma([0u8]));
+                        }
+                    }
+                }
+            }
+        };
+        // Sparse marks above, solid body below, two blank rows between.
+        ink(&mut img, 60, 80, 2);
+        ink(&mut img, 82, 126, T_GLYPH_W);
+
+        let got = LineSegmenter::new(10, 3).segment_image(&img).unwrap();
+        assert_eq!(
+            got.len(),
+            1,
+            "the strip and its body came back as {} bands — the merge is not \
+             reached from segment_image",
+            got.len()
+        );
+        assert!(
+            got[0].bbox.h >= 60,
+            "the returned band is {}px tall, so it holds the body without the \
+             marks above it",
+            got[0].bbox.h
+        );
+    }
+
+    /// The ink clause on its own, which the four cases below do not isolate: in
+    /// the measured dip case the fragment clause ALSO fires, so dropping
+    /// `gap_has_ink` survived. Here the runs are the same height, so `fragment`
+    /// is false and only the ink test can merge them.
+    #[test]
+    fn a_dip_between_equal_halves_merges_on_ink_alone() {
+        // The fixture carries two ORDINARY lines as well as the split pair, and
+        // that is load-bearing rather than decoration. `merge_runs` judges a
+        // fragment against the page's typical line height, so a page consisting of
+        // nothing but two halves is degenerate — there is no evidence in it that
+        // they are halves rather than two short lines, and an earlier version of
+        // this test asserted a merge the code had no grounds to make.
+        // The companion lines are 60 rows, not 82, and the arithmetic is the whole
+        // point of the test. Median run height is 60, so `2 * 40 > 60` and the
+        // FRAGMENT clause is false — only `gap_has_ink` can merge this pair, and
+        // the merged 82 rows still fit the 120-row ceiling.
+        //
+        // At 82-row companions, which is what this fixture held until 2026-08-28,
+        // the median rose to 82, `2 * 40 <= 82` fired, and dropping the ink clause
+        // left the test passing. It was written to isolate one clause and silently
+        // stopped doing so when the fixture changed to satisfy the ceiling, and the
+        // mutation battery was not re-run afterwards. Found by a sibling port.
+        let mut hist = vec![0f32; 400];
+        hist[20..60].fill(300.0);
+        hist[60..62].fill(5.0); // two rows of ink: below any threshold, above zero
+        hist[62..102].fill(300.0);
+        hist[150..210].fill(300.0);
+        hist[260..320].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (62u32, 102u32),
+            (150u32, 210u32),
+            (260u32, 320u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(20, 102), (150, 210), (260, 320)],
+            "an ink-holding 2-row dip between two halves of a typical line did \
+             not merge"
+        );
+    }
+
+    /// `merge_runs`, both clauses, on the numbers that were measured rather than
+    /// on invented ones. See `MIN_GAP_MERGE`.
+    #[test]
+    fn a_sub_threshold_dip_does_not_end_a_line() {
+        // The measured case: one line, rows 260-324, split by row 280 carrying 6
+        // ink pixels against a threshold of 7.0.
+        let mut hist = vec![0f32; 400];
+        hist[260..325].fill(200.0);
+        hist[280] = 6.0; // above zero, below the gap threshold
+        let runs = [(260u32, 280u32), (281u32, 325u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(260, 325)],
+            "a 1-row dip holding ink split one line in two"
+        );
+    }
+
+    #[test]
+    fn a_zero_gap_still_merges_a_fragment_into_its_line() {
+        // The other measured case: rows 341-360 are the upper marks and 362-404
+        // the body of one line, separated by TWO rows of genuinely zero ink. The
+        // ink clause cannot cross that; the height ratio is what does.
+        let mut hist = vec![0f32; 500];
+        hist[341..360].fill(40.0);
+        hist[362..404].fill(300.0);
+        let runs = [(341u32, 360u32), (362u32, 404u32)];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(341, 404)],
+            "a 19-row fragment two empty rows from a 42-row line stayed separate"
+        );
+    }
+
+    #[test]
+    fn two_real_lines_two_rows_apart_stay_separate() {
+        // The case the fragment clause must NOT swallow, and the reason it is a
+        // ratio: same gap, same emptiness, but both runs are full height.
+        // 60-row companions so the FRAGMENT test is the only thing refusing this.
+        // Median 60, ceiling 120, merged span 82 — inside the ceiling. The gap holds
+        // no ink, so `gap_has_ink` is false. `2 * 40 > 60`, so `fragment` is false
+        // and the pair stays apart for that reason alone.
+        //
+        // Without the companions the ceiling refused it independently (median 40,
+        // ceiling 80, merged 82), so loosening the fragment ratio from 2x to 1x
+        // left this test passing.
+        let mut hist = vec![0f32; 400];
+        hist[20..60].fill(300.0);
+        hist[62..102].fill(300.0);
+        hist[180..240].fill(300.0);
+        hist[280..340].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (62u32, 102u32),
+            (180u32, 240u32),
+            (280u32, 340u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(20, 60), (62, 102), (180, 240), (280, 340)],
+            "two 40-row lines were fused, which is what SMEAR_Y would have done"
+        );
+    }
+
+    #[test]
+    fn a_wide_gap_is_a_line_boundary_however_much_ink_it_holds() {
+        // The size bound on its own. Overlapping diacritics can hold the raw
+        // profile above zero right across real inter-line spacing; upstream that
+        // collapsed 3 PDF lines into 1.
+        // Companions at 60 rows so the SIZE BOUND is the only thing refusing this
+        // merge. Median 60, ceiling 120, and the merged span would be 95 — inside
+        // the ceiling. `2 * 40 > 60`, so the fragment clause is false. The gap
+        // holds ink throughout, so `gap_has_ink` is true and WOULD merge. Only
+        // `gap_size <= max_gap` stands in the way.
+        //
+        // Without the companions the ceiling refused it independently (median 40,
+        // ceiling 80, merged 95), so removing the size bound left this test
+        // passing and its coverage came incidentally from an unrelated test.
+        let mut hist = vec![0f32; 400];
+        hist[20..60].fill(300.0);
+        hist[60..75].fill(5.0); // 15 rows of ink between two lines
+        hist[75..115].fill(300.0);
+        hist[180..240].fill(300.0);
+        hist[280..340].fill(300.0);
+        let runs = [
+            (20u32, 60u32),
+            (75u32, 115u32),
+            (180u32, 240u32),
+            (280u32, 340u32),
+        ];
+        assert_eq!(
+            merge_runs(&runs, &hist, MIN_GAP_MERGE, 10),
+            vec![(20, 60), (75, 115), (180, 240), (280, 340)],
+            "a 15-row gap merged, so the size bound is not being applied"
+        );
+    }
+
+    /// The opposite failure, and the reason this needs its own test: the raw
+    /// profile is the more sensitive of the two, so the risk of reading it is
+    /// splitting where no gap exists. Bands that touch share ink on every row,
+    /// there is no clean row anywhere, and one band is the honest answer.
+    #[test]
+    fn touching_bands_stay_one_line() {
+        let seg = LineSegmenter::new(10, 3);
+        let got = seg.segment_image(&drawn_page(29, 0, 30, false)).unwrap();
+        assert_eq!(got.len(), 1, "touching bands were split into {}", got.len());
+    }
+
+    /// `smooth_window` is a constructor argument, and on the smoothed profile
+    /// raising it widened the damage: the break point is the smoother's SPAN,
+    /// 2 * (smooth_window / 2) + 1 and not the requested window, so at 15 every
+    /// page whose lines sat closer than 15px collapsed to one band. Measured at
+    /// 5px and 12px, both of which the old form lost. 15 is odd, so span and
+    /// window coincide here; the even-window case is pinned against
+    /// `smooth_histogram` directly, below.
+    #[test]
+    fn a_wide_smoother_does_not_fuse_the_page() {
+        let seg = LineSegmenter::new(10, 15);
+        for gap in [5u32, 12] {
+            let got = seg.segment_image(&drawn_page(29, gap, 30, false)).unwrap();
+            assert_eq!(
+                got.len(),
+                29,
+                "at smooth_window 15, 29 bands {gap}px apart came back as {}",
+                got.len()
+            );
+        }
+    }
+
+    /// The other half of the dual histogram: the LEVEL still comes off the
+    /// smoothed profile.
+    ///
+    /// Calibrating on the raw profile instead raises the threshold, because
+    /// smoothing spreads ink into the rows either side of every band and those
+    /// partial rows pull the non-zero mean down. A band faint enough to sit
+    /// between the two thresholds is then dropped, and dropping a line is the
+    /// failure this pipeline is built to avoid.
+    ///
+    /// The fixture is tuned, and the tuning is the finding: at the default ratio
+    /// of 0.05 the two thresholds sit 0.88px apart on this page (16.5642 smoothed
+    /// against 17.4412 raw), and no whole
+    /// number of ink pixels lands between them, so no test at the default can
+    /// tell the two calibrations apart. At 0.5 — the ratio the reference
+    /// recommends for wide-spaced layouts, and a constructor argument rather
+    /// than a default — they are 165.6 (smoothed) and 174.4 (raw). Measured: a
+    /// faint band of 166 to 174 ink pixels per row is found by the smoothed
+    /// calibration and missed by the raw one. 170 is the middle of that window.
+    #[test]
+    fn the_gap_threshold_is_calibrated_on_the_smoothed_profile() {
+        let seg = LineSegmenter::with_density_ratio(10, 3, 0.5);
+        let img = page_with_a_faint_band(8, 12, 30, 170, 20);
+        let got = seg.segment_image(&img).unwrap();
+        assert_eq!(
+            got.len(),
+            9,
+            "expected 8 dense bands plus the faint one, got {} — the threshold \
+             is being calibrated on the raw profile",
+            got.len()
+        );
+    }
+
+    // The smoother's own arithmetic, pinned separately from the segmenter that
+    // reads it. Three of the four bindings diverge from Python here and nothing
+    // caught it, because no test used an even window.
+
+    /// `lead` rows of `ink`, then `gap` zero rows, then `lead` rows of `ink`.
+    fn banded_profile(lead: usize, gap: usize, ink: f32) -> Vec<f32> {
+        let mut out = vec![0f32; lead * 2 + gap];
+        out[..lead].fill(ink);
+        out[lead + gap..].fill(ink);
+        out
+    }
+
+    /// THE DIVERGENCE AN ODD-WINDOW-ONLY TEST CANNOT SEE, and the reason it
+    /// survived four ports: at an odd window this formula and Python's agree.
+    ///
+    /// The loop is `[i - half, i + half]` with `half = smooth_window / 2`, so an
+    /// even window spans one row MORE than asked and is bit-identical to the odd
+    /// window ABOVE it. A gap of exactly `smooth_window` zero rows therefore
+    /// still reaches zero at odd windows and does NOT at even ones — which is why
+    /// the measured break-point table reads 1,3,3,5,5,7,7,9,9,11,11,13 here
+    /// against Python's 1,2,...,12.
+    #[test]
+    fn the_box_spans_one_more_row_than_an_even_window_asks() {
+        for window in 2u32..=12 {
+            let span = (2 * (window / 2) + 1) as usize;
+            let at_span =
+                LineSegmenter::new(10, window).smooth_histogram(&banded_profile(20, span, 9.0));
+            let min_in_gap = at_span[20..20 + span]
+                .iter()
+                .cloned()
+                .fold(f32::MAX, f32::min);
+            assert_eq!(
+                min_in_gap, 0.0,
+                "window {window} left no zero row across a gap of {span} rows \
+                 (min {min_in_gap}) — its span is no longer 2 * (window / 2) + 1"
+            );
+
+            let profile = banded_profile(20, span - 1, 9.0);
+            let under = LineSegmenter::new(10, window).smooth_histogram(&profile);
+            let min_under = under[20..20 + span - 1]
+                .iter()
+                .cloned()
+                .fold(f32::MAX, f32::min);
+            assert!(
+                min_under > 0.0,
+                "window {window} reached zero across a gap of only {} rows, so the \
+                 box is narrower than measured",
+                span - 1
+            );
+
+            if window % 2 == 0 {
+                let odd = LineSegmenter::new(10, window + 1).smooth_histogram(&profile);
+                assert_eq!(
+                    under,
+                    odd,
+                    "window {window} no longer matches window {} — the even-window \
+                     rounding changed",
+                    window + 1
+                );
+            }
+        }
+    }
+
+    /// Edge handling, and the formula difference against Python and Go.
+    ///
+    /// numpy's `mode='same'` zero-pads and divides by the window, so row 0 comes
+    /// back at `(window / 2 + 1) / window` of the true local mean — 200 not 300 on
+    /// a flat profile at window 3, 160 not 300 at window 15. Go does the same at
+    /// odd windows. This port divides by the rows it actually visited and reports
+    /// 300. Recorded, not reconciled: see `smooth_histogram`'s docs.
+    ///
+    /// The first fixture is NOT flat, deliberately. On a flat 300 the answer is 300
+    /// under this formula AND under no smoothing at all, so a flat profile cannot
+    /// tell the two apart. Zeroing row 0 gives three different answers: 150 here
+    /// (the mean of rows 0 and 1), 100 under a window divisor, and 0 under a no-op.
+    #[test]
+    fn the_divisor_is_the_rows_visited_so_edge_rows_keep_their_true_mean() {
+        let mut dip = vec![300f32; 60];
+        dip[0] = 0.0;
+        dip[59] = 0.0;
+        let smoothed = LineSegmenter::new(10, 3).smooth_histogram(&dip);
+        assert_eq!(
+            smoothed[0], 150.0,
+            "row 0 is no longer the mean of the rows actually in range"
+        );
+        assert_eq!(smoothed[59], 150.0, "the last row lost the same property");
+        assert_eq!(
+            LineSegmenter::new(10, 5).smooth_histogram(&dip)[0],
+            200.0,
+            "window 5 row 0 should be 600 over the 3 rows in range, not 900 over 5"
+        );
+
+        let flat = vec![300f32; 60];
+        for window in [3u32, 5, 15] {
+            let smoothed = LineSegmenter::new(10, window).smooth_histogram(&flat);
+            assert_eq!(
+                smoothed[0], 300.0,
+                "window {window} attenuated row 0 to {} — the divisor became the \
+                 window rather than the rows visited",
+                smoothed[0]
+            );
+            assert_eq!(
+                smoothed[59], 300.0,
+                "window {window} attenuated the last row"
+            );
+        }
+    }
+
+    /// Go's even-window defect, asserted absent here.
+    ///
+    /// Go sums `2 * (window / 2) + 1` terms and divides by the requested `window`,
+    /// so at an even window every interior row is inflated by
+    /// `(window + 1) / window` and the smoothed peak clears the raw one — 1.5x at
+    /// window 2, 1.25x at window 4. Dividing by what you summed cannot do that,
+    /// and this pins that it does not.
+    #[test]
+    fn smoothing_never_lifts_the_profile_above_its_raw_peak() {
+        // 20 zero rows, 20 rows of ink, 20 zero rows, so the band is wider than the
+        // widest span tested and its middle keeps the full 300.
+        let mut profile = vec![0f32; 60];
+        profile[20..40].fill(300.0);
+        for window in 2u32..=12 {
+            let smoothed = LineSegmenter::new(10, window).smooth_histogram(&profile);
+            let peak = smoothed.iter().cloned().fold(f32::MIN, f32::max);
+            // Two-sided, not `<=`. A one-sided bound also passes for a smoother that
+            // attenuates everything, and for one that does not smooth at all.
+            assert_eq!(
+                peak, 300.0,
+                "window {window} peaked at {peak}, not the raw 300 — the divisor no \
+                 longer equals the row count"
+            );
+            // And smoothing really ran: the band's own edge rows are pulled down,
+            // which a no-op smoother would leave at 300.
+            assert!(
+                smoothed[20] < 300.0,
+                "window {window} left the band's first row at 300 — nothing was \
+                 smoothed"
+            );
+        }
+    }
+
+    /// Override for the shared line-merge fixture, for checkouts that do not sit
+    /// next to the monorepo.
+    const MERGE_FIXTURE_ENV: &str = "MONOCR_MERGE_FIXTURE";
+
+    fn merge_fixture_path() -> PathBuf {
+        if let Some(path) = std::env::var_os(MERGE_FIXTURE_ENV) {
+            return PathBuf::from(path);
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../monocr-monorepo/shared/segmentation-fixtures/merge-cases.json")
+    }
+
+    /// A missing fixture fails loudly, for the same reason `load_rule_fixture`
+    /// does: skipping would report a green run for a port nothing checked.
+    fn load_merge_fixture() -> Value {
+        let path = merge_fixture_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read the shared line-merge fixture at {}: {e}\n\
+                 set {MERGE_FIXTURE_ENV} to point at \
+                 monocr-monorepo/shared/segmentation-fixtures/merge-cases.json",
+                path.display()
+            )
+        });
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
+    }
+
+    /// A list of `[start, end]` pairs from a fixture case.
+    fn merge_pairs(case: &Value, key: &str) -> Vec<(u32, u32)> {
+        case.get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("fixture case has no '{key}' array: {case}"))
+            .iter()
+            .map(|pair| {
+                let pair = pair
+                    .as_array()
+                    .unwrap_or_else(|| panic!("'{key}' entry is not a pair: {pair}"));
+                assert_eq!(pair.len(), 2, "'{key}' entry is not a pair: {pair:?}");
+                let value = |i: usize| {
+                    pair[i]
+                        .as_u64()
+                        .unwrap_or_else(|| panic!("non-integer in '{key}': {pair:?}"))
+                        as u32
+                };
+                (value(0), value(1))
+            })
+            .collect()
+    }
+
+    /// The row profile a port must build from the same case description.
+    ///
+    /// Fills are applied IN ORDER and overwrite, which is how a one-row
+    /// sub-threshold dip is written over the band it sits inside. Applying them in
+    /// any other order gives a different profile and the fixture would not match.
+    fn merge_profile(case: &Value) -> Vec<f32> {
+        let length = u32_field(case, "profile_length") as usize;
+        let mut hist = vec![0f32; length];
+        for fill in case
+            .get("profile_fills")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("fixture case has no 'profile_fills': {case}"))
+        {
+            let fill = fill
+                .as_array()
+                .unwrap_or_else(|| panic!("'profile_fills' entry is not a triple: {fill}"));
+            assert_eq!(fill.len(), 3, "'profile_fills' entry is not a triple: {fill:?}");
+            let number = |i: usize| {
+                fill[i]
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("non-number in 'profile_fills': {fill:?}"))
+            };
+            let (a, b, value) = (number(0) as usize, number(1) as usize, number(2) as f32);
+            hist[a..b].fill(value);
+        }
+        hist
+    }
+
+    /// The whole `merge_runs` contract, against the oracle the other three ports use.
+    ///
+    /// This crate is where the merge was designed, and it is the version the other
+    /// nine were ported from — which is exactly why it must be checked against an
+    /// oracle that is NOT itself. The expectations in
+    /// `shared/segmentation-fixtures/merge-cases.json` are generated by
+    /// `generate-merge-cases.py`, which reimplements the four decisions from their
+    /// statement, refuses to write a case that no single-decision mutation kills,
+    /// and refuses to write anything at all unless the greedy fold agrees with an
+    /// independent brute-force enumeration of every way to cut the run list into
+    /// consecutive groups.
+    ///
+    /// The four unit tests above are kept as well, not replaced. They are the
+    /// measured geometry, in comments that record what was measured; the fixture is
+    /// what stops the ten implementations drifting apart.
+    #[test]
+    fn merge_runs_matches_the_shared_fixture() {
+        let root = load_merge_fixture();
+
+        // `MIN_GAP_MERGE` is a constant here and in the other three ports, so pin
+        // it. `min_line_height` is NOT a constant in this crate — it is a
+        // constructor argument, see `LineSegmenter::new` — so the fixture's value
+        // is used per case rather than asserted against a constant that does not
+        // exist. 10 is what the other three ports compile in and what every test
+        // in this module builds a segmenter with.
+        assert_eq!(
+            root.get("min_gap_merge").and_then(Value::as_u64),
+            Some(u64::from(MIN_GAP_MERGE)),
+            "fixture and port disagree on the maximum mergeable gap"
+        );
+        assert!(
+            root.get("mutations")
+                .and_then(Value::as_object)
+                .is_some_and(|m| !m.is_empty()),
+            "the fixture carries no mutation battery, so nothing proves its cases \
+             discriminate anything"
+        );
+
+        for case in cases(&root, "cases") {
+            let name = case
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>")
+                .to_string();
+            let note = case.get("note").and_then(Value::as_str).unwrap_or("");
+
+            let hist = merge_profile(&case);
+            let runs = merge_pairs(&case, "runs");
+            let expected = merge_pairs(&case, "expected");
+            let max_gap = u32_field(&case, "max_gap");
+            let min_line = u32_field(&case, "min_line");
+
+            // Exact equality, not a property. Half these cases assert that a merge
+            // does NOT happen — a speckle chain that must not fuse, two real lines
+            // that must stay apart — and asserting only the positive is what let
+            // the speckle-chain mutation survive this crate's own battery once.
+            assert_eq!(
+                merge_runs(&runs, &hist, max_gap, min_line),
+                expected,
+                "case '{name}': {note}"
+            );
+
+            // A regenerated fixture cannot quietly bring in padding: the generator
+            // refuses to write a case no mutation kills, and this is the
+            // consumer-side half of that guard, for a fixture edited by hand.
+            assert!(
+                case.get("discriminates")
+                    .and_then(Value::as_array)
+                    .is_some_and(|d| !d.is_empty()),
+                "case '{name}' discriminates nothing, so it is padding"
+            );
         }
     }
 }
