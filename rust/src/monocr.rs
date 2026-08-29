@@ -7,11 +7,12 @@ use anyhow::{Context, Result};
 use image::{imageops::FilterType, GrayImage};
 use ndarray::Array4;
 use ort::session::{builder::GraphOptimizationLevel, Session};
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::model_manager::ModelManager;
-use crate::segmenter::{tile_line, LineSegmenter, DEFAULT_DENSITY_THRESHOLD_RATIO};
+use crate::segmenter::{tile_line, LineSegment, LineSegmenter, DEFAULT_DENSITY_THRESHOLD_RATIO};
 use crate::utils::calculate_accuracy;
 use crate::OcrResult;
 
@@ -40,6 +41,134 @@ pub const EXPECTED_INPUT_HEIGHT: u32 = 160;
 /// since the move to `d3d9d5e`, and it is the stated reason `check_contract`
 /// below validates height but not width.
 pub const DEFAULT_INPUT_WIDTH: u32 = 1024;
+
+/// Fraction of each side sampled for the polarity probe: a patch one tenth of
+/// the width by one tenth of the height, at each of the four corners.
+///
+/// The model is trained on dark text on a light background, and this binding
+/// never checked which it was given.
+///
+/// Measured 2026-08-27 over 300 labelled crops from mon_OCR's
+/// `data/real/digits/val`, same graph, only the polarity of the input changed:
+///
+/// ```text
+/// upright, with this probe    CER 0.0000   300/300 exact
+/// inverted, with this probe   CER 0.0000   300/300 exact
+/// upright, without it         CER 0.0036   296/300
+/// inverted, without it        CER 0.0342   288/300   <- 9.5x worse
+/// ```
+///
+/// Degradation rather than the total failure it might sound like, and cheap to
+/// close. Those crops are Myanmar digits on composited backgrounds, so the
+/// effect on full Mon text lines is unmeasured.
+///
+/// A COPY of the same probe in `go/pkg/predictor/onnx.go`,
+/// `python/monocr_onnx/predictor.py` and `js/src/monocr.js`, not a shared
+/// module: these bindings ship independently. Step 4 of mon_OCR's
+/// `to_normalized_grayscale`, background levelling, is not ported here and is
+/// what the 0.0036 upright row above costs.
+const POLARITY_CORNER_FRACTION: u32 = 10;
+
+/// Smallest corner patch, in pixels, on each axis. A tenth of a 20px crop is
+/// 2px, and a 2x2 sample is a coin toss rather than a measurement.
+const POLARITY_CORNER_FLOOR: u32 = 3;
+
+/// Corner median at or above this is a light background; below it the image is
+/// light-text-on-dark and needs inverting.
+const DARK_BACKGROUND_MEDIAN: u8 = 128;
+
+/// Whether the four corner patches say this image is light-text-on-dark.
+///
+/// Corner-median rather than a global mean: document corners are almost always
+/// background, so their median survives a dense, text-heavy page where a global
+/// mean is dragged toward the ink. A page 64% covered in ink has a mean below 128
+/// and must NOT be inverted — `a_dense_page_is_not_mistaken_for_dark_mode` is
+/// what pins that.
+fn background_is_dark(image: &GrayImage) -> bool {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return false;
+    }
+
+    // The floor can exceed the image on a tiny crop, so clamp to the image.
+    // Without the clamp the patch reads past the edge; with an empty patch there
+    // is no median at all, and "no opinion" would silently mean "not dark",
+    // which is a wrong answer rather than a crash.
+    let ch = (height / POLARITY_CORNER_FRACTION)
+        .max(POLARITY_CORNER_FLOOR)
+        .min(height);
+    let cw = (width / POLARITY_CORNER_FRACTION)
+        .max(POLARITY_CORNER_FLOOR)
+        .min(width);
+
+    let mut samples = Vec::with_capacity((4 * ch * cw) as usize);
+    for (ox, oy) in [
+        (0, 0),
+        (width - cw, 0),
+        (0, height - ch),
+        (width - cw, height - ch),
+    ] {
+        for y in 0..ch {
+            for x in 0..cw {
+                samples.push(image.get_pixel(ox + x, oy + y)[0]);
+            }
+        }
+    }
+    samples.sort_unstable();
+
+    // Four patches of equal size, so the sample count is always a multiple of
+    // four. The odd-length half of a general median that the Go and Python
+    // copies carry cannot be reached from here, so it is not written.
+    let n = samples.len();
+    let median = (samples[n / 2 - 1] as f64 + samples[n / 2] as f64) / 2.0;
+    median < DARK_BACKGROUND_MEDIAN as f64
+}
+
+/// Return `image` as dark-text-on-light, inverting it when the background is
+/// dark.
+///
+/// An already-correct image is returned borrowed and untouched, which is what
+/// makes this safe to run on every input and idempotent: once the corners are
+/// light a second call is a no-op. Both call sites rely on that — the page path
+/// runs it before segmentation and `MonOcr::preprocess` runs it again per
+/// crop, and the second call must not undo the first.
+pub fn normalize_polarity(image: &GrayImage) -> Cow<'_, GrayImage> {
+    if !background_is_dark(image) {
+        return Cow::Borrowed(image);
+    }
+    let mut inverted = image.clone();
+    for pixel in inverted.pixels_mut() {
+        pixel[0] = 255 - pixel[0];
+    }
+    Cow::Owned(inverted)
+}
+
+/// Load a page as grayscale with its polarity corrected, ready for the
+/// segmenter.
+///
+/// Only the polarity probe runs here. Everything the model needs — the resize,
+/// the pad, the normalisation — belongs to [`MonOcr::preprocess`], per crop.
+/// This mirrors `js/src/monocr.js`'s `normalizePageForSegmentation` and
+/// `go/monocr.go`'s `predictImage`.
+fn page_for_segmentation(image_path: &Path) -> Result<GrayImage> {
+    let page = image::open(image_path)
+        .with_context(|| format!("cannot open {}", image_path.display()))?
+        .to_luma8();
+    Ok(normalize_polarity(&page).into_owned())
+}
+
+/// Find the lines of a page: correct polarity, then segment.
+///
+/// A free function taking the segmenter rather than a method on [`MonOcr`], so
+/// the ORDER of these two steps can be tested without a loaded ONNX session.
+/// When the ordering lived inline in `predict_page` it was reachable only
+/// through the model, and a mutation that dropped the probe survived the whole
+/// suite — which is how three sibling bindings shipped the bug this function
+/// exists to prevent.
+fn segment_page(segmenter: &LineSegmenter, image_path: &Path) -> Result<Vec<LineSegment>> {
+    let page = page_for_segmentation(image_path)?;
+    segmenter.segment_image(&page)
+}
 
 /// A model artifact that disagrees with the charset or the input geometry this
 /// binding was built for.
@@ -945,7 +1074,26 @@ impl MonOcr {
     /// produced "Mon E-boo" and "k library" as two readings of a single line.
     pub async fn predict_page(&mut self, image_path: impl AsRef<Path>) -> Result<Vec<LineResult>> {
         let image_path = image_path.as_ref();
-        let lines = self.segmenter.segment(image_path)?;
+
+        // Polarity BEFORE segmentation, and this ordering is the point. The
+        // segmenter treats dark as ink (`segmenter.rs`'s `< 128`), so handed a
+        // light-on-dark page it segments the BACKGROUND and returns the gaps
+        // between lines. Inverting each crop inside `preprocess` afterwards
+        // cannot recover a line that was never found.
+        //
+        // The three sibling bindings all fixed this after an audit caught the
+        // probe sitting in `preprocess` alone — `go/monocr.go` `predictImage`,
+        // `js/src/monocr.js` `predictPage`, `python/monocr_onnx/predictor.py`
+        // `predict_page`. This binding had the probe in neither place.
+        //
+        // The probe is idempotent, so the per-crop call in `preprocess_line` still
+        // covers `predict_single_line` without fighting this one.
+        //
+        // The ordering itself is tested through `segment_page`, not through here:
+        // this method needs a loaded session, so a mutation to THIS LINE survives
+        // the suite. Keep the delegation a single call so the untested surface
+        // stays one line wide.
+        let lines = segment_page(&self.segmenter, image_path)?;
 
         let mut results = Vec::new();
         for line in lines {
@@ -1062,6 +1210,11 @@ impl MonOcr {
     /// 3. **Normalization**: Convert pixel values from [0, 255] to [-1, 1]
     /// 4. **Padding**: Pad with white (1.0) if width is less than target
     ///
+    /// Polarity is corrected first, because the model is trained on dark text on
+    /// light and the normalisation in step 3 is a straight rescale that carries
+    /// an inverted crop through unchanged. See [`normalize_polarity`] for the
+    /// measured cost of skipping it.
+    ///
     /// # Arguments
     ///
     /// * `image` - Source grayscale image
@@ -1070,39 +1223,16 @@ impl MonOcr {
     ///
     /// * `Ok(Array4<f32>)` - 4D tensor with shape [1, 1, target_height, target_width]
     /// * `Err(anyhow::Error)` - If preprocessing fails
+    ///
+    /// The body lives in [`preprocess_line`], which is where the tests reach it;
+    /// this wrapper needs a loaded session and so is not itself covered. Keep it
+    /// a single delegating call for that reason.
     fn preprocess(&self, image: &GrayImage) -> Result<Array4<f32>> {
-        let (width, height) = image.dimensions();
-
-        // Calculate new width maintaining aspect ratio
-        let scale = self.target_height as f32 / height as f32;
-        let new_width = (width as f32 * scale).round() as u32;
-        let new_width = new_width.min(self.target_width);
-
-        // Resize image
-        let resized =
-            image::imageops::resize(image, new_width, self.target_height, FilterType::Triangle);
-
-        // Create tensor and normalize
-        let mut tensor = Array4::<f32>::zeros((
-            1,
-            1,
-            self.target_height as usize,
-            self.target_width as usize,
-        ));
-
-        for y in 0..self.target_height {
-            for x in 0..self.target_width {
-                let value = if x < new_width {
-                    let pixel = resized.get_pixel(x, y);
-                    (pixel[0] as f32 / 127.5) - 1.0 // Normalize to [-1, 1]
-                } else {
-                    1.0 // White padding
-                };
-                tensor[[0, 0, y as usize, x as usize]] = value;
-            }
-        }
-
-        Ok(tensor)
+        Ok(preprocess_line(
+            image,
+            self.target_height,
+            self.target_width,
+        ))
     }
 
     /// CTC Greedy Decoding
@@ -1130,6 +1260,46 @@ impl MonOcr {
     fn decode_owned(&self, data: &[f32], shape: &[usize]) -> Result<String> {
         decode_ctc(&self.charset, data, shape)
     }
+}
+
+/// Turn one line crop into the model's input tensor.
+///
+/// A free function taking the geometry rather than a method, for the same reason
+/// as [`segment_page`]: the polarity step below is otherwise reachable only
+/// through a loaded ONNX session, and a mutation that deleted it survived the
+/// whole suite.
+fn preprocess_line(image: &GrayImage, target_height: u32, target_width: u32) -> Array4<f32> {
+    // Per crop, which is what the single-line path needs: `predict_single_line`
+    // never reaches the page-level probe in `segment_page`. On a page the probe
+    // has already run and this call is a no-op, because it is idempotent.
+    let normalized = normalize_polarity(image);
+    let image = normalized.as_ref();
+    let (width, height) = image.dimensions();
+
+    // Calculate new width maintaining aspect ratio
+    let scale = target_height as f32 / height as f32;
+    let new_width = (width as f32 * scale).round() as u32;
+    let new_width = new_width.min(target_width);
+
+    // Resize image
+    let resized = image::imageops::resize(image, new_width, target_height, FilterType::Triangle);
+
+    // Create tensor and normalize
+    let mut tensor = Array4::<f32>::zeros((1, 1, target_height as usize, target_width as usize));
+
+    for y in 0..target_height {
+        for x in 0..target_width {
+            let value = if x < new_width {
+                let pixel = resized.get_pixel(x, y);
+                (pixel[0] as f32 / 127.5) - 1.0 // Normalize to [-1, 1]
+            } else {
+                1.0 // White padding
+            };
+            tensor[[0, 0, y as usize, x as usize]] = value;
+        }
+    }
+
+    tensor
 }
 
 /// CTC greedy decode of a flat logits buffer.
@@ -1198,6 +1368,221 @@ fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use image::Luma;
+
+    /// A page of glyph blobs on a light background, and its exact inverse.
+    ///
+    /// Blobs rather than a flat fill because the polarity probe reads the
+    /// corners: a page has to have real margins for the corner median to mean
+    /// anything, and `ink_fraction` lets a test say how much of the page is
+    /// covered without touching those margins.
+    fn drawn_page(width: u32, height: u32, band_h: u32, glyph_w: u32, pitch: u32) -> GrayImage {
+        let mut img = GrayImage::from_pixel(width, height, Luma([255u8]));
+        let margin = height / 10 + 4;
+        let mut y = margin;
+        while y + band_h < height - margin {
+            for yy in y..y + band_h {
+                let mut x = margin;
+                while x + glyph_w < width - margin {
+                    for i in 0..glyph_w {
+                        img.put_pixel(x + i, yy, Luma([0u8]));
+                    }
+                    x += pitch;
+                }
+            }
+            y += band_h * 2;
+        }
+        img
+    }
+
+    fn inverted(img: &GrayImage) -> GrayImage {
+        let mut out = img.clone();
+        for pixel in out.pixels_mut() {
+            pixel[0] = 255 - pixel[0];
+        }
+        out
+    }
+
+    fn ink_fraction(img: &GrayImage) -> f64 {
+        let dark = img.pixels().filter(|p| p[0] < 128).count();
+        dark as f64 / (img.width() * img.height()) as f64
+    }
+
+    /// The unconditional-safety property, the same one
+    /// `segmenter::tests::a_page_with_no_rules_is_untouched_to_the_pixel` asserts
+    /// for rule suppression: every input gets the probe, so on a correct page it
+    /// must do nothing at all rather than nearly nothing.
+    #[test]
+    fn a_light_page_is_not_inverted() {
+        let page = drawn_page(400, 300, 20, 10, 18);
+        let out = normalize_polarity(&page);
+        assert!(
+            matches!(out, Cow::Borrowed(_)),
+            "a light page must be handed back borrowed, not copied"
+        );
+        assert_eq!(out.as_raw(), page.as_raw(), "a light page was modified");
+    }
+
+    #[test]
+    fn a_dark_page_is_inverted() {
+        let page = drawn_page(400, 300, 20, 10, 18);
+        let dark = inverted(&page);
+        let out = normalize_polarity(&dark);
+        assert!(
+            matches!(out, Cow::Owned(_)),
+            "a light-on-dark page must be inverted"
+        );
+        assert_eq!(
+            out.as_raw(),
+            page.as_raw(),
+            "inverting a dark page must reproduce the light original exactly"
+        );
+    }
+
+    /// Corner-median rather than a global mean, and this is the case that
+    /// separates them. A page more than half covered in ink has a global mean
+    /// below 128 and would be inverted by a mean-based probe — turning correct
+    /// input into garbage on precisely the dense pages OCR is for.
+    #[test]
+    fn a_dense_page_is_not_mistaken_for_dark_mode() {
+        // Solid ink inside the margins, so the corners are the only light part of
+        // the page. 64% coverage is the figure the Go copy of this probe records
+        // as the case a mean-based test gets wrong.
+        let mut page = GrayImage::from_pixel(400, 300, Luma([255u8]));
+        let (margin_x, margin_y) = (34, 34);
+        for y in margin_y..300 - margin_y {
+            for x in margin_x..400 - margin_x {
+                page.put_pixel(x, y, Luma([0u8]));
+            }
+        }
+        let covered = ink_fraction(&page);
+        assert!(
+            covered > 0.5,
+            "the fixture must be more than half ink for this to test anything, \
+             got {covered:.3}"
+        );
+        assert!(
+            matches!(normalize_polarity(&page), Cow::Borrowed(_)),
+            "a dense but correctly-polarised page was inverted"
+        );
+    }
+
+    /// Both call sites depend on this. `predict_page` corrects the page and
+    /// `preprocess` corrects each crop of it, so a probe that flipped on every
+    /// call would undo itself and feed the model inverted tiles.
+    #[test]
+    fn polarity_is_idempotent() {
+        let dark = inverted(&drawn_page(400, 300, 20, 10, 18));
+        let once = normalize_polarity(&dark).into_owned();
+        let twice = normalize_polarity(&once).into_owned();
+        assert_eq!(
+            once.as_raw(),
+            twice.as_raw(),
+            "a second pass changed the image; the two call sites would fight"
+        );
+    }
+
+    /// A 1x1 crop makes the corner patches overlap and the floor exceed the
+    /// image. Reading past the edge is what would panic.
+    #[test]
+    fn a_tiny_crop_does_not_panic() {
+        for (w, h) in [(1u32, 1u32), (1, 40), (40, 1), (5, 5), (2, 7)] {
+            let dark = GrayImage::from_pixel(w, h, Luma([10u8]));
+            assert!(
+                matches!(normalize_polarity(&dark), Cow::Owned(_)),
+                "{w}x{h}: a solid dark crop must be inverted"
+            );
+            let light = GrayImage::from_pixel(w, h, Luma([240u8]));
+            assert!(
+                matches!(normalize_polarity(&light), Cow::Borrowed(_)),
+                "{w}x{h}: a solid light crop must be left alone"
+            );
+        }
+    }
+
+    /// The gap this closes, end to end and without the model.
+    ///
+    /// `predict_page` used to hand the raw path to the segmenter, and the
+    /// segmenter treats dark as ink. On a light-on-dark page that means the
+    /// BACKGROUND is what gets segmented and the returned bands are the gaps
+    /// BETWEEN the lines — 3 bands where the same page upright gives 4, each one
+    /// landing on white space. Correcting polarity per crop afterwards cannot
+    /// recover a line that was never found.
+    ///
+    /// This drives `segment_page`, which is the whole of what `predict_page` does
+    /// before the model, so the assertion covers the ORDER of the two steps and
+    /// not just the probe in isolation.
+    #[test]
+    fn a_dark_mode_page_segments_into_the_same_lines_as_its_upright_twin() {
+        let page = drawn_page(400, 300, 20, 10, 18);
+        let dir = tempfile::tempdir().unwrap();
+        let light_path = dir.path().join("light.png");
+        let dark_path = dir.path().join("dark.png");
+        page.save(&light_path).unwrap();
+        inverted(&page).save(&dark_path).unwrap();
+
+        let seg = LineSegmenter::new(10, 3);
+        let light = seg.segment(&light_path).unwrap();
+        assert!(
+            light.len() > 1,
+            "the upright control found {} line(s); the comparison below needs a \
+             page that actually segments",
+            light.len()
+        );
+
+        // Uncorrected, for the record: this is what `predict_page` used to do.
+        let uncorrected = seg.segment(&dark_path).unwrap();
+        assert_ne!(
+            uncorrected.len(),
+            light.len(),
+            "the dark page segmented correctly without the probe, so this test \
+             cannot show the probe is needed — pick a harder fixture"
+        );
+
+        let corrected = segment_page(&seg, &dark_path).unwrap();
+        assert_eq!(
+            corrected.len(),
+            light.len(),
+            "a dark-mode page gave {} line(s) against {} for the same page \
+             upright; polarity is not being corrected before segmentation",
+            corrected.len(),
+            light.len()
+        );
+        for (c, l) in corrected.iter().zip(light.iter()) {
+            assert_eq!(
+                (c.bbox.y, c.bbox.h),
+                (l.bbox.y, l.bbox.h),
+                "corrected bands must land on the same rows as the upright page"
+            );
+        }
+    }
+
+    /// The per-crop half of the same gap. `predict_single_line` never reaches
+    /// `segment_page`, so without the probe inside `preprocess_line` a dark-mode
+    /// crop goes to the model inverted — measured at 9.5x the error rate on the
+    /// 300-crop set quoted above.
+    ///
+    /// Comparing tensors rather than text keeps this off the model: an inverted
+    /// crop and its upright twin must arrive at the graph as the same input.
+    #[test]
+    fn a_dark_crop_preprocesses_to_the_same_tensor_as_its_upright_twin() {
+        let crop = drawn_page(300, 40, 20, 10, 18);
+        let upright = preprocess_line(&crop, EXPECTED_INPUT_HEIGHT, DEFAULT_INPUT_WIDTH);
+        let dark = preprocess_line(&inverted(&crop), EXPECTED_INPUT_HEIGHT, DEFAULT_INPUT_WIDTH);
+
+        // Guard the guard: a tensor of nothing but white padding would make the
+        // comparison below hold for the wrong reason.
+        assert!(
+            upright.iter().any(|v| *v < 0.0),
+            "the upright control has no ink in it, so equality proves nothing"
+        );
+        assert_eq!(
+            upright, dark,
+            "a light-on-dark crop reached the model as a different tensor from \
+             the same crop upright; the per-crop polarity probe is missing"
+        );
+    }
 
     /// The pinned model: input [1, 1, 160, 1024], output [1, sequence, 277].
     ///
