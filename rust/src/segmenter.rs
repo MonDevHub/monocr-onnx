@@ -948,13 +948,35 @@ mod tests {
 
     /// An empty array would make every assertion below vacuous, so an empty one
     /// is a fixture failure rather than a pass.
-    fn cases(root: &Value, key: &str) -> Vec<Value> {
+    // Floors on the shared fixtures, read off the files on 2026-08-30. Raise one
+    // when a fixture grows and you want the growth pinned; never lower one to make
+    // a red test pass, which is the whole failure this replaces.
+    const TILING_CASES_MIN: usize = 14;
+    const TILING_PROBES_MIN: usize = 3;
+    const RULE_CASES_MIN: usize = 23;
+    const MERGE_CASES_MIN: usize = 18;
+
+    /// `at_least` is a FLOOR ON THE COUNT, and the emptiness check it replaces was
+    /// not enough. A fixture regenerated with three of its eighteen cases is not
+    /// empty, so every port went on passing while testing a sixth of what it
+    /// advertised. The floor catches that; it deliberately does not pin equality,
+    /// because a fixture GAINING a case is the normal and wanted direction and
+    /// should not need an edit in four languages to land.
+    ///
+    /// What a floor cannot catch is a swap: a case removed and another added keeps
+    /// the count. Nothing here notices that, and equality would not either.
+    fn cases(root: &Value, key: &str, at_least: usize) -> Vec<Value> {
         let cases = root
             .get(key)
             .and_then(Value::as_array)
             .unwrap_or_else(|| panic!("fixture has no '{key}' array"))
             .clone();
-        assert!(!cases.is_empty(), "fixture '{key}' is empty");
+        assert!(
+            cases.len() >= at_least,
+            "fixture '{key}' carries {} cases, expected at least {at_least} -- \
+             a fixture that shrank is a fixture that stopped testing what it claims",
+            cases.len()
+        );
         cases
     }
 
@@ -974,7 +996,7 @@ mod tests {
     #[test]
     fn tile_widths_match_the_shared_fixture() {
         let f = fixture();
-        for case in cases(&f.root, "cases") {
+        for case in cases(&f.root, "cases", TILING_CASES_MIN) {
             let (img, name) = case_image(&case);
             let expected: Vec<u32> = case
                 .get("expected_tile_widths")
@@ -1002,7 +1024,7 @@ mod tests {
     #[test]
     fn tiles_partition_the_line() {
         let f = fixture();
-        for case in cases(&f.root, "cases") {
+        for case in cases(&f.root, "cases", TILING_CASES_MIN) {
             let (img, name) = case_image(&case);
             let tiles = tile_line(&img, f.target_height, f.target_width);
 
@@ -1047,7 +1069,7 @@ mod tests {
         let f = fixture();
         let mut checked = 0;
 
-        for case in cases(&f.root, "cases") {
+        for case in cases(&f.root, "cases", TILING_CASES_MIN) {
             let expected_count = case
                 .get("expected_tile_widths")
                 .and_then(Value::as_array)
@@ -1234,7 +1256,7 @@ mod tests {
             .and_then(Value::as_u64)
             .expect("fixture has no checksum_modulus");
 
-        for case in cases(&root, "cases") {
+        for case in cases(&root, "cases", RULE_CASES_MIN) {
             let name = case
                 .get("name")
                 .and_then(Value::as_str)
@@ -1390,7 +1412,7 @@ mod tests {
     #[test]
     fn cut_column_matches_the_shared_fixture() {
         let f = fixture();
-        for probe in cases(&f.root, "cut_column_probes") {
+        for probe in cases(&f.root, "cut_column_probes", TILING_PROBES_MIN) {
             let (img, name) = case_image(&probe);
             let got = cut_column(
                 &img,
@@ -2095,7 +2117,7 @@ mod tests {
              discriminate anything"
         );
 
-        for case in cases(&root, "cases") {
+        for case in cases(&root, "cases", MERGE_CASES_MIN) {
             let name = case
                 .get("name")
                 .and_then(Value::as_str)
