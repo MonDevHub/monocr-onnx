@@ -1,9 +1,8 @@
 # MonOCR (Go SDK)
 
-The official Go SDK for Mon language OCR, powered by ONNX Runtime.
+[![Go Reference](https://pkg.go.dev/badge/github.com/MonDevHub/monocr-onnx/go.svg)](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)
 
-Mon (`mnw`) is a Mon-Khmer language of Myanmar and Thailand, written in a
-Myanmar-script orthography. It is unrelated to Mongolian.
+The official Go SDK for Mon language OCR, powered by ONNX Runtime.
 
 ## Installation
 
