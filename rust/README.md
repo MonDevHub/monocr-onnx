@@ -1,9 +1,8 @@
 # MonOCR (Rust SDK)
 
-A Rust SDK for Mon language OCR, powered by ONNX Runtime.
+[![crates.io](https://img.shields.io/crates/v/monocr.svg)](https://crates.io/crates/monocr)
 
-Mon (`mnw`) is a Mon-Khmer language of Myanmar and Thailand, written in a
-Myanmar-script orthography. It is unrelated to Mongolian.
+The official Rust SDK for Mon language OCR, powered by ONNX Runtime.
 
 ## Installation
 
@@ -11,9 +10,12 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocr-onnx = { git = "https://github.com/MonDevHub/monocr-onnx", branch = "main" }
+monocr = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
+
+The crate is `monocr`; the library it exposes is `monocr_onnx`, so imports read
+`use monocr_onnx::MonOcr`.
 
 ## The model
 
