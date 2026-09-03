@@ -43,16 +43,29 @@ jobs:
       # release-python.yml attempts the exchange and reports a specific 422,
       # while npm's output had no OIDC line at all — it never tried. The
       # registry default is npmjs.org, so nothing is lost by omitting this.
+      # Pinned to 24, not to the 20 that package.json's `engines.node` declares
+      # as the floor. That pin was already a fiction: GitHub deprecated Node 20
+      # runners on 2025-09-19 and now silently substitutes 24 regardless of what
+      # this field says — confirmed from the run's own warning annotation on
+      # js/v0.3.0's first release attempt, which also failed at `node --test`.
+      # Whether the substitution caused that failure was not established before
+      # this pin was corrected: the raw job log needs repository-admin access to
+      # read, and the same commit's tests passed locally against a genuinely
+      # fresh Node 24 install. Declaring 24 here removes the mismatch either
+      # way — the runner now matches what actually executes, rather than
+      # publishing under a version number nothing runs — and is the fix to
+      # retry with first, before assuming a real regression in the code.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       # Trusted publishing needs npm >= 11.5.1 and the runner's bundled npm lags.
       #
-      # npm@11, not npm@latest: latest is 12.x, which requires Node ^22.22 and
-      # cannot run on the Node 20 this job uses. Node 20 is deliberate — it is
-      # the floor package.json declares, and publishing from the floor is the
-      # honest thing to do. npm 11 supports ^20.17.0 || >=22.9.0.
+      # npm@11, not npm@latest: latest is 12.x, and while Node 24 satisfies its
+      # ^22.22 requirement now, npm 11 is the version this pipeline has actually
+      # been tested against. Changing the Node floor is not a reason to also
+      # change the npm version in the same commit. npm 11 supports
+      # ^20.17.0 || >=22.9.0, so it runs on 24 without change.
       - name: Use an npm that supports trusted publishing
         run: npm install -g npm@11
 
