@@ -1,5 +1,7 @@
 # MonOCR (Python SDK)
 
+[![PyPI](https://img.shields.io/pypi/v/monocr-onnx.svg)](https://pypi.org/project/monocr-onnx/)
+
 The official Python SDK for Mon language OCR, powered by ONNX Runtime. Optimized for high-throughput batch processing and production server environments.
 
 ## Installation

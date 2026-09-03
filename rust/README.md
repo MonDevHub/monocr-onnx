@@ -1,5 +1,7 @@
 # MonOCR (Rust SDK)
 
+[![crates.io](https://img.shields.io/crates/v/monocr.svg)](https://crates.io/crates/monocr)
+
 The official Rust SDK for Mon language OCR, powered by ONNX Runtime.
 
 ## Installation

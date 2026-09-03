@@ -1,5 +1,7 @@
 # MonOCR (JavaScript SDK)
 
+[![npm](https://img.shields.io/npm/v/monocr.svg)](https://www.npmjs.com/package/monocr)
+
 The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
 
 ## Installation
