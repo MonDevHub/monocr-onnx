@@ -1,0 +1,97 @@
+# Publishes the `monocr-onnx` Rust crate to crates.io on a `rust/v*` tag.
+#
+# Trusted publishing (OIDC) via rust-lang/crates-io-auth-action, so there is no
+# CARGO_REGISTRY_TOKEN long-lived secret to store, leak or rotate.
+#
+# ONE-TIME SETUP, and it must happen in this order: crates.io has no
+# "pending publisher" mechanism (unlike PyPI's, which lets you register a
+# publisher before a project's first release). A crates.io Trusted Publisher
+# Configuration can only be attached to a crate that already exists.
+#   1. Publish an initial version manually once, with a personal API token:
+#        cd rust && cargo login && cargo publish
+#   2. Only after that, on the crate's settings page at
+#        https://crates.io/crates/monocr-onnx/settings
+#      add a GitHub Actions trusted publisher:
+#        Repository owner: MonDevHub
+#        Repository name:  monocr-onnx
+#        Workflow filename: release-rust.yml
+#        Environment: (blank)
+#   Before step 2 is done, this workflow's OIDC token exchange is refused by
+#   crates.io — there is no configuration for it to match against yet.
+#   Reference: https://crates.io/docs/trusted-publishing and RFC 3691
+#   (rust-lang/rfcs, text/3691-trusted-publishing-cratesio.md), which lists a
+#   PENDING pre-registration state under "Future possibilities" — i.e. not
+#   implemented as of this writing.
+#
+# The tag is namespaced `rust/v*` because this repository ships four bindings
+# from one tree: go/v*, js/v* and python/v* already claim the others. A bare
+# `v*` would be ambiguous about which binding is being released.
+#
+# THE TESTS RUN BEFORE THE PUBLISH. The sibling `monocr` repository had a
+# release workflow that built and published without running anything, which is
+# how a decoder that mapped every index to the wrong character reached PyPI and
+# sat there for three releases.
+name: release-rust
+
+on:
+  push:
+    tags:
+      - "rust/v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      # A tag that disagrees with Cargo.toml publishes the wrong number under
+      # the right name, and crates.io has no undo — even a yanked version
+      # keeps its slot forever.
+      - name: Verify the tag matches Cargo.toml
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#rust/v}"
+          PKG="$(awk -F'"' '/^version = /{print $2; exit}' rust/Cargo.toml)"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error title=Tag/version mismatch::tag rust/v$TAG does not match Cargo.toml version $PKG"
+            exit 1
+          fi
+          echo "tag and Cargo.toml agree on $PKG"
+
+      # Mirrors the rust-test job in test.yml exactly: fmt, then test. That job
+      # does not run clippy, so this gate does not invent one either — a
+      # release check that verifies something CI never verifies is not
+      # actually mirroring CI, it's a second, divergent policy.
+      - name: cargo fmt
+        run: |
+          cd rust
+          cargo fmt --check
+
+      - name: Run tests
+        run: |
+          cd rust
+          cargo test
+
+      # Exchanges this job's GitHub OIDC identity for a short-lived crates.io
+      # token. Requires `id-token: write` above and a Trusted Publisher
+      # Configuration already set up on crates.io (see the header comment).
+      # The action's own `post` step revokes the token when the job ends.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish
+        run: |
+          cd rust
+          cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
