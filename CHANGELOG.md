@@ -4,6 +4,39 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## Unreleased
+
+### Known: the fixture count floor is split across two repositories
+
+Recorded 2026-09-03 because nothing else records it, and the shape is the one this
+project keeps finding rather than a new kind of problem.
+
+The shared segmentation fixtures used to be asserted only for non-emptiness, so a
+regenerated fixture that shrank to one case would still pass every port. Count floors were
+added to fix that. **Three of the four surfaces have them and this repository's Rust
+binding does not** — the web, iOS and Android floors landed on `monocr-monorepo`'s `main`,
+and Rust's are on the unmerged branch `fix/2026-08-27/js-ci-needs-sharp`
+(`rust/src/segmenter.rs`, `TILING_CASES_MIN` 14, `TILING_PROBES_MIN` 3, `RULE_CASES_MIN`
+23, `MERGE_CASES_MIN` 18). Verified 2026-09-03: `git show origin/main:rust/src/segmenter.rs`
+contains no `CASES_MIN`.
+
+**Why this is worse than half a fix.** `.github/workflows/test.yml` sparse-checks-out the
+monorepo's fixtures with **no `ref:`**, so the Rust suite reads whatever is on that repo's
+default branch. A fixture regeneration there is validated by three ports with floors and
+one without, and the one without is the one reading the fixture across a repository
+boundary at an unpinned revision.
+
+**The same class of gap, unfixed:** Python, JavaScript and Go assert hand-written literals
+rather than the shared fixture at all. `grep -rn 'segmentation-fixtures'` in this
+repository matches only `rust/src/segmenter.rs` and the workflow. Python is additionally
+the oracle the tiling cases were generated from, so it cannot corroborate them. F-69 is
+the recorded cost of a half-ported segmenter: 45 of 145 pages with over 40% of bands
+decoding to nonsense at 300 DPI, invisible at 150 because no fixture drew more than one
+band height at one scale.
+
+**To close:** merge `bac90d1`, put Python, JS and Go on the shared fixtures with floors
+from the start, and pin both cross-repo checkouts to a revision.
+
 ## 0.3.0 — 2026-08-27
 
 **Breaking against everything currently installed.** The registries are two
