@@ -7,7 +7,7 @@ license = "MIT"
 authors = ["Janakh"]
 repository = "https://github.com/MonDevHub/monocr-onnx"
 homepage = "https://github.com/MonDevHub/monocr-onnx/tree/main/rust"
-documentation = "https://docs.rs/monocr-onnx"
+documentation = "https://docs.rs/monocr"
 
 [[bin]]
 name = "monocr"
