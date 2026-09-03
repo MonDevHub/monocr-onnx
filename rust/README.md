@@ -10,9 +10,12 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocr-onnx = { git = "https://github.com/MonDevHub/monocr-onnx", branch = "main" }
+monocr = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
+
+The crate is `monocr`; the library it exposes is `monocr_onnx`, so imports read
+`use monocr_onnx::MonOcr`.
 
 ## The model
 

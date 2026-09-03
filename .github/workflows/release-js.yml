@@ -43,18 +43,9 @@ jobs:
       # release-python.yml attempts the exchange and reports a specific 422,
       # while npm's output had no OIDC line at all — it never tried. The
       # registry default is npmjs.org, so nothing is lost by omitting this.
-      # Pinned to 24, not to the 20 that package.json's `engines.node` declares
-      # as the floor. That pin was already a fiction: GitHub deprecated Node 20
-      # runners on 2025-09-19 and now silently substitutes 24 regardless of what
-      # this field says — confirmed from the run's own warning annotation on
-      # js/v0.3.0's first release attempt, which also failed at `node --test`.
-      # Whether the substitution caused that failure was not established before
-      # this pin was corrected: the raw job log needs repository-admin access to
-      # read, and the same commit's tests passed locally against a genuinely
-      # fresh Node 24 install. Declaring 24 here removes the mismatch either
-      # way — the runner now matches what actually executes, rather than
-      # publishing under a version number nothing runs — and is the fix to
-      # retry with first, before assuming a real regression in the code.
+      # 24, not the 20 in package.json's engines floor: GitHub deprecated Node
+      # 20 runners on 2025-09-19 and substitutes 24 regardless, so the old pin
+      # described a runtime nothing ran.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"

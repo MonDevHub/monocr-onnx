@@ -90,21 +90,13 @@ claim about itself. The "Published" column is the registry's answer; those are
 different questions, and conflating them is what let 0.2.0 and 0.2.1 sit
 tagged-but-unpublished for months.
 
-This matters more than a version number usually does: the published 0.1.x
-releases are the ones carrying the 225-character charset defect that the commits
-in this tree fix. Installing from a registry today gets the broken charset.
+The `>=0.3.0` bounds below are load-bearing: 0.1.x carries a 225-character
+charset against a 277-class graph and returns wrong characters, not merely worse
+ones.
 
 ## Installation
 
 ### Python
-
-> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
-> tagged but not published; the bound below fails loudly rather than installing
-> 0.1.0, which targets a superseded model (64px input height, a 225-character
-> charset against a 277-class graph) and returns wrong characters rather than
-> merely worse ones. Until the publish step runs, install from source:
-> `pip install git+https://github.com/MonDevHub/monocr-onnx.git#subdirectory=python`.
-> See `CHANGELOG.md` and `RELEASING.md`.
 
 ```bash
 pip install "monocr-onnx>=0.3.0"
@@ -114,14 +106,6 @@ uv add "monocr-onnx>=0.3.0"
 
 ### Node.js
 
-> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
-> tagged but not published; the bound below fails loudly rather than installing
-> 0.1.5, which targets a superseded model (64px input height, a 225-character
-> charset against a 277-class graph) and returns wrong characters rather than
-> merely worse ones. Until the publish step runs, install from source:
-> `npm install github:MonDevHub/monocr-onnx#main --prefix js`.
-> See `CHANGELOG.md` and `RELEASING.md`.
-
 ```bash
 npm install monocr@^0.3.0
 ```
@@ -130,6 +114,14 @@ npm install monocr@^0.3.0
 
 ```bash
 go get github.com/MonDevHub/monocr-onnx/go
+```
+
+### Rust
+
+The crate is `monocr`; the library it exposes is `monocr_onnx`.
+
+```bash
+cargo add monocr
 ```
 
 ## Usage (Python)
