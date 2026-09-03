@@ -2,9 +2,6 @@
 
 The official Go SDK for Mon language OCR, powered by ONNX Runtime.
 
-Mon (`mnw`) is a Mon-Khmer language of Myanmar and Thailand, written in a
-Myanmar-script orthography. It is unrelated to Mongolian.
-
 ## Installation
 
 ```bash
