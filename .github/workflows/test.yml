@@ -44,9 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Node.js
+        # 24, not the 20 in package.json's `engines.node` floor — GitHub
+        # deprecated Node 20 runners on 2025-09-19 and silently substitutes 24
+        # regardless of this pin. Kept in step with release-js.yml, which
+        # explains this at length.
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       # The install now comes BEFORE the tests, and the reason it used to come
       # after is worth keeping rather than deleting.
       #
