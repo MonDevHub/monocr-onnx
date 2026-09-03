@@ -24,9 +24,9 @@ jobs:
   python-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -42,13 +42,13 @@ jobs:
   js-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
         # 24, not the 20 in package.json's `engines.node` floor — GitHub
         # deprecated Node 20 runners on 2025-09-19 and silently substitutes 24
         # regardless of this pin. Kept in step with release-js.yml, which
         # explains this at length.
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
       # The install now comes BEFORE the tests, and the reason it used to come
@@ -78,7 +78,7 @@ jobs:
       # it, dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's
       # network postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
           # bindings and the JS one lives in js/. Without this, action-setup
@@ -108,7 +108,7 @@ jobs:
   rust-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -162,7 +162,7 @@ jobs:
       # With that set the full suite passes locally (28 lib + 14 doc-tests). That
       # is a real and unrelated issue; it is not why this job was red.
       - name: Fetch the shared segmentation fixture
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: MonDevHub/monocr
           path: .fixtures-monorepo
@@ -206,9 +206,9 @@ jobs:
   go-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Matches go/go.mod, which requires 1.23. This read "1.21" until
           # 2026-08-15, so CI compiled against a toolchain the module rejects.
@@ -243,7 +243,7 @@ jobs:
   charset-parity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: All four bundled charsets are identical
         run: |
           set -euo pipefail

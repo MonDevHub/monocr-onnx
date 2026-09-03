@@ -28,7 +28,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # No `registry-url:` here, deliberately. It makes setup-node write an
       # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
@@ -55,7 +55,7 @@ jobs:
       # way — the runner now matches what actually executes, rather than
       # publishing under a version number nothing runs — and is the fix to
       # retry with first, before assuming a real regression in the code.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
@@ -83,7 +83,7 @@ jobs:
       # glance — so the wrong ordering does not just break the run, it makes a
       # blocked release look like a broken binding. The lockfile must resolve
       # before anything is published from this tree either way.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
           # bindings and the JS one lives in js/. Without this, action-setup
