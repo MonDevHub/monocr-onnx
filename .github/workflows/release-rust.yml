@@ -1,4 +1,10 @@
-# Publishes the `monocr-onnx` Rust crate to crates.io on a `rust/v*` tag.
+# Publishes the `monocr` Rust crate to crates.io on a `rust/v*` tag.
+#
+# Named `monocr` on crates.io, not `monocr-onnx` like the repository and the
+# other three bindings' registries. Chosen deliberately on 2026-09-03, before
+# the first publish, once `monocr` was confirmed unclaimed there. `Cargo.toml`'s
+# `[lib] name` stays `monocr_onnx`, so nothing importing this crate needs to
+# change; only the published identity differs from the other bindings'.
 #
 # Trusted publishing (OIDC) via rust-lang/crates-io-auth-action, so there is no
 # CARGO_REGISTRY_TOKEN long-lived secret to store, leak or rotate.
@@ -10,7 +16,7 @@
 #   1. Publish an initial version manually once, with a personal API token:
 #        cd rust && cargo login && cargo publish
 #   2. Only after that, on the crate's settings page at
-#        https://crates.io/crates/monocr-onnx/settings
+#        https://crates.io/crates/monocr/settings
 #      add a GitHub Actions trusted publisher:
 #        Repository owner: MonDevHub
 #        Repository name:  monocr-onnx
@@ -27,10 +33,11 @@
 # from one tree: go/v*, js/v* and python/v* already claim the others. A bare
 # `v*` would be ambiguous about which binding is being released.
 #
-# THE TESTS RUN BEFORE THE PUBLISH. The sibling `monocr` repository had a
-# release workflow that built and published without running anything, which is
-# how a decoder that mapped every index to the wrong character reached PyPI and
-# sat there for three releases.
+# THE TESTS RUN BEFORE THE PUBLISH. The sibling `janakhpon/monocr` repository
+# — a different codebase, unrelated to this crate sharing its published name —
+# had a release workflow that built and published without running anything,
+# which is how a decoder that mapped every index to the wrong character
+# reached PyPI and sat there for three releases.
 name: release-rust
 
 on:
