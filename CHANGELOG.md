@@ -6,36 +6,64 @@ language.
 
 ## Unreleased
 
-### Known: the fixture count floor is split across two repositories
+### Corrected: the floors were already on main, and they have never run
 
-Recorded 2026-09-03 because nothing else records it, and the shape is the one this
-project keeps finding rather than a new kind of problem.
+**Recorded 2026-09-03. This entry replaces one written the same day that was wrong in
+three of its four factual claims, and the way it went wrong is worth more than what it
+got wrong.**
 
-The shared segmentation fixtures used to be asserted only for non-emptiness, so a
-regenerated fixture that shrank to one case would still pass every port. Count floors were
-added to fix that. **Three of the four surfaces have them and this repository's Rust
-binding does not** — the web, iOS and Android floors landed on `monocr-monorepo`'s `main`,
-and Rust's are on the unmerged branch `fix/2026-08-27/js-ci-needs-sharp`
-(`rust/src/segmenter.rs`, `TILING_CASES_MIN` 14, `TILING_PROBES_MIN` 3, `RULE_CASES_MIN`
-23, `MERGE_CASES_MIN` 18). Verified 2026-09-03: `git show origin/main:rust/src/segmenter.rs`
-contains no `CASES_MIN`.
+The previous entry said *"Three of the four surfaces have them and this repository's Rust
+binding does not"*, and offered as proof: *"Verified 2026-09-03: `git show
+origin/main:rust/src/segmenter.rs` contains no `CASES_MIN`."*
 
-**Why this is worse than half a fix.** `.github/workflows/test.yml` sparse-checks-out the
-monorepo's fixtures with **no `ref:`**, so the Rust suite reads whatever is on that repo's
-default branch. A fixture regeneration there is validated by three ports with floors and
-one without, and the one without is the one reading the fixture across a repository
-boundary at an unpinned revision.
+**All four floors are on `origin/main`** — `rust/src/segmenter.rs:954-957`,
+`TILING_CASES_MIN` 14, `TILING_PROBES_MIN` 3, `RULE_CASES_MIN` 23, `MERGE_CASES_MIN` 18 —
+merged on **2026-08-31** (PR #17), a commit dated 2026-08-30. So `bac90d1`, which that
+entry told the reader to merge, was already merged before the entry was written.
 
-**The same class of gap, unfixed:** Python, JavaScript and Go assert hand-written literals
-rather than the shared fixture at all. `grep -rn 'segmentation-fixtures'` in this
-repository matches only `rust/src/segmenter.rs` and the workflow. Python is additionally
-the oracle the tiling cases were generated from, so it cannot corroborate them. F-69 is
-the recorded cost of a half-ported segmenter: 45 of 145 pages with over 40% of bands
-decoding to nonsense at 300 DPI, invisible at 150 because no fixture drew more than one
-band height at one scale.
+**Why the check passed while being false: `origin/main` is a local ref, and it had not
+been fetched.** It was eight commits stale. `git show origin/main:<path>` reads the
+remote-tracking branch, not the remote, so it answers a question about this machine's last
+fetch and looks exactly like an answer about the remote. A `git fetch` first would have
+cost nothing. **A verification that does not touch the network cannot certify a remote.**
 
-**To close:** merge `bac90d1`, put Python, JS and Go on the shared fixtures with floors
-from the start, and pin both cross-repo checkouts to a revision.
+### The real defect, which the wrong entry hid
+
+**The floors exist and have never executed in CI.** `.github/workflows/test.yml:117` runs
+`cargo fmt --check` before `cargo test` at `:209`, and the committed tree does not
+satisfy rustfmt: `df1f09b` (2026-08-29, the commit that wired `merge_runs` to the shared
+fixture) left an `assert_eq!` at `rust/src/segmenter.rs:2067` wider than `fn_call_width`.
+The Rust job has therefore died at the format step, on this branch and on `main`, since
+2026-08-29 — so the four floors landed, were merged, and guarded nothing.
+
+MEASURED 2026-09-03: `cargo fmt --check` exits 1 on the tree as committed. Fixed in this
+commit by running `cargo fmt`; the suite then passes 56 lib tests and 14 doc-tests with
+`cargo clippy --all-targets` clean.
+
+That is the second time in this file's history that a gate was present and unreachable,
+and the pattern is the one worth carrying: **a floor added below a step that always fails
+is indistinguishable from no floor at all**, and nothing reports the difference, because
+the job's failure is attributed to formatting.
+
+### What was true in the old entry, and remains open
+
+**Python, JavaScript and Go do not read the shared fixtures at all.** `grep -rn
+'segmentation-fixtures'` matches only `rust/src/segmenter.rs` and
+`.github/workflows/test.yml`; the other three bindings assert hand-written literals.
+Python is additionally the oracle those cases were generated from, so it cannot
+corroborate them. F-69 is the recorded cost of a half-ported segmenter: 45 of 145 pages
+with over 40% of bands decoding to nonsense at 300 DPI, invisible at 150 because no
+fixture drew more than one band height at one scale.
+
+**The cross-repo checkout is pinned here and not on `main`.** `test.yml:183` carries
+`ref: dc5c8ae…` on this branch; `git show origin/main:.github/workflows/test.yml` has
+`repository: MonDevHub/monocr` with no `ref:`, so main's Rust suite validates against
+whatever sits on that repository's default branch. The reciprocal gap is also still open:
+`monocr-monorepo`'s `origin/main` checks out `MonDevHub/monocr-onnx` with no `ref:`.
+
+**To close:** merge this branch so the pin and the formatting fix reach `main`; put
+Python, JS and Go on the shared fixtures with floors from the start; and pin the
+monorepo's checkout of this repository.
 
 ## 0.3.0 — 2026-08-27
 

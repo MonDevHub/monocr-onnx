@@ -2067,7 +2067,11 @@ mod tests {
             let fill = fill
                 .as_array()
                 .unwrap_or_else(|| panic!("'profile_fills' entry is not a triple: {fill}"));
-            assert_eq!(fill.len(), 3, "'profile_fills' entry is not a triple: {fill:?}");
+            assert_eq!(
+                fill.len(),
+                3,
+                "'profile_fills' entry is not a triple: {fill:?}"
+            );
             let number = |i: usize| {
                 fill[i]
                     .as_f64()
