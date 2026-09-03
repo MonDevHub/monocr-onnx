@@ -1,6 +1,6 @@
 [package]
 name = "monocr"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Universal MonOCR package with ONNX bindings for Rust"
 license = "MIT"
@@ -18,7 +18,18 @@ name = "monocr_onnx"
 path = "src/lib.rs"
 
 [dependencies]
-ort = "2.0.0-rc.11"
+# Pinned exactly, not by range. `ort` is a pre-release, and Cargo's
+# pre-release ordering lets the caret range "2.0.0-rc.11" admit rc.13 —
+# which changed `ort::Error`'s Send/Sync bounds and does not compile against
+# this crate. The bundled Cargo.lock pins rc.11, so local builds, CI and
+# docs.rs were all green while every downstream `cargo add monocr` resolved
+# forward to rc.13 and failed with nine E0277s. A dependency's lockfile is
+# ignored by consumers.
+#
+# 0.3.0 shipped with the range and is broken for exactly that reason. The
+# sibling CLI at monocr-monorepo/apps/cli already carried this fix and the
+# comment explaining it; this crate never applied it.
+ort = "=2.0.0-rc.11"
 image = "0.24"
 ndarray = "0.17"
 anyhow = "1.0"
