@@ -84,15 +84,23 @@ with no error and no lookup miss.
 
 | SDK                      | Directory            | Registry/Source                                                                      | Published | In this tree |
 | :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.3.2     | 0.4.0        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.3.2     | 0.4.0        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.3.2    | 0.4.0        |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.0     | 0.4.0        |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.0     | 0.4.0        |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.0    | 0.4.0        |
 | **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.3.1     | 0.4.0        |
 
-**Python, JavaScript and Go are published at 0.3.2, Rust at 0.3.1; 0.4.0 is in
-this tree awaiting release**; 0.3.2
-differs from it only in the crate description and a doc comment, so `cargo add
-monocr` gives you the same library. Rust is also the odd one out in naming: named `monocr` on
+**Python, JavaScript and Go are published at 0.4.0. Rust is at 0.3.1**, which
+differs only in the crate description and a doc comment, so `cargo add monocr`
+gives you the same library.
+
+> [!IMPORTANT]
+> **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
+> noise rather than text: the preprocessing step read a three-channel buffer as
+> if it were one channel, so it sampled the wrong bytes. On a typeset page
+> `monocr@0.3.2` returned 168 characters of garbage where 0.4.0 returns 1,178 of
+> Mon. The Python, Go and Rust bindings were never affected.
+
+Rust is also the odd one out in naming: named `monocr` on
 crates.io rather than `monocr-onnx` like the repository and the other three
 registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
