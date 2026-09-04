@@ -4,6 +4,26 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## 0.3.2 — 2026-09-03
+
+No change to the model, the charset or any API. This release exists to carry two
+text corrections onto the registry pages, which serve whatever was uploaded with
+a release and never re-read the repository.
+
+- **One description across PyPI, npm and crates.io.** The three said two
+  different things and neither said what a caller gets. All three now read
+  "On-device Mon (mnw) OCR, powered by ONNX Runtime", taken from this
+  repository's own opening line.
+- **Removed an aside about an unrelated language** from the crate-level doc
+  comment in `rust/src/lib.rs`, which is what docs.rs renders. It was already
+  gone from the Rust and Go READMEs; this was the copy that kept shipping. A CI
+  job now fails if authored text names that language again.
+
+Version parity restored. 0.3.1 was a Rust-only emergency republish — the `ort`
+dependency was declared as a caret range over a pre-release, so 0.3.0 could not
+be compiled by anyone who depended on it — and it left Rust one number ahead of
+the other three. All four are 0.3.2.
+
 ## 0.3.0 — 2026-08-27
 
 **Breaking against everything currently installed.** The registries are two
