@@ -74,19 +74,58 @@ jobs:
           fi
           echo "tag and Cargo.toml agree on $PKG"
 
-      # Mirrors the rust-test job in test.yml exactly: fmt, then test. That job
-      # does not run clippy, so this gate does not invent one either — a
-      # release check that verifies something CI never verifies is not
-      # actually mirroring CI, it's a second, divergent policy.
+      # Mirrors the rust-test job in test.yml: fmt, then test with the shared
+      # fixtures checked out. That job does not run clippy, so this gate does not
+      # invent one either — a release check that verifies something CI never
+      # verifies is not mirroring CI, it is a second, divergent policy.
+      #
+      # This block said it mirrored that job while running a bare `cargo test`.
+      # It did not, and the difference is the whole reason the first tag this
+      # workflow ever ran on failed: three lib tests read fixtures from a SIBLING
+      # monocr-monorepo checkout, which exists on a developer machine and never on
+      # a runner, so `cargo test` exits 101 before the publish step is reached.
+      # The tag/version gate above passed, fmt passed, and the release still could
+      # not happen.
       - name: cargo fmt
         run: |
           cd rust
           cargo fmt --check
 
+      - name: Fetch the shared segmentation fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MonDevHub/monocr
+          ref: dc5c8ae34303152dce7ce6552398b1307475fd40
+          path: .fixtures-monorepo
+          sparse-checkout: shared/segmentation-fixtures
+          sparse-checkout-cone-mode: false
+
       - name: Run tests
+        env:
+          MONOCR_TILING_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/tiling-cases.json
+          MONOCR_RULE_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/rule-cases.json
+          MONOCR_MERGE_FIXTURE: ${{ github.workspace }}/.fixtures-monorepo/shared/segmentation-fixtures/merge-cases.json
         run: |
+          for f in "$MONOCR_TILING_FIXTURE" "$MONOCR_RULE_FIXTURE" "$MONOCR_MERGE_FIXTURE"; do
+            test -f "$f" || {
+              echo "::error title=Shared fixture missing::$f was not checked out"
+              exit 1
+            }
+          done
           cd rust
-          cargo test
+          set +e
+          output="$(cargo test 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(printf '%s\n' "$output" | grep -iE '^error|panicked|assertion|cannot find|not found|failures:' \
+              | head -30 | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=cargo test failed::${detail:-no error-shaped line; see the tail below}"
+            tail="$(printf '%s\n' "$output" | tail -30 | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=cargo test output (tail)::${tail}"
+            exit "$status"
+          fi
 
       # Exchanges this job's GitHub OIDC identity for a short-lived crates.io
       # token. Requires `id-token: write` above and a Trusted Publisher
