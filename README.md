@@ -19,14 +19,25 @@ This repository is the engine and its four bindings: Python, JavaScript
 charset, pinned to one Hugging Face revision, and each decodes CTC output the same
 way.
 
-They are checked against each other rather than assumed to agree, and the
-current result is not full agreement. From
-[docs/CROSS_BINDING_PARITY.md](docs/CROSS_BINDING_PARITY.md): Python, JS and Go
-produce identical text on **5 of 7** images, and Rust differs on a sixth, so
-across all four bindings it is **4 of 7**. Two disagreements drop a trailing Mon
-character; Rust's reads a Myanmar digit six where the others read an ASCII zero.
-The cause is four different image-resampling kernels, two of them the wrong
-family.
+They are checked against each other rather than assumed to agree, and the current
+result is not close to full agreement.
+
+Re-measured 2026-09-04 on the **page** path — `read_image` / `predict`, which is
+what the quick-start examples call — over the seven images in `data/images/`:
+Python, JavaScript and Go return identical text on **1 of 7**. Pairwise, Python
+matches JavaScript on 1, Python matches Go on 1, and JavaScript matches Go on 3.
+The widest gap is `000028.jpg`, where Python returns 154 characters and
+JavaScript and Go return 55 and 61.
+
+[docs/CROSS_BINDING_PARITY.md](docs/CROSS_BINDING_PARITY.md) reports 5 of 7. It
+measured the **line** path on pre-cropped files, which skips segmentation
+entirely; that number was never a statement about reading a page. The two figures
+are not in conflict, they answer different questions, and only the page one
+describes what the documented API does.
+
+The cause is two things compounding: four different image-resampling kernels, two
+of them the wrong family, and four line segmenters whose density threshold has
+four live values across the ports under two different formulas.
 
 That is agreement, not accuracy. No binding has been scored against ground truth
 here, and four implementations reading the same wrong thing would agree
