@@ -6,6 +6,31 @@ language.
 
 ## 0.4.0 — 2026-09-04
 
+**The JavaScript binding returned noise, and did so in every published version.**
+`preprocess` builds its float canvas with `resizedBuffer[y * newWidth + x]`, one
+byte per pixel. Re-wrapping a raw buffer loses the b-w colourspace `.grayscale()`
+established — raw input carries no colourspace — so sharp's default sRGB output
+applied and `.raw()` returned three interleaved channels. Every read landed on the
+wrong byte and only the first third of each image was sampled at all.
+
+Measured on a 925x1280 page: 55,680 bytes back where 160x116x1 is 18,560, exactly
+3x. Published `monocr@0.3.2` returned **168 characters of noise** for that page
+where the Python SDK returned 1,271 correct ones, and 5 characters for a line crop
+where Python returned 77. Fixed with `.toColourspace('b-w')`, plus a guard that
+throws when the buffer is not one byte per pixel, because the loop cannot tell a
+three-channel buffer from a one-channel one — it just returns plausible-looking
+text.
+
+After the fix that page returns 1,178 characters of Mon text, 0.656 similar to
+Python's. The remainder is the resampling-kernel divergence
+`docs/CROSS_BINDING_PARITY.md` already records, not this defect.
+
+Two tests were added. The suite was green through the whole bug: the existing
+preprocessing test lifts the dimension arithmetic into a copy and never looked at
+how many channels came back. Reverting the fix now fires the guard rather than
+returning text.
+
+
 **Breaking, Python only: the CLI is now `monocr-onnx`.** It was `monocr`, which is
 also the command the separate `monocr` package installs. Both declared the same
 `console_scripts` name, so an environment with both had one silently shadow the
