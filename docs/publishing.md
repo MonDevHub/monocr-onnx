@@ -1,5 +1,20 @@
 # MonOCR Release Runbook
 
+> [!IMPORTANT]
+> **Superseded by [`../RELEASING.md`](../RELEASING.md). Read that first.**
+>
+> Marked 2026-09-03, when three release runbooks were found in this repository saying
+> different things. This one omits the artifact-verification step that `RELEASING.md`
+> records as the cause of the original six-month publish gap: `0.2.0` and `0.2.1` were
+> tagged and never published while the registries served a 64px, 225-character build.
+>
+> It also predates trusted publishing. Releases happen by pushing a `python/v*` or
+> `js/v*` tag, with no local credentials; `RELEASING.md` carries the one-time registry
+> setup that is the real precondition.
+>
+> Kept rather than deleted because the per-binding smoke tests below are still useful.
+> Use it for those and nothing else.
+
 > **Context**: We use a manual release process. Automation is great, but for this stage of the project, we want full control over exactly what bits assume the `latest` tag.
 >
 > **Golden Rule**: If it's not in `main`, it doesn't exist. If it's not tested, it's broken.
