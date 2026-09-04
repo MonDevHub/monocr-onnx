@@ -73,12 +73,13 @@ with no error and no lookup miss.
 
 | SDK                      | Directory            | Registry/Source                                                                      | Published | In this tree |
 | :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.3.2     | 0.3.2        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.3.2     | 0.3.2        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.3.2    | 0.3.2        |
-| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.3.1     | 0.3.2        |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.3.2     | 0.4.0        |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.3.2     | 0.4.0        |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.3.2    | 0.4.0        |
+| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.3.1     | 0.4.0        |
 
-**Python, JavaScript and Go are published at 0.3.2. Rust is at 0.3.1**; 0.3.2
+**Python, JavaScript and Go are published at 0.3.2, Rust at 0.3.1; 0.4.0 is in
+this tree awaiting release**; 0.3.2
 differs from it only in the crate description and a doc comment, so `cargo add
 monocr` gives you the same library. Rust is also the odd one out in naming: named `monocr` on
 crates.io rather than `monocr-onnx` like the repository and the other three

@@ -1,5 +1,5 @@
 """
-``monocr-download`` — fetch the pinned model artifacts into a local directory.
+``monocr-onnx-download`` — fetch the pinned model artifacts into a local directory.
 
 Every URL here used to point at ``huggingface.co/janakh/monocr``. The org is
 ``janakhpon``; ``janakh`` returns 401, so the console script shipped in 0.1.0
