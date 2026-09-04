@@ -55,7 +55,15 @@ jobs:
       # way — the runner now matches what actually executes, rather than
       # publishing under a version number nothing runs — and is the fix to
       # retry with first, before assuming a real regression in the code.
-      - uses: actions/setup-node@v4
+      # Commit-pinned, not `@v4`: this job holds `id-token: write` for npm
+      # trusted publishing, so a mutable major tag lets whoever moves it run code
+      # in a job that can publish under our name.
+      #
+      # Pinned at v4's current commit rather than bumped. setup-node is on v7,
+      # and three majors is a real upgrade that changes how distributions are
+      # resolved — not something to fold into a security pin, especially under the
+      # Node-24 substitution the comment above describes.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
 
@@ -83,6 +91,14 @@ jobs:
       # glance — so the wrong ordering does not just break the run, it makes a
       # blocked release look like a broken binding. The lockfile must resolve
       # before anything is published from this tree either way.
+      # ff378ebe is the ANNOTATED TAG OBJECT for v6.0.10, not the commit it peels
+      # to (0977fd99, which the sibling monorepo pins for the same version). Both
+      # forms are immutable — a tag object's SHA hashes its name, target and
+      # message, so it cannot be repointed — but only the commit form resolves
+      # through `GET /repos/pnpm/action-setup/commits/<sha>`, which answers 422 on
+      # a tag object. That makes this pin read as fabricated to anyone verifying
+      # it that way, or as disagreeing with the monorepo. `git ls-remote --tags`
+      # shows both: refs/tags/v6.0.10 and refs/tags/v6.0.10^{}.
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
