@@ -1,6 +1,6 @@
 [package]
 name = "monocr"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "On-device Mon (mnw) OCR, powered by ONNX Runtime"
 license = "MIT"

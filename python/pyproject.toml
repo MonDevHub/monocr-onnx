@@ -1,6 +1,6 @@
 [project]
 name = "monocr-onnx"
-version = "0.3.2"
+version = "0.4.0"
 description = "On-device Mon (mnw) OCR, powered by ONNX Runtime"
 readme = "README.md"
 # 3.11, not 3.9. onnxruntime publishes wheels only — no sdist — and 1.24.1 ships
@@ -45,9 +45,12 @@ Repository = "https://github.com/MonDevHub/monocr-onnx"
 Issues = "https://github.com/MonDevHub/monocr-onnx/issues"
 Documentation = "https://github.com/MonDevHub/monocr-onnx/tree/main/python"
 
+# The command is `monocr-onnx`, matching the distribution. It was `monocr` up to
+# 0.3.2, which is also the command the separate `monocr` package installs, so an
+# environment holding both had one shadow the other by install order.
 [project.scripts]
-monocr = "monocr_onnx.cli:main"
-monocr-download = "monocr_onnx.download:main"
+monocr-onnx = "monocr_onnx.cli:main"
+monocr-onnx-download = "monocr_onnx.download:main"
 
 [build-system]
 requires = ["hatchling"]

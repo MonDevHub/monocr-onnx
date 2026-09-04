@@ -7,7 +7,7 @@ The official Python SDK for Mon language OCR, powered by ONNX Runtime. Optimized
 ## Installation
 
 ```bash
-pip install "monocr-onnx>=0.3.0"
+pip install "monocr-onnx>=0.4.0"
 ```
 
 ## Features
@@ -18,8 +18,28 @@ pip install "monocr-onnx>=0.3.0"
   and its caveats.
 - **Parallel Processing**: Native support for multithreaded batch OCR.
 - **Pinned Model**: Weights and charset are fetched from one immutable [Hugging Face](https://huggingface.co/janakhpon/monocr) revision, checksummed, and cached per revision.
-- **One API for images and PDFs**: the same call shape for a line, a page and a document.
+- **Images and PDFs**: images through `MonOCR`, PDFs through `read_pdf`. These are
+  different calls, not one polymorphic one — see the API reference below.
 - **Line segmentation**: adaptive thresholding, with padding relative to each line's height.
+
+## What to know before you start
+
+- **First run downloads the model.** Roughly 46 MB, fetched from the pinned
+  Hugging Face revision and cached per revision. Nothing works offline until that
+  has happened once.
+- **PDFs need poppler on the PATH.** `read_pdf` goes through `pdf2image`, which
+  shells out to `pdftoppm`. `brew install poppler` or
+  `apt-get install poppler-utils`. Without it the call raises a `RuntimeError`
+  naming poppler; it does not fail quietly.
+- **`MonOCR.predict` does not accept a PDF.** It opens the path as an image and
+  raises `PIL.UnidentifiedImageError` on a PDF. Use `read_pdf`.
+- **The CLI is `monocr-onnx`, not `monocr`.** It was `monocr` up to 0.3.2, which
+  collided with the command installed by the separate `monocr` package; in an
+  environment holding both, install order decided which one you got.
+- **Throughput.** On an Apple M5, a typeset page is about 2 s and a 10-page
+  scanned PDF about 78 s, model already cached. CPU only; no GPU path here.
+- **No accuracy figure is claimed by this package.** The published numbers are
+  validation figures measured on rendered lines — see the model card.
 
 ## Quick Start
 
@@ -57,17 +77,34 @@ Recognize text from a single cropped text line image (PIL).
 
 Segment an image into lines and recognize each.
 
+### `read_pdf(pdf_path, model_path=None, charset_path=None)` -> `list[str]`
+
+Module-level, not a method. Renders every page through poppler and returns one
+string per page. This is the only PDF entry point.
+
+```python
+from monocr_onnx import read_pdf
+
+pages = read_pdf("book.pdf")
+print(len(pages), "pages")
+print(pages[0])
+```
+
+### `read_pdfs(paths, ...)` -> `list[list[str]]`
+
+The same over several files.
+
 ## CLI Usage
 
 ```bash
 # Recognize an image
-monocr image input.jpg
+monocr-onnx image input.jpg
 
 # Process a PDF
-monocr pdf document.pdf
+monocr-onnx pdf document.pdf
 
 # Batch directory processing
-monocr batch ./input
+monocr-onnx batch ./input
 
 # Pre-fetch the model and charset
 monocr download

@@ -91,3 +91,57 @@ test('a pre-cropped file is unaffected by the fix', async () => {
     assert.strictEqual(info.height, 90);
     assert.strictEqual(newWidth, TARGET_W);
 });
+
+// The resize must hand back ONE byte per pixel.
+//
+// `preprocess` builds its float canvas with `resizedBuffer[y * newWidth + x]` —
+// one byte per pixel. Re-wrapping a raw buffer loses the b-w colourspace that
+// `.grayscale()` established, because raw input carries no colourspace, so the
+// pipeline's default sRGB output applies and `.raw()` returns three interleaved
+// channels. Every read then lands on the wrong byte and only the first third of
+// the image is sampled.
+//
+// Published npm monocr 0.3.2 returned 168 characters of noise for a 925x1280
+// page where the Python SDK returned 1,271 correct ones. The suite was green
+// throughout: the test above lifts the dimension arithmetic out into a copy and
+// never looks at how many channels come back.
+test('the resized buffer is single-channel, one byte per pixel', async () => {
+    const src = await page(925, 1280, { width: 800, height: 60, left: 40, top: 200 });
+    const { data, info } = await sharp(src).grayscale().raw().toBuffer({ resolveWithObject: true });
+    const newWidth = Math.min(TARGET_W, Math.round(info.width * (TARGET_H / info.height)));
+
+    const fixed = await sharp(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels }
+    })
+        .resize({ height: TARGET_H, width: newWidth, fit: 'fill' })
+        .toColourspace('b-w')
+        .raw()
+        .toBuffer();
+
+    assert.strictEqual(
+        fixed.length,
+        TARGET_H * newWidth,
+        `expected ${TARGET_H * newWidth} bytes for a single-channel ${newWidth}x${TARGET_H} buffer`
+    );
+});
+
+// The failure this pins is silent, so pin that it is no longer silent: dropping
+// `.toColourspace('b-w')` must produce a buffer the guard in `preprocess`
+// rejects, rather than one it reads as if the bytes were pixels.
+test('without toColourspace the buffer is 3x, which the guard must reject', async () => {
+    const src = await page(925, 1280, { width: 800, height: 60, left: 40, top: 200 });
+    const { data, info } = await sharp(src).grayscale().raw().toBuffer({ resolveWithObject: true });
+    const newWidth = Math.min(TARGET_W, Math.round(info.width * (TARGET_H / info.height)));
+
+    const unfixed = await sharp(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels }
+    })
+        .resize({ height: TARGET_H, width: newWidth, fit: 'fill' })
+        .raw()
+        .toBuffer();
+
+    assert.strictEqual(unfixed.length, TARGET_H * newWidth * 3,
+        'sharp no longer returns three channels here; the guard and its comment need re-deriving');
+    assert.notStrictEqual(unfixed.length, TARGET_H * newWidth,
+        'a 3x buffer must not be mistakable for a single-channel one');
+});
