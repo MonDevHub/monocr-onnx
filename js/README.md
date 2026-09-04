@@ -124,7 +124,24 @@ npm test     # offline: no model download, no network
 - Node.js 18.17+
 - sharp (for image processing)
 - onnxruntime-node
-- poppler-utils, for the PDF entry points only
+- poppler-utils, for the PDF entry points only — see Platforms below
+
+## Platforms
+
+Runs on macOS, Linux and Windows. `onnxruntime-node` declares all three, and
+`sharp` ships prebuilt binaries for them, so `npm install` needs no compiler.
+
+Only poppler is manual, and only for `read_pdf` / `read_pdfs`:
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. Confirm with `pdfinfo -v` in a new shell.
 
 ## Maintenance
 

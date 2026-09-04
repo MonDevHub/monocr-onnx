@@ -27,10 +27,10 @@ pip install "monocr-onnx>=0.4.0"
 - **First run downloads the model.** Roughly 46 MB, fetched from the pinned
   Hugging Face revision and cached per revision. Nothing works offline until that
   has happened once.
-- **PDFs need poppler on the PATH.** `read_pdf` goes through `pdf2image`, which
-  shells out to `pdftoppm`. `brew install poppler` or
-  `apt-get install poppler-utils`. Without it the call raises a `RuntimeError`
-  naming poppler; it does not fail quietly.
+- **PDFs need poppler on the PATH**, on every platform. `read_pdf` goes through
+  `pdf2image`, which shells out to `pdftoppm`. Without it the call raises a
+  `RuntimeError` naming poppler; it does not fail quietly. Images need nothing
+  extra. See [Platforms](#platforms) below.
 - **`MonOCR.predict` does not accept a PDF.** It opens the path as an image and
   raises `PIL.UnidentifiedImageError` on a PDF. Use `read_pdf`.
 - **The CLI is `monocr-onnx`, not `monocr`.** It was `monocr` up to 0.3.2, which
@@ -40,6 +40,49 @@ pip install "monocr-onnx>=0.4.0"
   scanned PDF about 78 s, model already cached. CPU only; no GPU path here.
 - **No accuracy figure is claimed by this package.** The published numbers are
   validation figures measured on rendered lines — see the model card.
+
+## Platforms
+
+The wheel is pure Python (`py3-none-any`) and every native dependency —
+`onnxruntime`, `opencv-python-headless`, `numpy`, `Pillow` — publishes wheels for
+Linux, macOS and Windows, so `pip install` needs no compiler on any of them.
+
+Only poppler is manual, and only for PDFs.
+
+**macOS**
+
+```bash
+brew install poppler
+```
+
+**Linux**
+
+```bash
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+Other distributions package the same binaries, usually as `poppler-utils` or
+`poppler`.
+
+**Windows**
+
+Not shipped with Windows and there is no single official installer. Any of these
+works:
+
+```powershell
+scoop install poppler
+choco install poppler
+conda install -c conda-forge poppler
+```
+
+Or take the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases),
+unzip, and add the `Library\bin` directory to `PATH` — that release is what
+`pdf2image`'s own documentation points Windows users at. `pdf2image` also accepts
+a `poppler_path` argument, but `read_pdf` does not forward one, so `PATH` is the
+route here.
+
+Check with `pdfinfo -v` in a new shell before calling `read_pdf`.
 
 ## Quick Start
 

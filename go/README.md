@@ -105,10 +105,45 @@ API 18 to this binding.
 
 ### Installing it
 
-- **macOS**: `brew install onnxruntime` — installs to
-  `/opt/homebrew/lib/libonnxruntime.dylib`, which the SDK finds on its own.
-- **Linux**: download the release matching the table above and put it on
-  `LD_LIBRARY_PATH`.
+This binding loads a shared library at runtime; it does not bundle one. That is
+the difference from the Rust crate, which links a prebuilt runtime at build time
+and needs nothing installed.
+
+**macOS**
+
+```bash
+brew install onnxruntime
+```
+
+Installs `/opt/homebrew/lib/libonnxruntime.dylib` on Apple silicon, which the SDK
+finds on its own — this is the only platform with a built-in default.
+
+**Linux**
+
+```bash
+curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz
+tar xzf onnxruntime-linux-x64-1.24.1.tgz
+export LD_LIBRARY_PATH="$PWD/onnxruntime-linux-x64-1.24.1/lib:$LD_LIBRARY_PATH"
+```
+
+There is no default path on Linux: with `MONOCR_ONNXRUNTIME_PATH` unset the SDK
+says nothing and lets the platform loader decide, so `libonnxruntime.so` has to
+be somewhere the loader already looks — `LD_LIBRARY_PATH`, or a directory
+registered with `ldconfig`. Distribution packages work too where they exist;
+check the version against the table above, because the minimum is 1.18.0.
+
+**Windows**
+
+Download `onnxruntime-win-x64-<version>.zip` from the same releases page
+(`onnxruntime-win-arm64-…` on ARM), unzip it, and either add its `lib`
+directory to `PATH` — the Windows loader searches `PATH`, not
+`LD_LIBRARY_PATH` — or point at the DLL directly:
+
+```powershell
+$env:MONOCR_ONNXRUNTIME_PATH = "C:\onnxruntime\lib\onnxruntime.dll"
+```
+
+As on Linux, there is no built-in default.
 
 ### Choosing a specific library
 
@@ -116,6 +151,7 @@ Set `MONOCR_ONNXRUNTIME_PATH` to an absolute path to override every default:
 
 ```bash
 MONOCR_ONNXRUNTIME_PATH=/opt/onnxruntime-1.24.1/lib/libonnxruntime.dylib monocr image page.jpg
+# .so on Linux, onnxruntime.dll on Windows
 ```
 
 Resolution order is: `MONOCR_ONNXRUNTIME_PATH`, then the Homebrew path on macOS,
