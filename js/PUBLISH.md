@@ -1,5 +1,18 @@
 # Publishing MonOCR (JS) with pnpm
 
+> [!IMPORTANT]
+> **Superseded by [`../RELEASING.md`](../RELEASING.md). Read that first.**
+>
+> Marked 2026-09-03. This file describes publishing by hand with pnpm, which is not how
+> this binding ships. `.github/workflows/release-js.yml` publishes on a `js/v*` tag by
+> trusted publishing, which needs no token and attaches a provenance attestation. A
+> manual publish gets neither, and skips the artifact verification that exists because a
+> sibling repository once published without running its tests and shipped a decoder that
+> mapped every index to the wrong character.
+>
+> Kept because the file list in §Files is an accurate record of what goes into the
+> tarball. The steps are not the current procedure.
+
 Quick reference for publishing new versions using `pnpm`.
 
 ## Prerequisites

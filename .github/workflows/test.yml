@@ -48,7 +48,7 @@ jobs:
         # deprecated Node 20 runners on 2025-09-19 and silently substitutes 24
         # regardless of this pin. Kept in step with release-js.yml, which
         # explains this at length.
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
       # The install now comes BEFORE the tests, and the reason it used to come
@@ -161,10 +161,30 @@ jobs:
       #
       # With that set the full suite passes locally (28 lib + 14 doc-tests). That
       # is a real and unrelated issue; it is not why this job was red.
+      # PINNED, added 2026-09-03. This step had no `ref:`, so it took whatever was on
+      # MonDevHub/monocr's default branch and this repository's Rust suite was validated
+      # against a moving target. Two failure modes, and both had already happened in one
+      # form or another across these repositories:
+      #
+      #   - a fixture regeneration over there turns THIS repo red on an unrelated commit,
+      #     and the failure names a file nobody here touched
+      #   - the reverse, which is worse: the fixture shrinks or its contract changes and
+      #     this suite quietly validates against the new one as though nothing moved
+      #
+      # The pin makes a contract change a deliberate bump here rather than an event. It
+      # is a SHA because MonDevHub/monocr carries no tags.
+      #
+      # TO BUMP: set `ref` to the new monorepo SHA and run the Rust suite locally against
+      # it first. If the fixtures changed shape, the count floors in
+      # `rust/src/segmenter.rs` are what should fail, and they are the reason to look.
+      #
+      # Pinned at dc5c8ae (2026-09-03). Fixtures last changed at c6de11b, 2026-08-29,
+      # "test(fixtures): the merge fixture could not catch the cascading form".
       - name: Fetch the shared segmentation fixture
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: MonDevHub/monocr
+          ref: dc5c8ae34303152dce7ce6552398b1307475fd40
           path: .fixtures-monorepo
           sparse-checkout: shared/segmentation-fixtures
           sparse-checkout-cone-mode: false
