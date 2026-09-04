@@ -28,7 +28,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # No `registry-url:` here, deliberately. It makes setup-node write an
       # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
@@ -83,7 +83,7 @@ jobs:
       # glance — so the wrong ordering does not just break the run, it makes a
       # blocked release look like a broken binding. The lockfile must resolve
       # before anything is published from this tree either way.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
           # bindings and the JS one lives in js/. Without this, action-setup
@@ -196,12 +196,31 @@ jobs:
             -H "Content-Type: application/json")"
           echo "exchange returned HTTP $code"
 
-          if [ "$code" != "200" ]; then
+          # Checked on the body, not the status code. This step compared the
+          # code to a literal "200" until it failed against a body that plainly
+          # carried a real, freshly issued token — {"created":…,"expires":…,
+          # "token":"***","token_type":"oidc"} — which is a success shape, not
+          # an error one. npm's own CLI (npm/cli#8336) does not check the status
+          # code at all for this exchange; it decides success or failure purely
+          # by whether the parsed JSON body has a `token` field, and this step
+          # now does the same rather than guessing which 2xx code the registry
+          # uses for "created".
+          has_token="$(python3 -c '
+          import json, sys
+          try:
+              d = json.load(open(sys.argv[1]))
+          except Exception:
+              print("no")
+              sys.exit()
+          print("yes" if d.get("token") else "no")
+          ' "$body")"
+
+          if [ "$has_token" != "yes" ]; then
             detail="$(sed 's/%/%25/g; s/\r//g' "$body" | awk '{printf "%s%%0A", $0}')"
             echo "::error title=npm refused the token exchange (HTTP ${code})::${detail}"
             exit 1
           fi
-          echo "the registry issued a publishing token, so a trusted publisher is configured"
+          echo "the registry issued a publishing token (HTTP $code), so a trusted publisher is configured"
 
       - name: Publish
         run: |

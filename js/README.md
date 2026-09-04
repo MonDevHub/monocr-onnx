@@ -1,16 +1,10 @@
 # MonOCR (JavaScript SDK)
 
+[![npm](https://img.shields.io/npm/v/monocr.svg)](https://www.npmjs.com/package/monocr)
+
 The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
 
 ## Installation
-
-> **This command does not resolve yet, and that is deliberate.** 0.3.0 is built and
-> tagged but not published; the bound below fails loudly rather than installing
-> 0.1.5, which targets a superseded model (64px input height, a 225-character
-> charset against a 277-class graph) and returns wrong characters rather than
-> merely worse ones. Until the publish step runs, install from source:
-> `npm install github:MonDevHub/monocr-onnx#main --prefix js`.
-> See `CHANGELOG.md` and `RELEASING.md`.
 
 ```bash
 npm install monocr@^0.3.0
