@@ -1,8 +1,8 @@
 [package]
 name = "monocr"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
-description = "Universal MonOCR package with ONNX bindings for Rust"
+description = "On-device Mon (mnw) OCR, powered by ONNX Runtime"
 license = "MIT"
 authors = ["Janakh"]
 repository = "https://github.com/MonDevHub/monocr-onnx"

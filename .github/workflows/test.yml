@@ -275,3 +275,27 @@ jobs:
         run: |
           set -euo pipefail
           head -c 1 python/monocr_onnx/charset.txt | od -An -tx1 | grep -q '20'
+
+  # This project describes Mon and nothing else. Naming an unrelated language to
+  # pre-empt a namespace collision is not this project's business, and the check
+  # below keeps that out of authored text.
+  #
+  # Corpora under data/ are exempt: they are source text, not claims made here,
+  # and editing them would falsify the corpus. This file is exempt because the
+  # pattern would match itself.
+  naming:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: No unrelated-language asides in authored files
+        run: |
+          set -euo pipefail
+          if hits="$(git grep -n -I -i -E 'mongol' -- . \
+                ':(exclude)data/*' ':(exclude)*.lock' ':(exclude)*lock.json' \
+                ':(exclude).github/workflows/test.yml')"; then
+            printf '%s\n' "$hits"
+            printf '%s' "$hits" \
+              | awk 'BEGIN{printf "::error title=Unrelated language named in authored text::"} {printf "%s%%0A", $0}'
+            exit 1
+          fi
+          echo "clean: no authored file names an unrelated language"

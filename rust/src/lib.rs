@@ -4,9 +4,6 @@
 //! using deep learning models. It supports reading text from images and PDFs, with optional
 //! accuracy measurement against ground truth text.
 //!
-//! Mon (`mnw`) is a Mon-Khmer language of Myanmar and Thailand, written in a
-//! Myanmar-script orthography. It is unrelated to Mongolian.
-//!
 //! # The model
 //!
 //! Weights are downloaded from [janakhpon/monocr](https://huggingface.co/janakhpon/monocr),

@@ -4,66 +4,25 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
-## Unreleased
+## 0.3.2 — 2026-09-03
 
-### Corrected: the floors were already on main, and they have never run
+No change to the model, the charset or any API. This release exists to carry two
+text corrections onto the registry pages, which serve whatever was uploaded with
+a release and never re-read the repository.
 
-**Recorded 2026-09-03. This entry replaces one written the same day that was wrong in
-three of its four factual claims, and the way it went wrong is worth more than what it
-got wrong.**
+- **One description across PyPI, npm and crates.io.** The three said two
+  different things and neither said what a caller gets. All three now read
+  "On-device Mon (mnw) OCR, powered by ONNX Runtime", taken from this
+  repository's own opening line.
+- **Removed an aside about an unrelated language** from the crate-level doc
+  comment in `rust/src/lib.rs`, which is what docs.rs renders. It was already
+  gone from the Rust and Go READMEs; this was the copy that kept shipping. A CI
+  job now fails if authored text names that language again.
 
-The previous entry said *"Three of the four surfaces have them and this repository's Rust
-binding does not"*, and offered as proof: *"Verified 2026-09-03: `git show
-origin/main:rust/src/segmenter.rs` contains no `CASES_MIN`."*
-
-**All four floors are on `origin/main`** — `rust/src/segmenter.rs:954-957`,
-`TILING_CASES_MIN` 14, `TILING_PROBES_MIN` 3, `RULE_CASES_MIN` 23, `MERGE_CASES_MIN` 18 —
-merged on **2026-08-31** (PR #17), a commit dated 2026-08-30. So `bac90d1`, which that
-entry told the reader to merge, was already merged before the entry was written.
-
-**Why the check passed while being false: `origin/main` is a local ref, and it had not
-been fetched.** It was eight commits stale. `git show origin/main:<path>` reads the
-remote-tracking branch, not the remote, so it answers a question about this machine's last
-fetch and looks exactly like an answer about the remote. A `git fetch` first would have
-cost nothing. **A verification that does not touch the network cannot certify a remote.**
-
-### The real defect, which the wrong entry hid
-
-**The floors exist and have never executed in CI.** `.github/workflows/test.yml:117` runs
-`cargo fmt --check` before `cargo test` at `:209`, and the committed tree does not
-satisfy rustfmt: `df1f09b` (2026-08-29, the commit that wired `merge_runs` to the shared
-fixture) left an `assert_eq!` at `rust/src/segmenter.rs:2067` wider than `fn_call_width`.
-The Rust job has therefore died at the format step, on this branch and on `main`, since
-2026-08-29 — so the four floors landed, were merged, and guarded nothing.
-
-MEASURED 2026-09-03: `cargo fmt --check` exits 1 on the tree as committed. Fixed in this
-commit by running `cargo fmt`; the suite then passes 56 lib tests and 14 doc-tests with
-`cargo clippy --all-targets` clean.
-
-That is the second time in this file's history that a gate was present and unreachable,
-and the pattern is the one worth carrying: **a floor added below a step that always fails
-is indistinguishable from no floor at all**, and nothing reports the difference, because
-the job's failure is attributed to formatting.
-
-### What was true in the old entry, and remains open
-
-**Python, JavaScript and Go do not read the shared fixtures at all.** `grep -rn
-'segmentation-fixtures'` matches only `rust/src/segmenter.rs` and
-`.github/workflows/test.yml`; the other three bindings assert hand-written literals.
-Python is additionally the oracle those cases were generated from, so it cannot
-corroborate them. F-69 is the recorded cost of a half-ported segmenter: 45 of 145 pages
-with over 40% of bands decoding to nonsense at 300 DPI, invisible at 150 because no
-fixture drew more than one band height at one scale.
-
-**The cross-repo checkout is pinned here and not on `main`.** `test.yml:183` carries
-`ref: dc5c8ae…` on this branch; `git show origin/main:.github/workflows/test.yml` has
-`repository: MonDevHub/monocr` with no `ref:`, so main's Rust suite validates against
-whatever sits on that repository's default branch. The reciprocal gap is also still open:
-`monocr-monorepo`'s `origin/main` checks out `MonDevHub/monocr-onnx` with no `ref:`.
-
-**To close:** merge this branch so the pin and the formatting fix reach `main`; put
-Python, JS and Go on the shared fixtures with floors from the start; and pin the
-monorepo's checkout of this repository.
+Version parity restored. 0.3.1 was a Rust-only emergency republish — the `ort`
+dependency was declared as a caret range over a pre-release, so 0.3.0 could not
+be compiled by anyone who depended on it — and it left Rust one number ahead of
+the other three. All four are 0.3.2.
 
 ## 0.3.0 — 2026-08-27
 
