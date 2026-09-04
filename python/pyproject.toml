@@ -1,7 +1,7 @@
 [project]
 name = "monocr-onnx"
 version = "0.3.0"
-description = "Universal MonOCR package with ONNX bindings"
+description = "On-device Mon (mnw) OCR, powered by ONNX Runtime"
 readme = "README.md"
 # 3.11, not 3.9. onnxruntime publishes wheels only — no sdist — and 1.24.1 ships
 # cp311/cp312/cp313/cp314 and nothing else. Its metadata still claims

@@ -1,7 +1,7 @@
 {
   "name": "monocr",
   "version": "0.3.0",
-  "description": "Cross-platform Mon (mnw) language OCR using ONNX Runtime. Supports Node.js.",
+  "description": "On-device Mon (mnw) OCR, powered by ONNX Runtime",
   "main": "src/index.js",
   "bin": {
     "monocr": "bin/monocr.js"
