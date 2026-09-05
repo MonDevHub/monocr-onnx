@@ -20,6 +20,18 @@ on:
   push:
   pull_request:
 
+# Declared, where this file previously declared nothing and inherited the
+# repository default. That default is a repository setting, not a property of
+# this file: if it is ever set to read-write, every job here silently gains a
+# GITHUB_TOKEN that can push commits and move tags — on a workflow that runs on
+# `push` from any branch. The three release workflows in this directory all
+# state their permissions; this one, which runs far more often and on far more
+# refs, was the only one that did not.
+#
+# `contents: read` is all any job here needs: they check out, build and test.
+permissions:
+  contents: read
+
 jobs:
   python-test:
     runs-on: ubuntu-latest
@@ -48,7 +60,9 @@ jobs:
         # deprecated Node 20 runners on 2025-09-19 and silently substitutes 24
         # regardless of this pin. Kept in step with release-js.yml, which
         # explains this at length.
-        uses: actions/setup-node@v4
+        # Commit-pinned at the same v4 commit as release-js.yml, so the tested
+        # and the published Node come from one action.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
       # The install now comes BEFORE the tests, and the reason it used to come
@@ -78,6 +92,14 @@ jobs:
       # it, dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's
       # network postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
+        # ff378ebe is the ANNOTATED TAG OBJECT for v6.0.10, not the commit it peels
+        # to (0977fd99, which the sibling monorepo pins for the same version). Both
+        # forms are immutable — a tag object's SHA hashes its name, target and
+        # message, so it cannot be repointed — but only the commit form resolves
+        # through `GET /repos/pnpm/action-setup/commits/<sha>`, which answers 422 on
+        # a tag object. That makes this pin read as fabricated to anyone verifying
+        # it that way, or as disagreeing with the monorepo. `git ls-remote --tags`
+        # shows both: refs/tags/v6.0.10 and refs/tags/v6.0.10^{}.
         uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
@@ -109,9 +131,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Commit-pinned for the reason release-rust.yml states at length, and with
+      # the same commit so the two jobs cannot install different toolchains.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
         with:
+          toolchain: stable
           components: rustfmt
       # Go got a format gate on 2026-08-18 and Rust did not, which left this the
       # only binding whose formatting was ungated. It had drifted by 16 lines.

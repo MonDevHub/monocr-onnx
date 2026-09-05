@@ -5,10 +5,15 @@ const { read_image, read_pdf } = require('../src/index');
 const fs = require('fs');
 const path = require('path');
 
+// Read from the manifest rather than repeating it. This literal said '0.1.0'
+// through 0.3.0 and 0.3.2, so `monocr --version` reported a version two minors
+// behind the package the user had installed.
+const { version } = require('../package.json');
+
 program
     .name('monocr')
     .description('Mon language OCR using ONNX Runtime')
-    .version('0.1.0');
+    .version(version);
 
 program
     .command('image <path>')

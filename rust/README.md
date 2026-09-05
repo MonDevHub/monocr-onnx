@@ -106,11 +106,29 @@ The charset is stripped of line terminators only. Its first character is
 U+0020 — a space is one of the classes the model emits, so trimming it with
 `.trim()` shifts every index in the decode by one.
 
-## Prerequisites
+## Platforms
 
-This crate requires the ONNX Runtime shared library to be available on your system.
-- **macOS**: `brew install onnxruntime`
-- **Linux**: Download `libonnxruntime.so` and add to `LD_LIBRARY_PATH`.
+Builds and runs on macOS, Linux and Windows.
+
+**ONNX Runtime does not need installing.** `ort` fetches a prebuilt runtime for
+the target at build time and links it in, so there is no shared library to place
+and no path to set.
+
+The **Go** binding is the one that needs a shared library installed; it loads at
+runtime and has a built-in default only on macOS. This crate does not.
+
+**poppler is needed, for `read_pdf` only.** Images need nothing extra.
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows poppler ships with none of the usual toolchains; `scoop install
+poppler`, `choco install poppler`, `conda install -c conda-forge poppler`, or the
+prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. `pdfinfo -v` in a new shell is the check.
 
 ## License
 

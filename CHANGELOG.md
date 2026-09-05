@@ -4,6 +4,61 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## 0.4.0 — 2026-09-04
+
+**The JavaScript binding returned noise, and did so in every published version.**
+`preprocess` builds its float canvas with `resizedBuffer[y * newWidth + x]`, one
+byte per pixel. Re-wrapping a raw buffer loses the b-w colourspace `.grayscale()`
+established — raw input carries no colourspace — so sharp's default sRGB output
+applied and `.raw()` returned three interleaved channels. Every read landed on the
+wrong byte and only the first third of each image was sampled at all.
+
+Measured on a 925x1280 page: 55,680 bytes back where 160x116x1 is 18,560, exactly
+3x. Published `monocr@0.3.2` returned **168 characters of noise** for that page
+where the Python SDK returned 1,271 correct ones, and 5 characters for a line crop
+where Python returned 77. Fixed with `.toColourspace('b-w')`, plus a guard that
+throws when the buffer is not one byte per pixel, because the loop cannot tell a
+three-channel buffer from a one-channel one — it just returns plausible-looking
+text.
+
+After the fix that page returns 1,178 characters of Mon text, 0.656 similar to
+Python's. The remainder is the resampling-kernel divergence
+`docs/CROSS_BINDING_PARITY.md` already records, not this defect.
+
+Two tests were added. The suite was green through the whole bug: the existing
+preprocessing test lifts the dimension arithmetic into a copy and never looked at
+how many channels came back. Reverting the fix now fires the guard rather than
+returning text.
+
+
+**Breaking, Python only: the CLI is now `monocr-onnx`.** It was `monocr`, which is
+also the command the separate `monocr` package installs. Both declared the same
+`console_scripts` name, so an environment with both had one silently shadow the
+other by install order — and the shadowed one was usually this package, whose
+documented `monocr pdf` therefore ran a CLI with no `pdf` command. `monocr-download`
+is likewise now `monocr-onnx-download`.
+
+Nothing about the model, the charset or the Python API changed. Same contract,
+same weights, same revision.
+
+- **Corrected a false claim in the Python README.** It advertised "one API for
+  images and PDFs: the same call shape for a line, a page and a document".
+  `MonOCR.predict` opens its argument as an image and raises
+  `PIL.UnidentifiedImageError` on a PDF. PDFs go through the module-level
+  `read_pdf`, which was documented nowhere despite being the only PDF entry point.
+- **Documented that PDFs need poppler.** `read_pdf` shells out to `pdftoppm`
+  through `pdf2image`. Nothing said so; verified by running it with poppler off
+  the PATH, which raises a `RuntimeError` that at least names poppler.
+- **Added what-to-know notes**: the 46 MB first-run download, measured
+  throughput, and that this package claims no accuracy figure of its own.
+- **`monocr --version` reported 0.1.0 on the JavaScript CLI.** The number was a
+  literal in `bin/monocr.js` and had not moved since 0.1.0, so the published
+  0.3.0 and 0.3.2 both answered two minor versions behind. It now reads
+  `package.json`.
+
+Version parity kept across all four bindings even though the fix is Python-only,
+because the changelog's contract is that one number means one contract everywhere.
+
 ## 0.3.2 — 2026-09-03
 
 No change to the model, the charset or any API. This release exists to carry two

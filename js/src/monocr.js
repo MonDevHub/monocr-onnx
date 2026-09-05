@@ -335,6 +335,17 @@ class MonOCR {
         const scale = this.targetHeight / info.height;
         const newWidth = Math.min(this.targetWidth, Math.round(info.width * scale));
 
+        // `.toColourspace('b-w')` is load-bearing, not tidiness. Re-wrapping a raw
+        // buffer loses the b-w colourspace the `.grayscale()` above established --
+        // raw input carries no colourspace -- so the pipeline's default sRGB output
+        // applies and `.raw()` returns THREE interleaved channels. The canvas loop
+        // below indexes `y * newWidth + x`, one byte per pixel, so every read
+        // landed on the wrong byte and only the first third of the image was
+        // sampled at all.
+        //
+        // Measured on a 925x1280 page: 55,680 bytes back where 160x116x1 is
+        // 18,560, exactly 3x. Published npm monocr 0.3.2 returned 168 characters
+        // of noise for that page where Python returned 1,271 correct ones.
         const resizedBuffer = await imaging()(grayData, {
             raw: { width: info.width, height: info.height, channels: info.channels }
         })
@@ -343,8 +354,21 @@ class MonOCR {
                 width: newWidth,
                 fit: 'fill'
             })
+            .toColourspace('b-w')
             .raw()
             .toBuffer();
+
+        // The loop below cannot tell a 3-channel buffer from a 1-channel one; it
+        // just reads wrong pixels and returns plausible-looking text. Assert the
+        // shape instead of trusting it.
+        const expectedBytes = this.targetHeight * newWidth;
+        if (resizedBuffer.length !== expectedBytes) {
+            throw new Error(
+                `preprocess: expected ${expectedBytes} bytes for a ${newWidth}x${this.targetHeight} ` +
+                `single-channel buffer, got ${resizedBuffer.length} ` +
+                `(${resizedBuffer.length / expectedBytes} channels)`
+            );
+        }
 
         // Create target canvas (1024 width, white background = 255)
         const totalSize = this.targetHeight * this.targetWidth;
