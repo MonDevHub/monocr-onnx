@@ -100,7 +100,7 @@ README and its version number, nothing else.
 > `monocr@0.3.2` returned 168 characters of garbage where 0.4.0 returns 1,178 of
 > Mon. The Python, Go and Rust bindings were never affected.
 
-Rust is also the odd one out in naming: named `monocr` on
+Rust is the odd one out in naming: named `monocr` on
 crates.io rather than `monocr-onnx` like the repository and the other three
 registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
