@@ -10,7 +10,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocr = "0.3"
+monocr = "0.4.1"
 tokio = { version = "1", features = ["full"] }
 ```
 

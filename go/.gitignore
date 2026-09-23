@@ -14,4 +14,7 @@ lib/
 *.so
 *.dylib
 
-# The `go/monocr` binary is still tracked; untracking it is a separate change.
+# `go build ./cmd/monocr` run from go/ writes this binary; a stale 9.7 MB
+# linux/amd64 build of it was committed in 37ded04. Anchored, because a bare
+# `monocr` would also ignore cmd/monocr/.
+/monocr

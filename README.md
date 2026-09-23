@@ -84,14 +84,14 @@ with no error and no lookup miss.
 
 | SDK                      | Directory            | Registry/Source                                                                      | Published | In this tree |
 | :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.0     | 0.4.0        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.0     | 0.4.0        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.0    | 0.4.0        |
-| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.3.1     | 0.4.0        |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.1     | 0.4.1        |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.1     | 0.4.1        |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.1    | 0.4.1        |
+| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.1     | 0.4.1        |
 
-**Python, JavaScript and Go are published at 0.4.0. Rust is at 0.3.1**, which
-differs only in the crate description and a doc comment, so `cargo add monocr`
-gives you the same library.
+**All four are published at 0.4.1**, one number in every registry. 0.4.1 is
+documentation only: between the 0.4.0 and 0.4.1 tags each binding changes its
+README and its version number, nothing else.
 
 > [!IMPORTANT]
 > **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
@@ -106,30 +106,33 @@ registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
 nothing importing the crate needed to change.
 
-Registry state re-verified 2026-09-03 against pypi.org, registry.npmjs.org,
-crates.io and pkg.go.dev — each package's own API, not this repository's own
-claim about itself. The "Published" column is the registry's answer; those are
-different questions, and conflating them is what let 0.2.0 and 0.2.1 sit
-tagged-but-unpublished for months.
+Registry state re-verified 2026-09-23 against pypi.org, registry.npmjs.org,
+crates.io, proxy.golang.org and pkg.go.dev — each package's own API, not this
+repository's own claim about itself. The "Published" column is the registry's
+answer; those are different questions, and conflating them is what let 0.2.0
+and 0.2.1 sit tagged-but-unpublished for months.
 
-The `>=0.3.0` bounds below are load-bearing: 0.1.x carries a 225-character
-charset against a 277-class graph and returns wrong characters, not merely worse
-ones.
+The install lines below floor at the current release, 0.4.1. The floor is
+load-bearing twice over: 0.1.x carries a 225-character charset against a
+277-class graph and returns wrong characters, not merely worse ones, and every
+npm release before 0.4.0 returns noise, as above. These lines previously read
+`>=0.3.0` and `^0.3.0`; on 0.x a caret range stays below the next minor, so
+`^0.3.0` could never reach 0.4.0 and installed 0.3.2.
 
 ## Installation
 
 ### Python
 
 ```bash
-pip install "monocr-onnx>=0.3.0"
+pip install "monocr-onnx>=0.4.1"
 # or
-uv add "monocr-onnx>=0.3.0"
+uv add "monocr-onnx>=0.4.1"
 ```
 
 ### Node.js
 
 ```bash
-npm install monocr@^0.3.0
+npm install monocr@^0.4.1
 ```
 
 ### Go

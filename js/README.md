@@ -7,7 +7,7 @@ The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Desig
 ## Installation
 
 ```bash
-npm install monocr@^0.3.0
+npm install monocr@^0.4.1
 ```
 
 ## Features

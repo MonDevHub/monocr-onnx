@@ -7,7 +7,7 @@ The official Python SDK for Mon language OCR, powered by ONNX Runtime. Optimized
 ## Installation
 
 ```bash
-pip install "monocr-onnx>=0.4.0"
+pip install "monocr-onnx>=0.4.1"
 ```
 
 ## Features
