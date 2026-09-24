@@ -20,9 +20,9 @@ npm install monocr@^0.4.1
 - **Fails Closed**: A model whose class count or input height disagrees with the charset is refused at load rather than decoded into wrong text.
 - **Line segmentation**: horizontal projection profile over a **flat global
   threshold at 128**, with padding relative to each line's height. Not adaptive —
-  `src/segmenter.js:58`. The reference implementation in `mon_OCR` does threshold
-  adaptively; this binding does not, and `src/segmenter.js:10-15` records that the
-  projection profile here is untested.
+  `src/segmenter.js:381`. The Python binding thresholds adaptively; this binding
+  does not. The coverage note at the top of `src/segmenter.js` lists what is
+  tested; the binarisation threshold itself is not.
 
 ## Quick Start
 
