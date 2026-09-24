@@ -479,8 +479,8 @@ impl MonOcrBuilder {
     ///
     /// Tiling is the default and should stay the default. This exists so the two
     /// strategies can be measured against each other on the same pipeline, which
-    /// has to happen on each port before either is trusted,
-    /// and which was impossible while the squeeze arm was unreachable.
+    /// has to happen on each port before either is trusted, and which was
+    /// impossible while the squeeze arm was unreachable.
     ///
     /// An A/B over 201 rendered lines (2026-08-22) found the answer
     /// is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to

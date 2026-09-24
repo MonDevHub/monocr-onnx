@@ -472,8 +472,7 @@ def cut_column(crop, x0, ideal, crop_w):
     outcome for a continuous script: a known-bad seam beats an overflowing tile.
 
     Ported from the reference segmenter's ``_cut_column``; the constants are
-    the same,
-    so the two produce the same cuts on the same input.
+    the same, so the two produce the same cuts on the same input.
     """
     if ideal >= crop_w:
         return crop_w

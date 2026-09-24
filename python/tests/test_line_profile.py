@@ -304,8 +304,8 @@ def test_a_diacritic_strip_is_returned_joined_to_its_line():
 
     A mutation deleting the `merge_runs` call from the pipeline survives every
     helper test below, because they call the helper directly and leave the call
-    site unguarded. That is the familiar gap: a tested
-    helper does not make its call site safe.
+    site unguarded. That is the familiar gap: a tested helper does not make
+    its call site safe.
 
     Geometry is the measured one: a 20-row strip of upper marks, two empty rows,
     then a 44-row body. One line, and it must come back as one band.
