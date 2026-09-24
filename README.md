@@ -82,16 +82,18 @@ with no error and no lookup miss.
 
 ## Supported platforms
 
-| SDK                      | Directory            | Registry/Source                                                                      | Published | In this tree |
-| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.1     | 0.4.1        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.1     | 0.4.1        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.1    | 0.4.1        |
-| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.1     | 0.4.1        |
+| SDK                      | Directory            | Registry/Source                                                                      | Registry, 2026-09-24 | This release |
+| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :------------------- | :----------- |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.1                | 0.4.2        |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.1                | 0.4.2        |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.1               | 0.4.2        |
+| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.1                | 0.4.2        |
 
-**All four are published at 0.4.1**, one number in every registry and the
-version in this tree. 0.4.1 is documentation only: between the 0.4.0 and 0.4.1
-tags each binding changes its README and its version number, nothing else.
+**0.4.2 (this release)** is one number for all four bindings and the version in
+this tree. It changes no model, charset or API. It fixes the Python
+`__version__`, which the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`,
+and the install lines in the npm and crates.io READMEs, which in 0.4.1 still
+pointed at 0.3.x.
 
 > [!IMPORTANT]
 > **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
@@ -106,18 +108,22 @@ registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
 nothing importing the crate needed to change.
 
-Registry state re-verified 2026-09-24 against pypi.org, registry.npmjs.org,
+Registry state last queried 2026-09-24 against pypi.org, registry.npmjs.org,
 crates.io, proxy.golang.org and pkg.go.dev — each package's own API, not this
-repository's own claim about itself. The "Published" column is the registry's
-answer; those are different questions, and conflating them is what let 0.2.0
+repository's own claim about itself. All four answered 0.4.1, before any 0.4.2
+tag was pushed; that answer is the "Registry" column. Once the 0.4.2 tags are
+pushed, a registry that still answers 0.4.1 means that release has not landed.
+A tag and a publish are different events, and conflating them is what let 0.2.0
 and 0.2.1 sit tagged-but-unpublished for months.
 
-The install lines below floor at the current release, 0.4.1. The floor is
-load-bearing twice over: 0.1.x carries a 225-character charset against a
-277-class graph and returns wrong characters, not merely worse ones, and every
-npm release before 0.4.0 returns noise, as above. These lines previously read
-`>=0.3.0` and `^0.3.0`; on 0.x a caret range stays below the next minor, so
-`^0.3.0` could never reach 0.4.0 and installed 0.3.2.
+The pip and npm lines below floor at 0.4.1, so they install the newest release
+at or above it (npm's caret stops below 0.5.0); `cargo add` and `go get` take the
+latest release. The floor is load-bearing twice over: 0.1.x carries a
+225-character charset against a 277-class graph and returns wrong characters,
+not merely worse ones, and every npm release before 0.4.0 returns noise, as
+above. These lines previously read `>=0.3.0` and `^0.3.0`; on 0.x a caret range
+stays below the next minor, so `^0.3.0` could never reach 0.4.0 and installed
+0.3.2.
 
 ## Installation
 
