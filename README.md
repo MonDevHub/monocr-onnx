@@ -44,7 +44,8 @@ here, and four implementations reading the same wrong thing would agree
 perfectly.
 
 > [!TIP]
-> The web and mobile apps cap uploads at 50 MB and 20 MB. This SDK has no such
+> The web app caps uploads at 50 MB; the Android and iOS apps, which build from
+> source and are not in an app store yet, cap them at 20 MB. This SDK has no such
 > limit; use it directly for larger files.
 
 ## Architecture
