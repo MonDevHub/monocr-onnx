@@ -338,8 +338,8 @@ func (p *Predictor) Predict(img image.Image) (string, error) {
 // Polarity constants. The model is trained on dark text on a light background,
 // and this binding never checked which it was given.
 //
-// Measured 2026-08-27 over 300 labelled crops from mon_OCR's
-// data/real/digits/val, same graph, only the polarity of the input changed:
+// Measured 2026-08-27 over 300 labelled crops from the training data's
+// real-digit validation split, same graph, only the polarity of the input changed:
 //
 //	upright, with this probe    CER 0.0000   300/300 exact
 //	inverted, with this probe   CER 0.0000   300/300 exact
@@ -350,7 +350,7 @@ func (p *Predictor) Predict(img image.Image) (string, error) {
 // close. Those crops are Myanmar digits on composited backgrounds, so the effect
 // on full Mon text lines is unmeasured.
 //
-// A COPY of mon_OCR/src/monocr/utils.go's to_normalized_grayscale steps 1-3, not
+// A COPY of the training code's to_normalized_grayscale steps 1-3, not
 // a shared module: these bindings ship independently. Step 4 of that function,
 // background levelling, is not ported here and is what the 0.0036 upright row
 // above costs.

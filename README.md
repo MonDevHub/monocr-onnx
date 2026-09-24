@@ -44,7 +44,8 @@ here, and four implementations reading the same wrong thing would agree
 perfectly.
 
 > [!TIP]
-> The web and mobile apps cap uploads at 50 MB and 20 MB. This SDK has no such
+> The web app caps uploads at 50 MB; the Android and iOS apps, which build from
+> source and are not in an app store yet, cap them at 20 MB. This SDK has no such
 > limit; use it directly for larger files.
 
 ## Architecture
@@ -82,16 +83,18 @@ with no error and no lookup miss.
 
 ## Supported platforms
 
-| SDK                      | Directory            | Registry/Source                                                                      | Published | In this tree |
-| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.0     | 0.4.0        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.0     | 0.4.0        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.0    | 0.4.0        |
-| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.3.1     | 0.4.0        |
+| SDK                      | Directory            | Registry/Source                                                                      | Registry, 2026-09-24 | This release |
+| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :------------------- | :----------- |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.1                | 0.4.2        |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.1                | 0.4.2        |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.1               | 0.4.2        |
+| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.1                | 0.4.2        |
 
-**Python, JavaScript and Go are published at 0.4.0. Rust is at 0.3.1**, which
-differs only in the crate description and a doc comment, so `cargo add monocr`
-gives you the same library.
+**0.4.2 (this release)** is one number for all four bindings and the version in
+this tree. It changes no model, charset or API. It fixes the Python
+`__version__`, which the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`,
+and the install lines in the npm and crates.io READMEs, which in 0.4.1 still
+pointed at 0.3.x.
 
 > [!IMPORTANT]
 > **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
@@ -100,36 +103,43 @@ gives you the same library.
 > `monocr@0.3.2` returned 168 characters of garbage where 0.4.0 returns 1,178 of
 > Mon. The Python, Go and Rust bindings were never affected.
 
-Rust is also the odd one out in naming: named `monocr` on
+Rust is the odd one out in naming: named `monocr` on
 crates.io rather than `monocr-onnx` like the repository and the other three
 registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
 nothing importing the crate needed to change.
 
-Registry state re-verified 2026-09-03 against pypi.org, registry.npmjs.org,
-crates.io and pkg.go.dev — each package's own API, not this repository's own
-claim about itself. The "Published" column is the registry's answer; those are
-different questions, and conflating them is what let 0.2.0 and 0.2.1 sit
-tagged-but-unpublished for months.
+Registry state last queried 2026-09-24 against pypi.org, registry.npmjs.org,
+crates.io, proxy.golang.org and pkg.go.dev — each package's own API, not this
+repository's own claim about itself. All four answered 0.4.1, before any 0.4.2
+tag was pushed; that answer is the "Registry" column. Once the 0.4.2 tags are
+pushed, a registry that still answers 0.4.1 means that release has not landed.
+A tag and a publish are different events, and conflating them is what let 0.2.0
+and 0.2.1 sit tagged-but-unpublished for months.
 
-The `>=0.3.0` bounds below are load-bearing: 0.1.x carries a 225-character
-charset against a 277-class graph and returns wrong characters, not merely worse
-ones.
+The pip and npm lines below floor at 0.4.1, so they install the newest release
+at or above it (npm's caret stops below 0.5.0); `cargo add` and `go get` take the
+latest release. The floor is load-bearing twice over: 0.1.x carries a
+225-character charset against a 277-class graph and returns wrong characters,
+not merely worse ones, and every npm release before 0.4.0 returns noise, as
+above. These lines previously read `>=0.3.0` and `^0.3.0`; on 0.x a caret range
+stays below the next minor, so `^0.3.0` could never reach 0.4.0 and installed
+0.3.2.
 
 ## Installation
 
 ### Python
 
 ```bash
-pip install "monocr-onnx>=0.3.0"
+pip install "monocr-onnx>=0.4.1"
 # or
-uv add "monocr-onnx>=0.3.0"
+uv add "monocr-onnx>=0.4.1"
 ```
 
 ### Node.js
 
 ```bash
-npm install monocr@^0.3.0
+npm install monocr@^0.4.1
 ```
 
 ### Go
@@ -186,19 +196,14 @@ All three apps now live in one repository,
 - `apps/ios` — SwiftUI
 
 The former `MonDevHub/ocr-android` and `MonDevHub/ocr-ios` links were listed here
-until 2026-08-15 and both return 404; `MonDevHub/monocr-web` still resolves but
-has not been pushed to since the web app moved into the monorepo.
+until 2026-08-15 and both return 404. `MonDevHub/monocr-web` still resolves but is
+superseded: its `main` branch has not changed since 2026-04-08, and the web app
+now lives in `apps/web` of the monorepo.
 
 ## Resources
 
-- [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML.
-  The TFLite export was removed at revision `a51be11` (2026-03-19) — a v2-era
-  revision, not the current pin. Do not bump this hash with the pin: `8da6178`
-  swept `a51be11` -> `d3d9d5e` across fourteen sites on 2026-08-15 and caught
-  this sentence too, but it is provenance, not a pin. The model repo's own
-  history is unambiguous: `a51be11` is `Delete tflite` and deletes all three
-  `.tflite` files; `d3d9d5e` deletes `pytorch/monocr.pt` and nothing else, five
-  months later. The three monorepo app READMEs kept the right value.
+- [Hugging Face model](https://huggingface.co/janakhpon/monocr) — ONNX and Core ML
+  exports, and the model card with the held-out evaluation and its caveats.
 
 ## License
 

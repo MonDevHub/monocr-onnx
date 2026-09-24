@@ -207,7 +207,7 @@ const RULE_MAX_INK_SHARE: f64 = 0.80;
 /// asats because the asat went with the strip.
 ///
 /// A 1-row gap holding ink is not a line boundary at any resolution. This is the
-/// reference's rule (`mon_OCR` `_MIN_GAP_MERGE`, `segmenter.py` step 8), ported
+/// reference segmenter's rule (`_MIN_GAP_MERGE`, its step 8), ported
 /// with its value, and it is the half of the dual histogram the ports left behind:
 /// raw detection needs a merge to be safe, and every port took the first without
 /// the second.
@@ -325,7 +325,7 @@ fn merge_runs(runs: &[(u32, u32)], hist: &[f32], max_gap: u32, min_line: u32) ->
 /// line kernel keeps exactly those ink runs at least L long, which one sweep per
 /// axis computes directly. That is the form `js/src/segmenter.js` and
 /// `go/pkg/segmenter/segmenter.go` use; the reference
-/// (`mon_OCR/src/monocr/segmenter.py` `_suppress_page_rules`) reaches the same
+/// segmenter (`_suppress_page_rules`) reaches the same
 /// answer with `cv2.morphologyEx`, and the shared fixture
 /// `monocr-monorepo/shared/segmentation-fixtures/rule-cases.json` is what holds
 /// the four together.
@@ -436,8 +436,9 @@ pub struct LineSegmenter {
 /// The gap threshold this segmenter has always used, kept as the default so
 /// existing callers segment identically.
 ///
-/// Every port of this pipeline picked a different number (canonical mon_OCR
-/// 0.12, the Python binding 0.02 of max, web and Android 0.03, iOS 0.03), which
+/// Every port of this pipeline picked a different number (the reference
+/// segmenter 0.12, the Python binding 0.02 of max, web and Android 0.03, iOS
+/// 0.03), which
 /// is the sign that it belongs to the input class rather than to the algorithm.
 pub const DEFAULT_DENSITY_THRESHOLD_RATIO: f32 = 0.05;
 
@@ -1063,7 +1064,7 @@ mod tests {
     /// come back as several tiles covering the full width. If it ever returned
     /// one tile the crop would be squeezed into the model window. Measured cost of
     /// that on this binding: nothing at 3 tiles, 4.1x the error at 4, and 23x at 8
-    /// (`examples/tiling_ab.rs`, `mon_OCR/eval/tiling-ab-2026-08-22.md`).
+    /// (`examples/tiling_ab.rs`, and the 2026-08-22 A/B over 201 rendered lines).
     #[test]
     fn a_wide_crop_is_tiled_not_squeezed() {
         let f = fixture();
@@ -1616,9 +1617,8 @@ mod tests {
     ///
     /// Added after a mutation that deleted the `merge_runs` call from the pipeline
     /// SURVIVED all four unit tests below — they call the helper directly, so the
-    /// call site was unguarded. That is the gap `se-brain`
-    /// `rules/standards/testing.md` names: a tested helper does not make its call
-    /// site safe.
+    /// call site was unguarded. That is the familiar gap: a tested helper does
+    /// not make its call site safe.
     ///
     /// Geometry is the measured one: a 20-row strip of upper marks, two empty
     /// rows, then a 44-row body. One line, and it must come back as one band.

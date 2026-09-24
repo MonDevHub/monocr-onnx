@@ -285,8 +285,8 @@ func decodeAndSegment(s *LineSegmenter, data []byte) ([]SegmentResult, error) {
 // Suppression buys two things, and this binding used to collect only one. The row
 // profile was read from the suppressed mask, but each crop's x-range was recomputed
 // by re-thresholding img.At(), so the frame was deleted from the profile and then
-// reinstated in every crop. See the comment on extractLine, and mon_OCR
-// src/monocr/segmenter.py:392 for the reference's statement of the intent.
+// reinstated in every crop. See the comment on extractLine, which quotes the
+// reference segmenter's statement of the intent.
 
 // TestFrameDoesNotWidenTheCrops requires the framed page and the same page unframed
 // to produce IDENTICAL x-extents. Exact, not approximate: every frame pixel belongs
