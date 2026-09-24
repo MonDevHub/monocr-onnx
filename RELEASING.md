@@ -14,15 +14,24 @@ characters. Nothing failed, because nothing checked. A tag is not a release.
 
 ## How a release actually happens
 
-**Pushing a tag. That is the whole mechanism.** `.github/workflows/release-python.yml`
-fires on `python/v*` and `release-js.yml` on `js/v*`; each runs the tests, verifies the
-built artifact, and publishes. Go needs no workflow at all, because the module proxy
-resolves `go/v*` straight from the tag.
+**Pushing a tag. That is the whole mechanism.** One workflow per registry, each keyed
+to its own tag prefix:
 
-Both publish by **trusted publishing (OIDC)**. There is no `PYPI_TOKEN` and no
-`NPM_TOKEN` anywhere in this repository, by design: `id-token: write` mints a short-lived
-credential per run, and on npm it also attaches a provenance attestation tying the tarball
-to the run and the commit.
+| Tag         | Workflow                               | Publishes to |
+| :---------- | :------------------------------------- | :----------- |
+| `js/v*`     | `.github/workflows/release-js.yml`     | npm (`monocr`) |
+| `python/v*` | `.github/workflows/release-python.yml` | PyPI (`monocr-onnx`) |
+| `rust/v*`   | `.github/workflows/release-rust.yml`   | crates.io (`monocr`) |
+| `go/v*`     | none                                   | the Go module proxy |
+
+Each workflow checks that the tag matches the version in its manifest, runs the tests,
+verifies what it built, and publishes. Go needs no workflow at all, because the module
+proxy resolves `go/v*` straight from the tag.
+
+All three publish by **trusted publishing (OIDC)**. There is no `PYPI_TOKEN`, no
+`NPM_TOKEN` and no `CARGO_REGISTRY_TOKEN` stored in this repository, by design:
+`id-token: write` mints a short-lived credential per run, and on npm it also attaches a
+provenance attestation tying the tarball to the run and the commit.
 
 **Corrected 2026-09-03.** This section used to open "Credentials are not on the dev
 machine by default" and tell you to check `npm whoami` and `~/.pypirc`. That describes a
@@ -32,7 +41,7 @@ the runbook asked for a login, the workflows wanted a tag, and the two never met
 
 ## The one-time registry setup, which is the actual blocker
 
-**Nothing here is a GitHub permission.** Both workflows already declare what they need:
+**Nothing here is a GitHub permission.** All three workflows already declare what they need:
 
 ```yaml
 permissions:
@@ -78,6 +87,14 @@ Unlike the PyPI settings above, `release-js.yml` does not record npm's menu path
 has moved it before. The workflow's own diagnostics are the thing to trust: it asks the
 registry whether a trusted publisher is configured and fails with a named error rather
 than a generic 403, so a misconfiguration is legible from the run log.
+
+### crates.io — `monocr`
+
+`release-rust.yml`'s header records the setup: a GitHub trusted publisher on
+<https://crates.io/crates/monocr/settings> pointing at `MonDevHub/monocr-onnx` and
+`release-rust.yml`. crates.io has no pending-publisher mechanism, so the configuration can
+only be attached to a crate that already exists; `monocr` does, so that constraint no
+longer blocks anything. Requires owner on the crate.
 
 ### If OIDC is refused at the org level
 
@@ -181,19 +198,40 @@ Irreversible. A PyPI version number can never be reused even after deletion, and
 npm `unpublish` closes after 72 hours.
 
 ```bash
-cd python && uv publish --token "$PYPI_TOKEN" ../dist/monocr_onnx-0.3.0*
-cd ../js  && npm publish ../dist/monocr-0.3.0.tgz --access public
-cd ../rust && cargo publish            # never published; expect a first-owner flow
+cd python && uv publish --token "$PYPI_TOKEN" ../dist/monocr_onnx-0.4.2*
+cd ../js  && npm publish ../dist/monocr-0.4.2.tgz --access public
+cd ../rust && cargo publish
 ```
 
-Go needs no registry step — modules resolve by tag, so pushing `go/v0.3.0` is the
+Go needs no registry step — modules resolve by tag, so pushing `go/v0.4.2` is the
 release.
 
-## 5. Push the tags
+## 5. Tag and push
+
+**Tag the merged commit on `main`**, never a release branch: the branch's commits are
+not the ones `main` will hold after a squash or a rebase, and a tag on them names a tree
+nobody can find from `main`. Pull first, so the tag lands on what origin has:
 
 ```bash
-git push origin python/v0.3.0 js/v0.3.0 rust/v0.3.0 go/v0.3.0
+git checkout main && git pull origin main
+git log -1 --oneline        # the release commit, e.g. "chore(release): 0.4.2"
+for t in js python rust go; do git tag -a "$t/v0.4.2" -m "$t/v0.4.2"; done
 ```
+
+**Push each tag by name, one at a time.** Each push starts its own workflow, so a failure
+is attributable to one binding, and the next push can wait until the previous run is
+green:
+
+```bash
+git push origin js/v0.4.2
+git push origin python/v0.4.2
+git push origin rust/v0.4.2
+git push origin go/v0.4.2
+```
+
+Never `git push --tags`. It pushes every local tag, including stale or experimental ones,
+and a pushed `js/v*`, `python/v*` or `rust/v*` tag publishes: none of the three
+registries lets a version number be reused.
 
 ## 6. Confirm from outside
 
