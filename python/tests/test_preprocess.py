@@ -18,7 +18,7 @@ def _inked(width: int, height: int = 40) -> Image.Image:
     as a stand-in for "ink everywhere". That is genuinely ambiguous — all
     background, or all ink? — and `preprocess`'s corner-median polarity probe
     reads it as a dark background and inverts it, which is the same thing
-    `mon_OCR`'s `to_normalized_grayscale` has always done to such an image.
+    the training code's `to_normalized_grayscale` has always done to such an image.
 
     So the fixture, not the contract, was wrong: it asserted the normalisation
     arithmetic on an input the real pipeline never produces. A dark bar with light

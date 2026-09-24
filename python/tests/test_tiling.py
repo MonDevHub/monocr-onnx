@@ -5,8 +5,8 @@ line horizontally and breaks the aspect ratio the model was trained on.
 
 This docstring used to price that at `CER 0.1434 squeezed against 0.0795 tiled`.
 RETIRED 2026-08-22: that harness was never committed and the figures do not
-reproduce. Remeasured over 201 rendered lines in
-`mon_OCR/eval/tiling-ab-2026-08-22.md`, the cost is width-dependent — squeezing
+reproduce. Remeasured in an A/B over 201 rendered lines (2026-08-22), the cost
+is width-dependent — squeezing
 wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
 
 These tests pin the mechanism rather than the preference, which is why the

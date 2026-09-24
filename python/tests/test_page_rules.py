@@ -133,8 +133,8 @@ def test_segment_wires_in_the_suppression():
     suppression, and the reason is specific: this segmenter has no morphological
     smear and thresholds at 2% of the profile MAX. The frame floor on the fixture
     is ~2,040 against a threshold of ~4,080, so the gaps stay visible.
-    mon_OCR fuses on the same fixture because its `_SMEAR_X = 11` widens each rule
-    column by 10px and triples that floor.
+    The reference segmenter fuses on the same fixture because its
+    `_SMEAR_X = 11` widens each rule column by 10px and triples that floor.
 
     REAL pages do fuse here. Measured 2026-08-27 over the twelve MNEC page-ones
     through this segmenter, bands returned without suppression -> with:

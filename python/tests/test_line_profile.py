@@ -304,8 +304,8 @@ def test_a_diacritic_strip_is_returned_joined_to_its_line():
 
     A mutation deleting the `merge_runs` call from the pipeline survives every
     helper test below, because they call the helper directly and leave the call
-    site unguarded. That is the gap se-brain rules/standards/testing.md names: a
-    tested helper does not make its call site safe.
+    site unguarded. That is the familiar gap: a tested
+    helper does not make its call site safe.
 
     Geometry is the measured one: a 20-row strip of upper marks, two empty rows,
     then a 44-row body. One line, and it must come back as one band.
@@ -348,8 +348,9 @@ def test_a_strip_shorter_than_min_line_h_survives_the_merge():
 def test_a_sub_threshold_dip_does_not_end_a_line():
     """Both clauses on the measured numbers rather than on invented ones: one
     line, rows 260-324, split by row 280 carrying 6 ink pixels against a
-    threshold of 7.0. Upstream's measurement, kept because it is the case F-69
-    diagnosed; this binding's own instance of it is page 20 of the same book,
+    threshold of 7.0. Upstream's measurement, kept because it is the case a
+    model-read of the reference segmenter diagnosed; this binding's own
+    instance of it is page 20 of the same book,
     where the threshold is 20.8 and row 493 carries 16.
     """
     hist = np.zeros(600, np.float32)

@@ -35,8 +35,8 @@ DEFAULT_INPUT_WIDTH = 1024
 # The model was trained on dark text on a light background, and nothing in this
 # binding used to check which it was given.
 #
-# Measured 2026-08-27 over 300 labelled crops from mon_OCR's `data/real/digits/val`,
-# same graph, only the polarity of the input changed:
+# Measured 2026-08-27 over 300 labelled crops from the training data's real-digit
+# validation split, same graph, only the polarity of the input changed:
 #
 #     upright, with this probe      CER 0.0000   300/300 exact
 #     inverted, with this probe     CER 0.0000   300/300 exact
@@ -49,7 +49,7 @@ DEFAULT_INPUT_WIDTH = 1024
 # crops are Myanmar digits on composited backgrounds, a narrow stratum -- the
 # effect on full Mon text lines is unmeasured.
 #
-# Ported from `mon_OCR/src/monocr/utils.py::to_normalized_grayscale`, deliberately
+# Ported from the training code's `to_normalized_grayscale`, deliberately
 # as a COPY rather than a shared module: these packages ship independently and a
 # shared dependency across them is the coupling their own docs refuse.
 _POLARITY_CORNER_FRACTION = 10
@@ -319,8 +319,7 @@ class MonOCR:
         that harness was never committed and neither pair reproduces.
 
         MEASURED 2026-08-22 over 201 rendered lines, twice — these Python arms
-        and the Rust binding, same images — in
-        `mon_OCR/eval/tiling-ab-2026-08-22.md`. The answer is **width-dependent,
+        and the Rust binding, same images. The answer is **width-dependent,
         not a property of the graph**: squeezing wins at 2 tiles, the two arms
         are level at 3, and tiling wins from 4 up, reaching 24x (Python) and 36x
         (Rust) by 6 tiles, where squeezing is above 0.83 CER.

@@ -22,8 +22,8 @@
 // helper plus two driving segment(). What is still NOT tested: the vertical
 // padding's exact value, and the binarisation threshold.
 //
-// They diverge from the reference (mon_OCR src/monocr/segmenter.py) in ways that
-// are recorded in that file's Canonical Algorithm Spec header — most of all the
+// They diverge from the reference segmenter in ways that are recorded in its
+// Canonical Algorithm Spec header — most of all the
 // flat global `< 128` binarisation below, where the reference thresholds
 // adaptively.
 let sharp = null;
@@ -160,8 +160,8 @@ function smoothProfile(hist, window) {
 // wherever one row dips below the gap threshold, and in Mon that happens between
 // the upper diacritic zone and the consonant bodies. The strip of glyph tops then
 // decodes to digits, because a row of circle-tops IS digits, and the decapitated
-// body decodes missing its asats, because the asat went with the strip. See mon_OCR
-// docs/AUDIT-2026-08-B.md F-69, which measured that with a model.
+// body decodes missing its asats, because the asat went with the strip. That was
+// measured with the model on the reference segmenter.
 //
 // MEASURED HERE, at this binding's own threshold: page 9 of a 56-page Mon book
 // rendered at 300 DPI, gapThreshold 6.8 ink pixels per row (0.05 of the smoothed
@@ -172,12 +172,12 @@ function smoothProfile(hist, window) {
 // where the merge leaves 23.
 //
 // A 1-row gap holding ink is not a line boundary at any resolution. This is the
-// reference's rule (mon_OCR `_MIN_GAP_MERGE`, segmenter.py step 8), ported with its
+// reference segmenter's rule (`_MIN_GAP_MERGE`, its step 8), ported with its
 // value, and it is the half of the dual histogram this binding left behind: raw
 // detection needs a merge to be safe, and the raw-only change shipped without it.
 //
 // WHAT IS THE REFERENCE'S AND WHAT IS NOT. Only this constant and the ordering —
-// merge, then filter by height — come from mon_OCR. Its merge has exactly two
+// merge, then filter by height — come from the reference. Its merge has exactly two
 // clauses, gap at most 10 and raw minimum above zero, and its comment argues AGAINST
 // anything like the fragment clause below: "If in doubt, we keep lines SEPARATE... A
 // split diacritic-only sub-line decodes to empty or near-empty text, which is
@@ -222,8 +222,9 @@ const MIN_GAP_MERGE = 10;
  *  the 56 pages had the merge switched off by speckle, and repairing that is most of
  *  the 288 to 160 improvement.
  *
- *  The sub-0.6x share is the fragment proxy, and not a metric invented here: F-69
- *  read a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of the page
+ *  The sub-0.6x share is the fragment proxy, and not a metric invented here: a
+ *  model-read of the reference segmenter's output over 4,251 bands found that of
+ *  the 642 landing in [0.4, 0.6) of the page
  *  median, 94.4% decoded to majority digits. (95.1% is that bucket's mean digit
  *  share — a different column of the same table.) Each arm is scored against its
  *  OWN page median above, and that could have flattered the merge, because merging
@@ -231,7 +232,7 @@ const MIN_GAP_MERGE = 10;
  *  fixed yardstick the merged count is 121 (7.0%).
  *
  *  Two things this does NOT claim. It does not remove every suspect band — 285 of
- *  F-69's 990 sub-0.6x bands were page numbers and watermarks, read correctly,
+ *  that read's 990 sub-0.6x bands were page numbers and watermarks, read correctly,
  *  which is why the merge is not a thin-band filter. And the band count is not
  *  monotone: 1 of the 56 pages comes back with MORE bands, because a merge lifts a
  *  pair of fragments that were each below minLineH over the filter. That is content
@@ -438,8 +439,8 @@ class LineSegmenter {
             // closer than 15px while the raw profile kept all 29.
             //
             // These are this binding's numbers. Do not substitute the reference's:
-            // mon_OCR dilates the mask vertically before taking the profile and this
-            // one does not, so its break point is 5px to 8px, not 3px.
+            // the reference segmenter dilates the mask vertically before taking the
+            // profile and this one does not, so its break point is 5px to 8px, not 3px.
             const isText = hist[y] > gapThreshold;
             if (isText && start === null) {
                 start = y;
@@ -477,10 +478,10 @@ class LineSegmenter {
     // so each crop spanned the full framed area — the same over-wide crop that
     // squeezes a line into the model window, only now per line instead of per page.
     //
-    // The reference states the intent at mon_OCR src/monocr/segmenter.py:392 —
+    // The reference segmenter states the intent in its rule-suppression step —
     // suppression runs before the smear because "the crop's column extents come from
     // `dilated`, so removing rules first also keeps the border out of the crops" —
-    // and its _extract_line sums `dilated` at line 648.
+    // and its _extract_line sums `dilated`.
     // python/monocr_onnx/segmenter.py:140 already sums `binary` for the same reason;
     // this binding was the odd one out.
     //

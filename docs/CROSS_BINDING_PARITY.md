@@ -22,7 +22,7 @@ image.
 > used to price that gap at `CER 0.1434 squeezed against 0.0795 tiled` and call it
 > "larger than any disagreement recorded here". **Retired 2026-08-22**: that harness
 > was never committed and the figures do not reproduce. Remeasured over 201 rendered
-> lines in `mon_OCR/eval/tiling-ab-2026-08-22.md`, the gap is width-dependent —
+> lines in an A/B dated 2026-08-22, the gap is width-dependent —
 > squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
 > On the ordinary page input that report describes — a book page at 150 dpi, where
 > every line fitted one tile — the gap is not smaller than the disagreements below,
@@ -42,7 +42,7 @@ model `a51be11` (316 classes, H=128) with the 315-character charset they shared 
 time.
 
 There is **no ground truth** for these images. They carry no labels, and the two whose
-filenames match mon_OCR's generator (`000028.jpg`, `000029.jpg`) are *not* the same
+filenames match the training data generator's (`000028.jpg`, `000029.jpg`) are *not* the same
 bytes as the files behind those labels — that corpus was regenerated. So this measures
 **agreement**, not accuracy. Four implementations agreeing is evidence the decode path
 is consistent; it is not evidence that the text is right.
@@ -70,7 +70,7 @@ not a formatting difference.
 ## Cause: four resampling kernels, two of them the wrong family
 
 The training pipeline resizes with `cv2.INTER_LINEAR`
-(`mon_OCR/src/monocr/utils.py`, `resize_and_pad`). The bindings do not agree with it or
+(the training code's `resize_and_pad`). The bindings do not agree with it or
 with each other:
 
 | Binding | Resampler | Family | Matches training |
@@ -105,8 +105,8 @@ for the page image, so its output needs aligning per-image rather than by line n
 
 - **Accuracy.** No ground truth exists here. See above.
 - **The segmenter.** These are pre-cropped lines. Every binding also carries its own
-  line segmenter, and those diverge further — see `mon_OCR/src/monocr/segmenter.py`,
-  which records that seven implementations exist and that three of fourteen constants
+  line segmenter, and those diverge further — the reference segmenter's own header
+  records that seven implementations exist and that three of fourteen constants
   survive across all of them.
 - **iOS and Android.** The apps in `monocr-monorepo` are a separate pair of
   implementations again, and were not part of this run.

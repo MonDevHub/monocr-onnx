@@ -48,8 +48,8 @@ pub const DEFAULT_INPUT_WIDTH: u32 = 1024;
 /// The model is trained on dark text on a light background, and this binding
 /// never checked which it was given.
 ///
-/// Measured 2026-08-27 over 300 labelled crops from mon_OCR's
-/// `data/real/digits/val`, same graph, only the polarity of the input changed:
+/// Measured 2026-08-27 over 300 labelled crops from the training data's
+/// real-digit validation split, same graph, only the polarity of the input changed:
 ///
 /// ```text
 /// upright, with this probe    CER 0.0000   300/300 exact
@@ -64,7 +64,7 @@ pub const DEFAULT_INPUT_WIDTH: u32 = 1024;
 ///
 /// A COPY of the same probe in `go/pkg/predictor/onnx.go`,
 /// `python/monocr_onnx/predictor.py` and `js/src/monocr.js`, not a shared
-/// module: these bindings ship independently. Step 4 of mon_OCR's
+/// module: these bindings ship independently. Step 4 of the training code's
 /// `to_normalized_grayscale`, background levelling, is not ported here and is
 /// what the 0.0036 upright row above costs.
 const POLARITY_CORNER_FRACTION: u32 = 10;
@@ -463,7 +463,7 @@ impl MonOcrBuilder {
     /// # Why this is exposed
     ///
     /// The right value is a property of the input class, not a constant waiting
-    /// to be settled. `mon_OCR/docs/LIMITATIONS.md:304-334` measured the
+    /// to be settled. The reference implementation's measurements found the
     /// ordering reversing between a book page and a photographed poster: a
     /// six-line slide returned 3 lines at the low ratio and all 6 at 0.50, and
     /// the response to the ratio is explicitly non-monotone. So a caller that
@@ -479,10 +479,10 @@ impl MonOcrBuilder {
     ///
     /// Tiling is the default and should stay the default. This exists so the two
     /// strategies can be measured against each other on the same pipeline, which
-    /// `mon_OCR/docs/ROADMAP.md` item 4.5.6 requires before either is trusted,
+    /// has to happen on each port before either is trusted,
     /// and which was impossible while the squeeze arm was unreachable.
     ///
-    /// The measurement in `mon_OCR/eval/tiling-ab-2026-08-22.md` found the answer
+    /// An A/B over 201 rendered lines (2026-08-22) found the answer
     /// is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
     /// 24x worse from 4 tiles up, where it drives CER above 0.9. Tiling is the
     /// safe default because its downside is bounded and squeezing's is not.
@@ -1059,7 +1059,7 @@ impl MonOcr {
     /// argument — the downside is a fraction of a point on already-low rates, and
     /// the upside is not losing the line.
     ///
-    /// Char-level CER here; `mon_OCR/eval/tiling-ab-2026-08-22.md` scores the same
+    /// Char-level CER here; the 2026-08-22 A/B over 201 rendered lines scores the same
     /// images by grapheme cluster and finds the same crossover. That report also
     /// records that these numbers do **not** reproduce the older
     /// squeezed-0.1434-against-tiled-0.0795 figures quoted elsewhere, whose

@@ -1,7 +1,7 @@
 """The model is trained on dark text on a light background; check what we feed it.
 
-Measured 2026-08-27 over 300 labelled crops from mon_OCR's `data/real/digits/val`,
-same graph, only the polarity of the input changed:
+Measured 2026-08-27 over 300 labelled crops from the training data's real-digit
+validation split, same graph, only the polarity of the input changed:
 
     upright, with the probe      CER 0.0000   300/300 exact
     inverted, with the probe     CER 0.0000   300/300 exact
