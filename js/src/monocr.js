@@ -124,8 +124,8 @@ function assertModelContract(session, charset, targetHeight, modelPath) {
 // Polarity. The model is trained on dark text on a light background and this
 // binding never checked which it was given.
 //
-// Measured 2026-08-27 over 300 labelled crops from mon_OCR's
-// data/real/digits/val, same graph, only the polarity of the input changed:
+// Measured 2026-08-27 over 300 labelled crops from the training data's
+// real-digit validation split, same graph, only the polarity of the input changed:
 //
 //     upright, with this probe    CER 0.0000   300/300 exact
 //     inverted, with this probe   CER 0.0000   300/300 exact
@@ -136,7 +136,7 @@ function assertModelContract(session, charset, targetHeight, modelPath) {
 // close. Those crops are Myanmar digits on composited backgrounds, so the effect
 // on full Mon text lines is unmeasured.
 //
-// A COPY of mon_OCR's `to_normalized_grayscale` steps 1-3, not a shared module:
+// A COPY of the training code's `to_normalized_grayscale` steps 1-3, not a shared module:
 // these bindings ship independently. Step 4, background levelling, is not ported
 // and is what the 0.0036 upright row above costs.
 const POLARITY_CORNER_FRACTION = 10;
@@ -484,7 +484,7 @@ class MonOCR {
      * conclude "this binding is on the worse side of that". RETIRED 2026-08-22:
      * that harness was never committed and the figures do not reproduce.
      * Remeasured over 201 rendered lines, twice — Python arms and the Rust
-     * binding — in mon_OCR/eval/tiling-ab-2026-08-22.md, the answer is
+     * binding, in one A/B dated 2026-08-22 — the answer is
      * width-dependent: squeezing wins at 2 tiles, the two arms are level at 3,
      * and tiling wins from 4 up. On a real book page at 150 dpi every line
      * fitted one tile, so tiling never engaged.

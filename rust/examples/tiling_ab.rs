@@ -1,13 +1,13 @@
 //! Squeezing against tiling, measured on THIS pipeline.
 //!
-//! `mon_OCR/docs/ROADMAP.md` item 4.5.6 requires that the tiling direction be
-//! re-measured on a port before it is trusted, and is explicit about why: "the
-//! app segmenters are not the Python one." Until this example existed, no port
+//! The tiling direction has to be re-measured on a port before it is trusted,
+//! because the app segmenters are not the Python one. Until this example
+//! existed, no port
 //! had ever been measured — the numbers in the doc comment on `predict_page`
 //! came from an uncommitted Python harness.
 //!
 //! This reads a directory of pre-rendered line images with a `labels.txt`
-//! (produced by `mon_OCR/scripts/tiling_ab.py --dump-dir`), runs each image
+//! (produced by the Python A/B harness's `--dump-dir`), runs each image
 //! through this crate twice — once tiling, once squeezing — and reports the
 //! character error rate of each arm. Reading the same images the Python harness
 //! scored is the point: it isolates the pipeline as the variable rather than
@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use monocr_onnx::MonOcr;
 
 /// Grapheme-cluster CER would be the right metric, matching
-/// `mon_OCR/src/monocr/metrics.py`. Rust has no grapheme segmenter in this
+/// the training code's metrics. Rust has no grapheme segmenter in this
 /// crate's dependency set, so this uses `char`-level edit distance and says so:
 /// the two differ on Mon, where a base plus its stacked marks is several chars
 /// and one grapheme. The comparison between arms stays valid because both arms

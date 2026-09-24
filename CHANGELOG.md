@@ -4,6 +4,55 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## 0.4.2 — 2026-09-24
+
+A patch release. The model, the charset, the pinned revision and every binding's
+API are unchanged from 0.4.1.
+
+- **Python: `monocr_onnx.__version__` was wrong.** It was a hand-written
+  `"0.3.0"` that nothing compared with `pyproject.toml`, so the 0.3.2, 0.4.0 and
+  0.4.1 wheels all reported `0.3.0`. It is now read from the installed package
+  metadata, with `0.0.0+unknown` for a source tree that was never installed, and
+  `tests/test_packaging.py` asserts it equals the `pyproject.toml` version.
+- **Install lines point at a working release.** The npm README shipped in 0.4.1
+  still said `npm install monocr@^0.3.0`; on 0.x a caret range stays below the
+  next minor, so that installed 0.3.2, which returns noise (see 0.4.0). It is now
+  `^0.4.1`. The pip and uv lines floor at `>=0.4.1` and the crates.io README's
+  snippet is `monocr = "0.4"` (it was `"0.3"`, which resolved to 0.3.1).
+- **Root README version table** shows 0.4.2 as this release for all four
+  bindings, beside what each registry answered when last queried (0.4.1 on
+  2026-09-24), so the table is not false in the window between tag and publish.
+- **Public-doc corrections.** The Python README quotes the model card's held-out
+  CER (0.0100 on 150 unseen rendered lines, 95% interval [0.0056, 0.0147]) and
+  its synthetic-renderer caveat instead of an unspecified "validation figure",
+  and names the pre-fetch command correctly as `monocr-onnx download`. The JS
+  README's segmentation note cites the right line and no longer calls the
+  projection profile untested. The root README drops an internal commit-hash
+  history from its model link and states that `MonDevHub/monocr-web` is
+  superseded by the monorepo's `apps/web`. Its upload-limit note separates the
+  web app's 50 MB cap from the Android and iOS apps' 20 MB, and says those two
+  build from source and are not in an app store yet.
+- **Repository hygiene.** A stale 9.7 MB linux/amd64 build of the Go CLI,
+  `go/monocr`, is no longer tracked; `go/.gitignore` ignores `/monocr`, anchored
+  so `go/cmd/monocr/` stays tracked.
+- **Release runbook.** `RELEASING.md` names all three release workflows
+  (`release-js.yml`, `release-python.yml`, `release-rust.yml`) and Go's
+  workflow-free `go/v*` tag, and says tags are cut from the merged commit on
+  `main` and pushed one by name.
+- **No private records cited.** Comments and docs that pointed at a
+  private repository or internal review IDs now describe the same technical
+  point in neutral terms. No behaviour changed.
+
+## 0.4.1 — 2026-09-10
+
+Documentation and release plumbing only; no binding source changed. All four
+bindings were bumped together to keep one number meaning one contract. The
+release workflows were fixed (the Rust release gate could never pass) and the
+per-SDK READMEs were corrected. *(Correction, 2026-09-24: this entry, written
+after the fact, said install lines now floor at 0.4.1. They did not in the 0.4.1
+packages — the npm README still said `^0.3.0` and the Rust one `"0.3"`. That
+change is in 0.4.2.)*
+
 ## 0.4.0 — 2026-09-04
 
 **The JavaScript binding returned noise, and did so in every published version.**
@@ -77,7 +126,8 @@ a release and never re-read the repository.
 Version parity restored. 0.3.1 was a Rust-only emergency republish — the `ort`
 dependency was declared as a caret range over a pre-release, so 0.3.0 could not
 be compiled by anyone who depended on it — and it left Rust one number ahead of
-the other three. All four are 0.3.2.
+the other three. All four are 0.3.2. *(Correction, 2026-09-23: crates.io never
+received 0.3.2 — Rust went from 0.3.1 to 0.4.0.)*
 
 ## 0.3.0 — 2026-08-27
 

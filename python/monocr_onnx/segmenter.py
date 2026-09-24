@@ -99,8 +99,8 @@ def smooth_profile(raw_hist, window):
 # wherever one row dips below the gap threshold, and in Mon that happens between
 # the upper diacritic zone and the consonant bodies. The strip of glyph tops then
 # decodes to digits, because a row of circle-tops IS digits, and the decapitated
-# body decodes missing its asats, because the asat went with the strip. See
-# mon_OCR docs/AUDIT-2026-08-B.md F-69, which measured that with a model.
+# body decodes missing its asats, because the asat went with the strip. That was
+# measured with the model on the reference segmenter.
 #
 # MEASURED HERE, at this binding's own threshold: page 20 of a 56-page Mon book
 # rendered at 300 DPI, threshold 20.8 ink pixels per row (0.02 of the smoothed
@@ -110,13 +110,13 @@ def smooth_profile(raw_hist, window):
 # 42 bands.
 #
 # A 1-row gap holding ink is not a line boundary at any resolution. This is the
-# reference's rule (mon_OCR `_MIN_GAP_MERGE`, segmenter.py step 8), ported with
+# reference segmenter's rule (`_MIN_GAP_MERGE`, its step 8), ported with
 # its value, and it is the half of the dual histogram this binding left behind:
 # raw detection needs a merge to be safe, and the raw-only change shipped without
 # it.
 #
 # WHAT IS THE REFERENCE'S AND WHAT IS NOT. Only this constant and the ordering --
-# merge, then filter by height -- come from mon_OCR. Its merge has exactly two
+# merge, then filter by height -- come from the reference. Its merge has exactly two
 # clauses, gap at most 10 and raw minimum above zero, and its comment argues
 # AGAINST anything like the fragment clause below: "If in doubt, we keep lines
 # SEPARATE... A split diacritic-only sub-line decodes to empty or near-empty text,
@@ -169,7 +169,8 @@ def merge_runs(runs, raw_hist, max_gap, min_line):
     is half again as bad.
 
     The sub-0.6x share is the fragment proxy, and not a metric invented here:
-    F-69 read a model over 4,251 bands, and of the 642 landing in [0.4, 0.6) of
+    a model-read of the reference segmenter's output over 4,251 bands found
+    that of the 642 landing in [0.4, 0.6) of
     the page median, 94.4% decoded to majority digits. (95.1% is that bucket's
     mean digit share -- a different column of the same table.) Each arm is
     scored against its OWN page median above, and that could have flattered the
@@ -177,7 +178,7 @@ def merge_runs(runs, raw_hist, max_gap, min_line):
     unmerged arm's medians as a fixed yardstick the merged count is 157 (8.7%).
 
     Two things this does NOT claim. It does not remove every suspect band --
-    285 of F-69's 990 sub-0.6x bands were page numbers and watermarks, read
+    285 of that read's 990 sub-0.6x bands were page numbers and watermarks, read
     correctly, which is why the merge is not a thin-band filter. And the total
     band count is not monotone: 6 of the 56 pages come back with MORE bands than
     the unmerged arm, because a merge lifts a pair of fragments that were each
@@ -470,8 +471,8 @@ def cut_column(crop, x0, ideal, crop_w):
     ``ideal`` unchanged when there is no gap to cut at, which is the honest
     outcome for a continuous script: a known-bad seam beats an overflowing tile.
 
-    Ported from mon_OCR ``segmenter._cut_column``; the constants are the same,
-    so the two produce the same cuts on the same input.
+    Ported from the reference segmenter's ``_cut_column``; the constants are
+    the same, so the two produce the same cuts on the same input.
     """
     if ideal >= crop_w:
         return crop_w

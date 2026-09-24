@@ -4,8 +4,8 @@
 // Both halves are pinned here, because either one silently reverting costs lines.
 // Every number below was measured through THIS binding at ITS parameters (minLineH
 // 10, smoothWindow 3, ratio 0.05 of the non-zero mean). The reference's numbers do
-// not transfer: mon_OCR dilates the mask vertically before taking the profile and
-// this binding does not.
+// not transfer: the reference segmenter dilates the mask vertically before taking
+// the profile and this binding does not.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -287,8 +287,7 @@ test('a diacritic strip is returned joined to its line', async () => {
     // The merge must be reached THROUGH segment(), not only unit-tested. A mutation
     // deleting the mergeRuns call from the pipeline survives every helper test below,
     // because they call the helper directly and leave the call site unguarded. That is
-    // the gap se-brain rules/standards/testing.md names: a tested helper does not make
-    // its call site safe.
+    // the familiar gap: a tested helper does not make its call site safe.
     //
     // Geometry is the measured one: a 20-row strip of upper marks, two empty rows,
     // then a 44-row body. One line, and it must come back as one band.
@@ -317,9 +316,9 @@ test('a strip shorter than minLineH survives the merge', async () => {
 test('a sub-threshold dip does not end a line', () => {
     // Both clauses on measured numbers rather than invented ones: one line, rows
     // 260-324, split by row 280 carrying 6 ink pixels against a threshold of 7.0.
-    // Upstream's measurement, kept because it is the case F-69 diagnosed; this
-    // binding's own instance is page 9 of the same book, where the threshold is 6.8
-    // and row 377 carries 5.
+    // Upstream's measurement, kept because it is the case a model-read of the
+    // reference segmenter diagnosed; this binding's own instance is page 9 of the same
+    // book, where the threshold is 6.8 and row 377 carries 5.
     const hist = profile(600, [[260, 325], [400, 444], [500, 544]]);
     hist[280] = 6; // above zero, below the gap threshold
     assert.deepStrictEqual(

@@ -103,7 +103,7 @@ func resolveModel() (modelPath, charset string, err error) {
 // conclude "this binding is still on the worse side of that". RETIRED
 // 2026-08-22: that harness was never committed and the figures do not
 // reproduce. Remeasured over 201 rendered lines, twice — Python arms and the
-// Rust binding — in mon_OCR/eval/tiling-ab-2026-08-22.md, the answer is
+// Rust binding, in one A/B dated 2026-08-22 — the answer is
 // width-dependent: squeezing wins at 2 tiles, the two arms are level at 3, and
 // tiling wins from 4 up. On a real book page at 150 dpi every line fitted one
 // tile, so tiling never engaged at all.
@@ -112,7 +112,6 @@ func resolveModel() (modelPath, charset string, err error) {
 // unusually wide input, where tiling's downside stays bounded. Porting
 // tile_line/cut_column from python/monocr_onnx/segmenter.py is still worth
 // doing for that reason, and measuring it on this binding first is the point.
-// ROADMAP 4.5.6.
 func ReadImage(imagePath string) (string, error) {
 	modelPath, charset, err := resolveModel()
 	if err != nil {

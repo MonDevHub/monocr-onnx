@@ -6,8 +6,8 @@ package segmenter
 // Both halves are pinned here, because either one silently reverting costs lines.
 // Every number below was measured through THIS binding at ITS parameters (MinLineH
 // 10, SmoothWindow 3, ratio 0.05 of the non-zero mean). The reference's numbers do
-// not transfer: mon_OCR dilates the mask vertically before taking the profile and
-// this binding does not.
+// not transfer: the reference segmenter dilates the mask vertically before taking
+// the profile and this binding does not.
 
 import (
 	"image"
@@ -384,8 +384,7 @@ func sameRuns(got, want [][2]int) bool {
 //
 // A mutation deleting the mergeRuns call from the pipeline survives every helper test
 // below, because they call the helper directly and leave the call site unguarded. That
-// is the gap se-brain rules/standards/testing.md names: a tested helper does not make
-// its call site safe.
+// is the familiar gap: a tested helper does not make its call site safe.
 //
 // Geometry is the measured one: a 20-row strip of upper marks, two empty rows, then a
 // 44-row body. One line, and it must come back as one band.
@@ -427,9 +426,9 @@ func TestAStripShorterThanMinLineHSurvivesTheMerge(t *testing.T) {
 
 // TestASubThresholdDipDoesNotEndALine uses measured numbers rather than invented ones:
 // one line, rows 260-324, split by row 280 carrying 6 ink pixels against a threshold of
-// 7.0. Upstream's measurement, kept because it is the case F-69 diagnosed; this
-// binding's own instance is page 9 of the same book, where the threshold is 6.8163 and
-// row 377 carries 5.
+// 7.0. Upstream's measurement, kept because it is the case a model-read of the
+// reference segmenter diagnosed; this binding's own instance is page 9 of the same
+// book, where the threshold is 6.8163 and row 377 carries 5.
 func TestASubThresholdDipDoesNotEndALine(t *testing.T) {
 	hist := profileOf(600, [][3]int{
 		{260, 325, 200}, {280, 281, 6}, {400, 444, 200}, {500, 544, 200},
