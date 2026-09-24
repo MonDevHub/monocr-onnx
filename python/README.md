@@ -38,8 +38,11 @@ pip install "monocr-onnx>=0.4.0"
   environment holding both, install order decided which one you got.
 - **Throughput.** On an Apple M5, a typeset page is about 2 s and a 10-page
   scanned PDF about 78 s, model already cached. CPU only; no GPU path here.
-- **No accuracy figure is claimed by this package.** The published numbers are
-  validation figures measured on rendered lines — see the model card.
+- **No accuracy figure is claimed by this package.** The model card reports a
+  held-out CER of 0.0100 on 150 unseen rendered lines in a typeface the model
+  never trained on, with a 95% interval of [0.0056, 0.0147]. Those lines come
+  from the same synthetic generator as the training data, so nothing on the card
+  is measured on photographed pages. Read its caveats before quoting the number.
 
 ## Platforms
 
@@ -150,7 +153,7 @@ monocr-onnx pdf document.pdf
 monocr-onnx batch ./input
 
 # Pre-fetch the model and charset
-monocr download
+monocr-onnx download
 ```
 
 ## Model artifact
@@ -164,7 +167,7 @@ The cache lives at `~/.monocr/models/<revision>/`, so bumping the pin misses the
 cache rather than silently reusing old weights.
 
 If you installed 0.1.0, a stale `~/.monocr/models/monocr.onnx` may still be on
-disk. Nothing reads it any more; `monocr download` will point it out and it is
+disk. Nothing reads it any more; `monocr-onnx download` will point it out and it is
 safe to delete.
 
 ## Requirements
