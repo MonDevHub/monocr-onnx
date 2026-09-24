@@ -4,6 +4,14 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## 0.4.1 — 2026-09-10
+
+Documentation and release plumbing only; no binding source changed. All four
+bindings were bumped together to keep one number meaning one contract. The
+release workflows were fixed (the Rust release gate could never pass) and the
+per-SDK READMEs were corrected. Install lines now floor at 0.4.1, because every
+JavaScript release before 0.4.0 returned noise (see 0.4.0 below).
+
 ## 0.4.0 — 2026-09-04
 
 **The JavaScript binding returned noise, and did so in every published version.**
@@ -77,7 +85,8 @@ a release and never re-read the repository.
 Version parity restored. 0.3.1 was a Rust-only emergency republish — the `ort`
 dependency was declared as a caret range over a pre-release, so 0.3.0 could not
 be compiled by anyone who depended on it — and it left Rust one number ahead of
-the other three. All four are 0.3.2.
+the other three. All four are 0.3.2. *(Correction, 2026-09-23: crates.io never
+received 0.3.2 — Rust went from 0.3.1 to 0.4.0.)*
 
 ## 0.3.0 — 2026-08-27
 
