@@ -19,9 +19,8 @@ API are unchanged from 0.4.1.
   next minor, so that installed 0.3.2, which returns noise (see 0.4.0). It is now
   `^0.4.1`. The pip and uv lines floor at `>=0.4.1` and the crates.io README's
   snippet is `monocr = "0.4"` (it was `"0.3"`, which resolved to 0.3.1).
-- **Root README version table** shows 0.4.2 as this release for all four
-  bindings, beside what each registry answered when last queried (0.4.1 on
-  2026-09-24), so the table is not false in the window between tag and publish.
+- **Root README version table** shows 0.4.2 for all four bindings, beside what
+  each registry answered when last queried.
 - **Public-doc corrections.** The Python README quotes the model card's held-out
   CER (0.0100 on 150 unseen rendered lines, 95% interval [0.0056, 0.0147]) and
   its synthetic-renderer caveat instead of an unspecified "validation figure",

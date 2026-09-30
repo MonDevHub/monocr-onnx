@@ -44,9 +44,10 @@ here, and four implementations reading the same wrong thing would agree
 perfectly.
 
 > [!TIP]
-> The web app caps uploads at 50 MB; the Android and iOS apps, which build from
-> source and are not in an app store yet, cap them at 20 MB. This SDK has no such
-> limit; use it directly for larger files.
+> The web app and the Android and iOS apps cap what you open for recognition at
+> 50 MB; the apps' contribute and sync path is capped at 20 MiB. The apps build
+> from source and are not in an app store yet. This SDK has no such limit; use it
+> directly for larger files.
 
 ## Architecture
 
@@ -83,16 +84,15 @@ with no error and no lookup miss.
 
 ## Supported platforms
 
-| SDK                      | Directory            | Registry/Source                                                                      | Registry, 2026-09-24 | This release |
-| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :------------------- | :----------- |
-| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.1                | 0.4.2        |
-| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.1                | 0.4.2        |
-| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.1               | 0.4.2        |
-| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.1                | 0.4.2        |
+| SDK                      | Directory            | Registry/Source                                                                      | Latest (checked 2026-09-30) |
+| :----------------------- | :-------------------- | :------------------------------------------------------------------------------------ | :-------------------------- |
+| **JavaScript / Node.js** | [`js/`](js/)          | [npm: monocr](https://www.npmjs.com/package/monocr)                                   | 0.4.2                       |
+| **Python**               | [`python/`](python/)  | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/)                            | 0.4.2                       |
+| **Go**                   | [`go/`](go/)          | [pkg.go.dev: monocr-onnx/go](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go)  | v0.4.2                      |
+| **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.2                       |
 
-**0.4.2 (this release)** is one number for all four bindings and the version in
-this tree. It changes no model, charset or API. It fixes the Python
-`__version__`, which the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`,
+**0.4.2** is one number for all four bindings and the version in this tree.
+It changes no model, charset or API. It fixes the Python `__version__`, which the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`,
 and the install lines in the npm and crates.io READMEs, which in 0.4.1 still
 pointed at 0.3.x.
 
@@ -109,13 +109,12 @@ registries — chosen once `monocr` was confirmed unclaimed there, before the
 first publish. `[lib] name` in `rust/Cargo.toml` stays `monocr_onnx`, so
 nothing importing the crate needed to change.
 
-Registry state last queried 2026-09-24 against pypi.org, registry.npmjs.org,
-crates.io, proxy.golang.org and pkg.go.dev — each package's own API, not this
-repository's own claim about itself. All four answered 0.4.1, before any 0.4.2
-tag was pushed; that answer is the "Registry" column. Once the 0.4.2 tags are
-pushed, a registry that still answers 0.4.1 means that release has not landed.
-A tag and a publish are different events, and conflating them is what let 0.2.0
-and 0.2.1 sit tagged-but-unpublished for months.
+The "Latest" column was read on 2026-09-30 from each package's own API
+(registry.npmjs.org, pypi.org, crates.io, proxy.golang.org), not from this
+repository's claim about itself. To check it again, query those endpoints; a
+registry that answers an older number than a pushed tag means that release has
+not landed. A tag and a publish are different events, and conflating them is
+what let 0.2.0 and 0.2.1 sit tagged-but-unpublished for months.
 
 The pip and npm lines below floor at 0.4.1, so they install the newest release
 at or above it (npm's caret stops below 0.5.0); `cargo add` and `go get` take the
@@ -197,8 +196,8 @@ All three apps now live in one repository,
 
 The former `MonDevHub/ocr-android` and `MonDevHub/ocr-ios` links were listed here
 until 2026-08-15 and both return 404. `MonDevHub/monocr-web` still resolves but is
-superseded: its `main` branch has not changed since 2026-04-08, and the web app
-now lives in `apps/web` of the monorepo.
+superseded and not the source of truth; the web app now lives in `apps/web` of
+the monorepo.
 
 ## Resources
 
