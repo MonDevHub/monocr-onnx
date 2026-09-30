@@ -92,9 +92,9 @@ with no error and no lookup miss.
 | **Rust**                 | [`rust/`](rust/)      | [crates.io: monocr](https://crates.io/crates/monocr)                                  | 0.4.2                       |
 
 **0.4.2** is one number for all four bindings and the version in this tree.
-It changes no model, charset or API. It fixes the Python `__version__`, which the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`,
-and the install lines in the npm and crates.io READMEs, which in 0.4.1 still
-pointed at 0.3.x.
+It changes no model, charset or API. It fixes the Python `__version__`, which
+the 0.3.2, 0.4.0 and 0.4.1 wheels all reported as `0.3.0`, and the install lines
+in the npm and crates.io READMEs, which in 0.4.1 still pointed at 0.3.x.
 
 > [!IMPORTANT]
 > **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
