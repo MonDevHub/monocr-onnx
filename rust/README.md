@@ -1,12 +1,12 @@
-# MonOCR (Rust SDK)
+# MonOCR (Rust)
 
 [![crates.io](https://img.shields.io/crates/v/monocr.svg)](https://crates.io/crates/monocr)
 
-The official Rust SDK for Mon language OCR, powered by ONNX Runtime.
+On-device OCR for the Mon language (mnw), running on ONNX Runtime. Part of
+[monocr-onnx](https://github.com/MonDevHub/monocr-onnx), which also has Python,
+JavaScript and Go bindings.
 
-## Installation
-
-Add this to your `Cargo.toml`:
+## Install
 
 ```toml
 [dependencies]
@@ -17,42 +17,17 @@ tokio = { version = "1", features = ["full"] }
 The crate is `monocr`; the library it exposes is `monocr_onnx`, so imports read
 `use monocr_onnx::MonOcr`.
 
-## The model
+Needs Rust 1.88 or newer, the floor `ort` 2.0.0-rc.11 declares. Runs on the CPU.
+ONNX Runtime does not need installing on Linux (x86_64, aarch64, glibc),
+Apple-silicon macOS and Windows (x86_64, aarch64, MSVC): `ort` downloads a
+prebuilt runtime for those targets at build time and links it in, so the first
+build needs network access. Other desktop targets, Intel macOS among them, have
+no prebuilt; point `ORT_LIB_LOCATION` at your own ONNX Runtime build. The
+current [ort linking guide](https://ort.pyke.io/setup/linking) calls that
+variable `ORT_LIB_PATH`, which is a later release's name; rc.11 reads
+`ORT_LIB_LOCATION`.
 
-Weights are downloaded from
-[janakhpon/monocr](https://huggingface.co/janakhpon/monocr), pinned to revision
-`d3d9d5e` (`model_manager::MODEL_REVISION`). That artifact takes a
-`[batch, 1, 160, 1024]` input and emits `[batch, sequence, 277]` logits: 276
-characters plus the CTC blank. **Height and width are both static**; batch is
-the only dynamic axis. This line previously read `[1, 1, 160, width]`, which had
-both halves backwards.
-
-The charset, the input height and the classifier width are one contract. If they
-drift apart the model still runs and still returns text — it is just the wrong
-text, with no error anywhere. So the SDK reads the real graph on load and returns
-a `ModelContractError` when it disagrees with the charset it holds:
-
-```
-model contract violation: charset/model mismatch.
-  charset: 276 characters -> expects 277 classes (276 + CTC blank)
-  model (/…/monocr.onnx): 225 classes
-```
-
-Downloads are cached per revision under `~/.monocr/models/<revision>/`, so
-re-pinning is a cache miss rather than a silent reuse of the previous artifact.
-
-## Features
-
-- **Auto-Model Management**: Downloads and caches the pinned ONNX weights and
-  their charset to `~/.monocr/models/<revision>/`.
-- **Fail-closed loading**: Refuses to run a model whose input height or class
-  count disagrees with the charset, instead of returning the wrong text.
-- **Memory Efficient**: Uses `ndarray` for tensor construction.
-- **Line segmentation**: Horizontal projection profile over a **flat global
-  threshold at 128** for full-page OCR (`src/segmenter.rs:288`). Not adaptive —
-  the crate's own docs at `src/segmenter.rs:265` state it correctly.
-
-## Quick Start
+## Quick start
 
 ```rust,no_run
 use monocr_onnx::MonOcr;
@@ -62,8 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Downloads and caches the model on first use.
     let mut ocr = MonOcr::builder().build().await?;
 
-    let text = ocr.read_image("test_image.jpg").await?;
-    println!("Recognized Text: {text}");
+    let text = ocr.read_image("page.png").await?; // lines joined with newlines
+    println!("{text}");
     Ok(())
 }
 ```
@@ -77,7 +52,7 @@ use monocr_onnx::{read_image, read_images, read_pdf};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text = read_image("page.png").await?;
     let batch = read_images(&["a.png", "b.png"]).await?;
-    let pages = read_pdf("document.pdf").await?; // needs poppler-utils
+    let pages = read_pdf("document.pdf").await?; // needs poppler, one string per page
     println!("{} {} {}", text.len(), batch.len(), pages.len());
     Ok(())
 }
@@ -103,32 +78,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 The charset is stripped of line terminators only. Its first character is
-U+0020 — a space is one of the classes the model emits, so trimming it with
+U+0020 — a space is one of the classes the model emits — so trimming it with
 `.trim()` shifts every index in the decode by one.
 
-## Platforms
+## The model
 
-Builds and runs on macOS, Linux and Windows.
+Weights and their charset come from revision `d3d9d5e`
+(`model_manager::MODEL_REVISION`) of
+[janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
+`~/.monocr/models/<revision>/`, so re-pinning is a cache miss rather than a
+silent reuse. The graph takes a `[batch, 1, 160, 1024]` input and emits
+`[batch, sequence, 277]` logits: 276 characters plus the CTC blank. Input
+height and width are both static; batch is the only dynamic input axis.
 
-**ONNX Runtime does not need installing.** `ort` fetches a prebuilt runtime for
-the target at build time and links it in, so there is no shared library to place
-and no path to set.
+The SDK reads the real graph on load and returns a `ModelContractError` when its
+class count disagrees with the charset or its input height is not 160, because a
+mismatched pair would still run and return the wrong text with no error:
 
-The **Go** binding is the one that needs a shared library installed; it loads at
-runtime and has a built-in default only on macOS. This crate does not.
+```
+model contract violation: charset/model mismatch.
+  charset: 276 characters -> expects 277 classes (276 + CTC blank)
+  model (/…/monocr.onnx): 225 classes
+```
 
-**poppler is needed, for `read_pdf` only.** Images need nothing extra.
+The error arrives inside `anyhow::Error`; match it with
+`err.downcast_ref::<monocr_onnx::ModelContractError>()`.
+
+## PDFs need poppler
+
+`read_pdf` shells out to poppler's `pdftoppm`. Images need nothing extra.
 
 ```bash
 brew install poppler                 # macOS
 sudo apt-get install poppler-utils   # Debian, Ubuntu
 ```
 
-On Windows poppler ships with none of the usual toolchains; `scoop install
-poppler`, `choco install poppler`, `conda install -c conda-forge poppler`, or the
-prebuilt binaries from
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
 [oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. `pdfinfo -v` in a new shell is the check.
+with `Library\bin` added to `PATH`. In 0.4.2 `read_pdf` finds `pdftoppm` by
+running `which pdftoppm`, which a stock Windows shell lacks, so on Windows it
+also needs a `which` on `PATH` (Git for Windows' `usr\bin` has one). Run
+`which pdftoppm` in a new shell to check both.
+
+## Limitations
+
+Line segmentation binarises with a flat global threshold at 128, where the
+Python binding thresholds adaptively. A line too wide for the model is cut into
+tiles by default, as in Python; `.tile_wide_lines(false)` on the builder
+squeezes it instead. Page output differs between bindings; the
+[root README](https://github.com/MonDevHub/monocr-onnx#limitations) has the
+measurement. No accuracy figure is claimed here; see the
+[model card](https://huggingface.co/janakhpon/monocr).
 
 ## License
 

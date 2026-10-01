@@ -1,185 +1,116 @@
-# MonOCR (Python SDK)
+# MonOCR (Python)
 
 [![PyPI](https://img.shields.io/pypi/v/monocr-onnx.svg)](https://pypi.org/project/monocr-onnx/)
 
-The official Python SDK for Mon language OCR, powered by ONNX Runtime. Optimized for high-throughput batch processing and production server environments.
+On-device OCR for the Mon language (mnw), running on ONNX Runtime. Part of
+[monocr-onnx](https://github.com/MonDevHub/monocr-onnx), which also has
+JavaScript, Go and Rust bindings.
 
-## Installation
+## Install
 
 ```bash
 pip install "monocr-onnx>=0.4.1"
 ```
 
-## Features
+Requires Python 3.11+. Keep the floor: 0.1.0 is the only release that accepts
+Python 3.9 or 3.10, so an unpinned install there resolves to it, and 0.1.x pairs
+a 225-character charset with a 277-class graph and returns wrong characters.
 
-- **Pinned to one network**: the v3.5 recogniser at revision `d3d9d5e`, with 160px input
-  height, 276 characters, 277 CTC classes. No accuracy figure is claimed here; see
-  the [model card](https://huggingface.co/janakhpon/monocr) for the held-out result
-  and its caveats.
-- **Parallel Processing**: Native support for multithreaded batch OCR.
-- **Pinned Model**: Weights and charset are fetched from one immutable [Hugging Face](https://huggingface.co/janakhpon/monocr) revision, checksummed, and cached per revision.
-- **Images and PDFs**: images through `MonOCR`, PDFs through `read_pdf`. These are
-  different calls, not one polymorphic one — see the API reference below.
-- **Line segmentation**: adaptive thresholding, with padding relative to each line's height.
+The wheel is pure Python and every native dependency publishes wheels for Linux,
+macOS and Windows, so no compiler is needed. On an Intel Mac that means
+onnxruntime 1.23.2, its last Intel-macOS wheel, and Python 3.11 to 3.13. It runs
+on the CPU only.
 
-## What to know before you start
+## Quick start
 
-- **First run downloads the model.** Roughly 46 MB, fetched from the pinned
-  Hugging Face revision and cached per revision. Nothing works offline until that
-  has happened once.
-- **PDFs need poppler on the PATH**, on every platform. `read_pdf` goes through
-  `pdf2image`, which shells out to `pdftoppm`. Without it the call raises a
-  `RuntimeError` naming poppler; it does not fail quietly. Images need nothing
-  extra. See [Platforms](#platforms) below.
-- **`MonOCR.predict` does not accept a PDF.** It opens the path as an image and
-  raises `PIL.UnidentifiedImageError` on a PDF. Use `read_pdf`.
-- **The CLI is `monocr-onnx`, not `monocr`.** It was `monocr` up to 0.3.2, which
-  collided with the command installed by the separate `monocr` package; in an
-  environment holding both, install order decided which one you got.
-- **Throughput.** On an Apple M5, a typeset page is about 2 s and a 10-page
-  scanned PDF about 78 s, model already cached. CPU only; no GPU path here.
+```python
+from monocr_onnx import MonOCR, read_pdf
+
+# Downloads the pinned model on first run and caches it by revision.
+engine = MonOCR()
+
+# A page: segmented into lines, joined with newlines.
+print(engine.predict("page.png"))
+
+# A line you have already cropped: read whole, never split.
+print(engine.predict_line("line.png"))
+
+# A PDF: one string per page. Needs poppler (below).
+pages = read_pdf("book.pdf")
+```
+
+`predict` is an alias for `predict_page`. It does not accept a PDF: it opens the
+path as an image and raises `PIL.UnidentifiedImageError`. Use `read_pdf`.
+
+## API
+
+| Call | Returns |
+| :--- | :--- |
+| `MonOCR(model_path=None, charset_path=None)` | The engine. Omit both paths to use the pinned model and its charset. |
+| `.predict(image)` / `.predict_page(image)` | `str`, one line of text per detected line, for a path or PIL image. A detected line too wide for the model is cut into tiles. |
+| `.predict_line(image)` | `str`, for a path or PIL image of one line. A crop too wide for the model is squeezed to fit, not tiled. |
+| `read_image(path)` / `read_images(paths, workers=4)` | `str` / `list[str]` |
+| `read_pdf(path)` / `read_pdfs(paths, workers=4)` | `list[str]`, one per page / `list[list[str]]` |
+| `read_image_with_accuracy(path, ground_truth)` | `(str, float)`: the text, and `100 × (1 − edit distance ÷ length of the longer string)` |
+
+The module-level functions also take `model_path` and `charset_path` as
+keyword arguments.
+
+Loading raises `ModelContractError` when the model's output class count is not
+the charset's length plus one (277 for the 276-character charset; CTC reserves
+index 0 for the blank) or its input height is not 160. A mismatched pair would still run and
+still return text; it would just be the wrong text.
+
+## CLI
+
+```bash
+monocr-onnx image input.jpg
+monocr-onnx pdf document.pdf
+monocr-onnx batch ./input
+monocr-onnx download        # pre-fetch the model and charset
+```
+
+The command is `monocr-onnx`, not `monocr`. It was `monocr` up to 0.3.2, which
+collided with the command installed by the separate
+[`monocr`](https://pypi.org/project/monocr/) package.
+
+## PDFs need poppler
+
+`read_pdf` goes through `pdf2image`, which shells out to poppler's `pdftoppm`.
+Without it the call raises a `RuntimeError` naming poppler.
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. `read_pdf` does not forward pdf2image's
+`poppler_path`, so `PATH` is the route. Check with `pdfinfo -v` in a new shell.
+
+## What to expect
+
+- **First run downloads the model**, 46.2 MB, from revision `d3d9d5e` of
+  [janakhpon/monocr](https://huggingface.co/janakhpon/monocr), never from `main`.
+  Both files are checked by sha256 and cached under
+  `~/.monocr/models/<revision>/`, so a new pin is a cache miss rather than a
+  silent reuse of old weights. Nothing works offline until that has happened
+  once.
+- **Speed.** On an Apple M5 with the model cached, a typeset page takes about
+  2 s.
 - **No accuracy figure is claimed by this package.** The model card reports a
   held-out CER of 0.0100 on 150 unseen rendered lines in a typeface the model
   never trained on, with a 95% interval of [0.0056, 0.0147]. Those lines come
   from the same synthetic generator as the training data, so nothing on the card
   is measured on photographed pages. Read its caveats before quoting the number.
-
-## Platforms
-
-The wheel is pure Python (`py3-none-any`) and every native dependency —
-`onnxruntime`, `opencv-python-headless`, `numpy`, `Pillow` — publishes wheels for
-Linux, macOS and Windows, so `pip install` needs no compiler on any of them.
-
-Only poppler is manual, and only for PDFs.
-
-**macOS**
-
-```bash
-brew install poppler
-```
-
-**Linux**
-
-```bash
-sudo apt-get install poppler-utils   # Debian, Ubuntu
-```
-
-Other distributions package the same binaries, usually as `poppler-utils` or
-`poppler`.
-
-**Windows**
-
-Not shipped with Windows and there is no single official installer. Any of these
-works:
-
-```powershell
-scoop install poppler
-choco install poppler
-conda install -c conda-forge poppler
-```
-
-Or take the prebuilt binaries from
-[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases),
-unzip, and add the `Library\bin` directory to `PATH` — that release is what
-`pdf2image`'s own documentation points Windows users at. `pdf2image` also accepts
-a `poppler_path` argument, but `read_pdf` does not forward one, so `PATH` is the
-route here.
-
-Check with `pdfinfo -v` in a new shell before calling `read_pdf`.
-
-## Quick Start
-
-```python
-from monocr_onnx import MonOCR
-
-# Initialize engine (downloads model automatically on first run)
-engine = MonOCR()
-
-# Recognize single image
-text = engine.predict("document.png")
-print(text)
-
-# Recognize single line (for custom layout analysis)
-line_text = engine.predict_line("line_crop.png")
-```
-
-## API Reference
-
-### `MonOCR(model_path=None, charset_path=None)`
-
-Initialize the OCR engine. If paths are omitted, the pinned model and its charset are downloaded on first use.
-
-Loading refuses a model whose output class count or input height disagrees with the charset — a mismatched pair still runs and still returns text, it is just the wrong text.
-
-### `predict(image_path)` -> `str`
-
-Recognize text from a single image file or page. Alias for `predict_page`.
-
-### `predict_line(image)` -> `str`
-
-Recognize text from a single cropped text line image (PIL).
-
-### `predict_page(image_path)` -> `str`
-
-Segment an image into lines and recognize each.
-
-### `read_pdf(pdf_path, model_path=None, charset_path=None)` -> `list[str]`
-
-Module-level, not a method. Renders every page through poppler and returns one
-string per page. This is the only PDF entry point.
-
-```python
-from monocr_onnx import read_pdf
-
-pages = read_pdf("book.pdf")
-print(len(pages), "pages")
-print(pages[0])
-```
-
-### `read_pdfs(paths, ...)` -> `list[list[str]]`
-
-The same over several files.
-
-## CLI Usage
-
-```bash
-# Recognize an image
-monocr-onnx image input.jpg
-
-# Process a PDF
-monocr-onnx pdf document.pdf
-
-# Batch directory processing
-monocr-onnx batch ./input
-
-# Pre-fetch the model and charset
-monocr-onnx download
-```
-
-## Model artifact
-
-The model and its charset are pinned to `janakhpon/monocr@d3d9d5e` (v3.5: 160px
-input height, 276 characters, 277 CTC classes) and verified by sha256 after
-download. They are never fetched from `main` — that ref has already moved under
-this package once, replacing a 64px / 225-class network with the current one.
-
-The cache lives at `~/.monocr/models/<revision>/`, so bumping the pin misses the
-cache rather than silently reusing old weights.
-
-If you installed 0.1.0, a stale `~/.monocr/models/monocr.onnx` may still be on
-disk. Nothing reads it any more; `monocr-onnx download` will point it out and it is
-safe to delete.
-
-## Requirements
-
-- Python 3.11+ — onnxruntime 1.24.1 ships no wheel below cp311 and no sdist, so
-  3.10 and below have nothing to install
-- opencv-python-headless (line segmentation)
-- onnxruntime 1.24.1 (CPU or GPU), pinned in `uv.lock`
-
-## Maintenance
-
-Maintained by [MonDevHub](https://github.com/MonDevHub).
+- **Bindings disagree.** The four bindings do not yet return identical text for
+  the same page; see the
+  [root README](https://github.com/MonDevHub/monocr-onnx#limitations).
+- **Upgrading from 0.1.0:** a stale `~/.monocr/models/monocr.onnx` may still be
+  on disk. Nothing reads it; `monocr-onnx download` points it out and it is safe
+  to delete.
 
 ## License
 
