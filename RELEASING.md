@@ -131,7 +131,7 @@ present under the current version. Point at it:
 
 ```bash
 export RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin"
-cargo test        # 74 lib tests + 14 doc-tests at 0.5.0
+cargo test        # 76 lib tests + 14 doc-tests at 0.5.0
 ```
 
 Adjust `21` to whatever `ls /Library/Developer/CommandLineTools/usr/lib/clang/`

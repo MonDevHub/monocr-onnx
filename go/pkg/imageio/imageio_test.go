@@ -263,3 +263,77 @@ func TestJpegExifSkipsFillBytesAndOtherAPP1Segments(t *testing.T) {
 		t.Fatalf("orientation %d, want 6", got)
 	}
 }
+
+// pngWithChunk builds a PNG signature followed by one chunk whose length field says
+// declared, carrying payload, and an IEND. The CRCs are zero; the tag reader
+// does not check them.
+func pngWithChunk(typ string, declared uint32, payload []byte) []byte {
+	b := []byte("\x89PNG\r\n\x1a\n")
+	b = binary.BigEndian.AppendUint32(b, declared)
+	b = append(b, typ...)
+	b = append(b, payload...)
+	b = append(b, 0, 0, 0, 0)
+	b = binary.BigEndian.AppendUint32(b, 0)
+	b = append(b, "IEND"...)
+	return append(b, 0, 0, 0, 0)
+}
+
+// jpegWithExif builds SOI, one APP1 Exif segment holding t, and EOI.
+func jpegWithExif(t []byte) []byte {
+	b := []byte{0xFF, 0xD8, 0xFF, 0xE1}
+	b = binary.BigEndian.AppendUint16(b, uint16(2+6+len(t)))
+	b = append(b, "Exif\x00\x00"...)
+	b = append(b, t...)
+	return append(b, 0xFF, 0xD9)
+}
+
+// A chunk length that runs past the end of the file is read as "no tag". The
+// slice it would take is out of range, so without the bound this panics.
+func TestAnOversizedPNGChunkLengthIsNoTag(t *testing.T) {
+	payload := tiff(false, 3, 6)
+	// The smallest length that overruns: everything after the chunk header
+	// and its CRC, plus one.
+	over := uint32(len(pngWithChunk("eXIf", 0, payload)) - 8 - 12 + 1)
+	for _, declared := range []uint32{over, 1 << 20, 0x7FFFFFFF, 0xFFFFFFFF} {
+		for _, typ := range []string{"eXIf", "tEXt"} {
+			if got := ExifOrientation(pngWithChunk(typ, declared, payload)); got != 1 {
+				t.Errorf("%s length %d: orientation %d, want 1", typ, declared, got)
+			}
+		}
+	}
+	// The same chunk with its true length is read, so the cases above are
+	// refused for their length alone.
+	if got := ExifOrientation(pngWithChunk("eXIf", uint32(len(payload)), payload)); got != 6 {
+		t.Fatalf("well-formed eXIf: orientation %d, want 6", got)
+	}
+}
+
+// An IFD offset past the end of the TIFF structure is read as "no tag", in both
+// containers. Reading the entry count there is out of range, so without the
+// bound this panics.
+func TestAnIFDOffsetBeyondTheBufferIsNoTag(t *testing.T) {
+	good := tiff(false, 3, 6)
+	for _, off := range []uint32{uint32(len(good)) - 1, uint32(len(good)), uint32(len(good)) + 64, 1 << 20, 0xFFFFFFFE} {
+		b := append([]byte(nil), good...)
+		binary.LittleEndian.PutUint32(b[4:], off)
+		if got := tiffOrientation(b); got != 0 {
+			t.Errorf("IFD offset %d: tiffOrientation %d, want 0", off, got)
+		}
+		for name, file := range map[string][]byte{
+			"JPEG": jpegWithExif(b),
+			"PNG":  pngWithChunk("eXIf", uint32(len(b)), b),
+		} {
+			if got := ExifOrientation(file); got != 1 {
+				t.Errorf("%s, IFD offset %d: orientation %d, want 1", name, off, got)
+			}
+		}
+	}
+	for name, file := range map[string][]byte{
+		"JPEG": jpegWithExif(good),
+		"PNG":  pngWithChunk("eXIf", uint32(len(good)), good),
+	} {
+		if got := ExifOrientation(file); got != 6 {
+			t.Fatalf("well-formed %s: orientation %d, want 6", name, got)
+		}
+	}
+}

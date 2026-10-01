@@ -182,8 +182,8 @@ jobs:
       #   RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin" \
       #     cargo test
       #
-      # With that set the full suite passes locally (28 lib + 14 doc-tests). That
-      # is a real and unrelated issue; it is not why this job was red.
+      # With that set the full suite passes locally (76 lib + 14 doc-tests at
+      # 0.5.0). That is a real and unrelated issue; it is not why this job was red.
       # PINNED, added 2026-09-03. This step had no `ref:`, so it took whatever was on
       # MonDevHub/monocr's default branch and this repository's Rust suite was validated
       # against a moving target. Two failure modes, and both had already happened in one

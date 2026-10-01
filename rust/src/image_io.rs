@@ -353,6 +353,75 @@ mod tests {
         assert_eq!(tiff_orientation(&b), None);
     }
 
+    /// A PNG signature, one chunk whose length field says `declared` and which
+    /// carries `payload`, then an IEND. The CRCs are zero; the reader does not
+    /// check them.
+    fn png_with_chunk(typ: &[u8; 4], declared: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        b.extend_from_slice(&declared.to_be_bytes());
+        b.extend_from_slice(typ);
+        b.extend_from_slice(payload);
+        b.extend_from_slice(&[0; 4]);
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(b"IEND");
+        b.extend_from_slice(&[0; 4]);
+        b
+    }
+
+    /// SOI, one APP1 Exif segment holding `t`, and EOI.
+    fn jpeg_with_exif(t: &[u8]) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        b.extend_from_slice(&((2 + 6 + t.len()) as u16).to_be_bytes());
+        b.extend_from_slice(b"Exif\0\0");
+        b.extend_from_slice(t);
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    /// A chunk length that runs past the end of the file is read as "no tag".
+    /// The slice it would take is out of range, so without the bound this
+    /// panics.
+    #[test]
+    fn an_oversized_png_chunk_length_is_no_tag() {
+        let payload = tiff(false, 3, 6);
+        // The smallest length that overruns: everything after the chunk header
+        // and its CRC, plus one.
+        let over = (png_with_chunk(b"eXIf", 0, &payload).len() - 8 - 12 + 1) as u32;
+        for declared in [over, 1 << 20, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            for typ in [b"eXIf", b"tEXt"] {
+                let file = png_with_chunk(typ, declared, &payload);
+                assert_eq!(exif_orientation(&file), 1, "length {declared}");
+            }
+        }
+        // The same chunk with its true length is read, so the cases above are
+        // refused for their length alone.
+        let file = png_with_chunk(b"eXIf", payload.len() as u32, &payload);
+        assert_eq!(exif_orientation(&file), 6);
+    }
+
+    /// An IFD offset past the end of the TIFF structure is read as "no tag", in
+    /// both containers.
+    #[test]
+    fn an_ifd_offset_beyond_the_buffer_is_no_tag() {
+        let good = tiff(false, 3, 6);
+        let n = good.len() as u32;
+        for off in [n - 1, n, n + 64, 1 << 20, 0xFFFF_FFFE] {
+            let mut b = good.clone();
+            b[4..8].copy_from_slice(&off.to_le_bytes());
+            assert_eq!(tiff_orientation(&b), None, "offset {off}");
+            assert_eq!(
+                exif_orientation(&jpeg_with_exif(&b)),
+                1,
+                "JPEG, offset {off}"
+            );
+            let png = png_with_chunk(b"eXIf", b.len() as u32, &b);
+            assert_eq!(exif_orientation(&png), 1, "PNG, offset {off}");
+        }
+        assert_eq!(exif_orientation(&jpeg_with_exif(&good)), 6);
+        let png = png_with_chunk(b"eXIf", good.len() as u32, &good);
+        assert_eq!(exif_orientation(&png), 6);
+    }
+
     /// The walk has to step over fill bytes and an APP1 that is not Exif (XMP
     /// is the common one) to reach the Exif segment behind them.
     #[test]
