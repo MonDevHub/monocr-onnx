@@ -70,7 +70,9 @@ wrongly before. The evidence:
   upright image by up to 1.8-2.0 in model-input units (the full range is 2.0),
   and the transparent PNG by 1.6-1.8. After, both differ by 0.000 in all four.
   Each guard in this entry was reverted on its own and its test failed, except
-  Rust's 32-bit offset bound, which a test on a 64-bit machine cannot reach.
+  the Go and Rust bounds on the PNG chunk length and the IFD offset: on a 64-bit
+  machine no input changes their outcome, so no test there can fail without
+  them.
 - **Opaque, untagged input is byte-identical.** Each binding has a test that
   its new loader returns the same bytes as the old path for all seven images in
   `data/images` and the opaque fixtures. With the real model, all four bindings
@@ -117,7 +119,9 @@ Also in this release:
   `libonnxruntime.dylib` loaded through `DYLD_LIBRARY_PATH` and
   `DYLD_FALLBACK_LIBRARY_PATH`. With neither set, `dlopen` tried only the working
   directory and `/usr/lib`, not `/usr/local/lib`, which is why the Intel path is
-  checked by name. Loading on Linux has not been run.
+  checked by name. Loading on Linux has not been run. A setup that renamed or
+  linked the library to `onnxruntime.so` to suit the old default now needs
+  `MONOCR_ONNXRUNTIME_PATH`.
 
 ## 0.4.2 — 2026-09-24
 
