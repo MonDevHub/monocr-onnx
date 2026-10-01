@@ -144,3 +144,28 @@ def test_the_page_path_reads_files_as_displayed(make_ocr, name, reference):
     got = ocr.fake_session.last_input
     assert got.shape == want.shape
     assert float(np.abs(got - want).max()) <= TOLERANCE / 127.5
+
+
+INK_RGB = 24
+
+@pytest.mark.parametrize("kind", ["palette index", "grey colour key", "rgb colour key"])
+def test_palette_and_colour_key_transparency_is_composited(tmp_path, kind):
+    """A PNG's tRNS chunk keeps the mode P, L or RGB, so the alpha-mode test
+    alone would miss it; ``transparency`` in ``info`` is what marks it."""
+    a = np.zeros((32, 64), dtype=np.uint8)
+    a[8:24, 8:56] = 1  # ink where 1, transparent background where 0
+    if kind == "palette index":
+        img = Image.fromarray(a, mode="P")
+        img.putpalette([0, 0, 0, INK_RGB, INK_RGB, INK_RGB])
+        img.save(tmp_path / "t.png", transparency=0)
+    elif kind == "grey colour key":
+        Image.fromarray(np.where(a == 1, INK_RGB, 0).astype(np.uint8), mode="L").save(
+            tmp_path / "t.png", transparency=0
+        )
+    else:
+        rgb = np.repeat(np.where(a == 1, INK_RGB, 0).astype(np.uint8)[..., None], 3, axis=2)
+        Image.fromarray(rgb, mode="RGB").save(tmp_path / "t.png", transparency=(0, 0, 0))
+    got = np.asarray(to_grey(load_image(tmp_path / "t.png")))
+    assert got[0, 0] == 255  # the transparent background reads as white
+    assert got[16, 32] == INK_RGB  # opaque ink is unchanged
+

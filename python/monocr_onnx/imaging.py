@@ -28,6 +28,22 @@ def load_image(source):
     return source
 
 
+def _may_be_transparent(img):
+    """True when ``img`` carries any transparency information at all.
+
+    The same test as Pillow's ``Image.has_transparency_data``, written out
+    because that property arrived in Pillow 10.1 and this package supports
+    Pillow 9.0 and later: an alpha mode, a palette with alpha, or a
+    ``transparency`` entry (a palette index, or a colour key on L or RGB).
+    """
+    if img.mode in ("RGBA", "RGBa", "LA", "La", "PA"):
+        return True
+    palette = getattr(img, "palette", None)
+    if img.mode == "P" and palette is not None and palette.mode.endswith("A"):
+        return True
+    return "transparency" in img.info
+
+
 def to_grey(img):
     """Return ``img`` as 8-bit greyscale, composited onto white first if it is transparent.
 
@@ -40,7 +56,7 @@ def to_grey(img):
     else takes the conversion it always took, so opaque input is byte-identical
     to before.
     """
-    if img.has_transparency_data:
+    if _may_be_transparent(img):
         rgba = img.convert("RGBA")
         if rgba.getchannel("A").getextrema()[0] < 255:
             white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
