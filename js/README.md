@@ -16,14 +16,15 @@ Python, Go and Rust bindings.
 ## Install
 
 ```bash
-npm install monocr@^0.4.1
+npm install "monocr@>=0.4.1"
 ```
 
 Requires Node.js 20.9+. Runs on the CPU on Linux (x64, arm64; glibc), Windows
 (x64, arm64) and Apple-silicon macOS; `onnxruntime-node` and `sharp` ship prebuilt binaries
 there, so no compiler is needed. `onnxruntime-node` ships no Intel-macOS binary,
-so Intel Macs are not supported. On 0.x, npm's caret stops below the next minor,
-so `^0.4.1` takes 0.4.x releases only.
+so Intel Macs are not supported. npm saves the version it installs as a caret
+range, which on 0.x stops below the next minor, so moving from 0.4.x to 0.5.x
+takes another install.
 
 ## Quick start
 

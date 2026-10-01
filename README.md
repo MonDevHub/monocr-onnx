@@ -11,8 +11,8 @@ corpora, language models — has something to build on.
 
 ## Status
 
-- **0.4.2** is the current release of all four bindings. The four share one
-  version number, one model and one charset; see the [changelog](CHANGELOG.md).
+- **0.5.0** is the version in this tree, for all four bindings. The four share
+  one version number, one model and one charset; see the [changelog](CHANGELOG.md).
 - It reads printed Mon. Handwriting is out of scope.
 - No accuracy figure is claimed here. The
   [model card](https://huggingface.co/janakhpon/monocr) has the held-out result
@@ -31,16 +31,17 @@ corpora, language models — has something to build on.
 
 ```bash
 pip install "monocr-onnx>=0.4.1"           # Python; or: uv add "monocr-onnx>=0.4.1"
-npm install monocr@^0.4.1                  # Node.js
+npm install "monocr@>=0.4.1"               # Node.js
 go get github.com/MonDevHub/monocr-onnx/go # Go
 cargo add monocr                           # Rust
 ```
 
 Keep the floors. 0.1.x pairs a 225-character charset with a 277-class graph and
 returns wrong characters, not merely worse ones, and every npm release before
-0.4.0 returns noise. On 0.x npm's caret stops below the next minor, so
-`^0.4.1` takes 0.4.x releases only. `go get` and `cargo add` take the latest
-release.
+0.4.0 returns noise. pip and npm take the newest release above the floor, and
+`go get` and `cargo add` the newest release. npm then saves a caret range, which
+on 0.x stops below the next minor, so moving from 0.4.x to 0.5.x takes another
+install.
 
 The Rust crate is `monocr`, but the library it exposes is `monocr_onnx`:
 `use monocr_onnx::MonOcr`.
@@ -77,22 +78,21 @@ Microsoft's 1.24.1 release nor Homebrew has a prebuilt Intel-macOS library for
 Go. Python still installs there, on onnxruntime 1.23.2 (the last release with an
 Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
 
-| Binding | Directory | Package | Requires | Latest |
+| Binding | Directory | Package | Requires | In this tree |
 | :--- | :--- | :--- | :--- | :--- |
-| Python | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Python 3.11+ | 0.4.2 |
-| JavaScript | [`js/`](js/) | [npm: monocr](https://www.npmjs.com/package/monocr) | Node.js 20.9+ | 0.4.2 |
-| Go | [`go/`](go/) | [pkg.go.dev](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go) | Go 1.23+, ONNX Runtime 1.18.0+ shared library | v0.4.2 |
-| Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | nothing beyond Cargo | 0.4.2 |
+| Python | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Python 3.11+ | 0.5.0 |
+| JavaScript | [`js/`](js/) | [npm: monocr](https://www.npmjs.com/package/monocr) | Node.js 20.9+ | 0.5.0 |
+| Go | [`go/`](go/) | [pkg.go.dev](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go) | Go 1.23+, ONNX Runtime 1.18.0+ shared library | v0.5.0 |
+| Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | nothing beyond Cargo | 0.5.0 |
 
 Go is the only binding that always needs ONNX Runtime installed separately; it
 loads the shared library at run time. [`go/README.md`](go/README.md) covers installing it.
 The Python and JavaScript packages bring the runtime with them, and the Rust
 crate links a prebuilt one at build time on the targets `ort` publishes one for.
 
-"Latest" was read on 2026-10-01 from each registry's own API (registry.npmjs.org,
-pypi.org, crates.io, proxy.golang.org). A tag and a publish are different
-events: if a registry answers an older number than a pushed tag, that release has
-not landed.
+"In this tree" is the version the source here declares, not what a registry
+serves. A tag and a publish are different events: if a registry's page shows an
+older number than a pushed tag, that release has not landed.
 
 ## How it works
 
@@ -124,7 +124,20 @@ cached under `~/.monocr/models/<revision>/`. Each binding ships the matching
 charset and refuses to decode if the two disagree: CTC reserves index 0 for the
 blank, so a model over N characters must emit N + 1 classes. Without that check
 a mismatch returns well-formed Mon text that is wrong, with no error and no
-lookup miss.
+lookup miss. Decoding refuses a broken output the same way: logits holding a NaN
+or an infinity raise `ModelOutputError` (Go: `*predictor.OutputError`), and
+logits that are not `[1, sequence, N + 1]` raise `ModelContractError` (Go:
+`*predictor.ContractError`), rather than decoding into a blank or wrong line.
+
+A file the binding opens itself is turned the way it is displayed, from its EXIF
+Orientation tag, and transparency is composited onto white before the conversion
+to grey, so a transparent background is not read as black. An image you pass in
+already decoded (a PIL `Image`, a sharp instance, an `image.Image`) is not
+re-oriented. Go and Rust read the tag only from JPEG and from a PNG eXIf chunk;
+Python and JavaScript also read it from the other formats their imaging libraries
+decode, such as TIFF and WebP.
+[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md#input-loading-and-decode-guards--measured-2026-10-01)
+has the remaining differences.
 
 ## Limitations
 

@@ -59,7 +59,10 @@ keyword arguments.
 Loading raises `ModelContractError` when the model's output class count is not
 the charset's length plus one (277 for the 276-character charset; CTC reserves
 index 0 for the blank) or its input height is not 160. A mismatched pair would still run and
-still return text; it would just be the wrong text.
+still return text; it would just be the wrong text. Decoding raises
+`ModelOutputError` when the model returns NaN or infinite scores, and
+`ModelContractError` when the logits are not `[1, sequence, 277]`, rather than
+turning a broken output into a blank or wrong line.
 
 ## CLI
 

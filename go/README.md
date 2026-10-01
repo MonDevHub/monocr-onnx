@@ -85,6 +85,12 @@ model contract violation: charset/model mismatch.
   model (/…/monocr.onnx): 225 classes
 ```
 
+Decoding returns `*predictor.OutputError` when the model returns NaN or infinite
+scores, and `*predictor.ContractError` when the logits are not
+`[1, sequence, 277]`. The page and PDF calls skip a line that fails to read, so
+one bad crop does not lose the page, but either of these errors fails the whole
+call: a broken model fails every line the same way.
+
 ## ONNX Runtime
 
 `go.mod` pins `github.com/yalue/onnxruntime_go` v1.11.0, which is only the cgo
@@ -138,6 +144,10 @@ directory on `LD_LIBRARY_PATH` or register it with `ldconfig`. Distribution
 packages work too where they exist; check the version is at least 1.18.0. A
 package that ships only `libonnxruntime.so.1` (the unversioned link is often in a
 `-dev` package) needs the variable pointed at that file.
+
+0.4.2 and earlier asked the Linux loader for `onnxruntime.so`, which ONNX Runtime
+packages do not ship, and checked only the Apple-silicon Homebrew path. On those
+versions, set the variable on Linux and on an Intel Mac.
 
 **Windows**
 

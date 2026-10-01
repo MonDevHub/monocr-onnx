@@ -8,10 +8,9 @@ JavaScript and Go bindings.
 
 ## Install
 
-```toml
-[dependencies]
-monocr = "0.4"
-tokio = { version = "1", features = ["full"] }
+```bash
+cargo add monocr
+cargo add tokio --features full
 ```
 
 The crate is `monocr`; the library it exposes is `monocr_onnx`, so imports read
@@ -118,10 +117,11 @@ sudo apt-get install poppler-utils   # Debian, Ubuntu
 On Windows: `scoop install poppler`, `choco install poppler`,
 `conda install -c conda-forge poppler`, or the prebuilt binaries from
 [oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. In 0.4.2 `read_pdf` finds `pdftoppm` by
-running `which pdftoppm`, which a stock Windows shell lacks, so on Windows it
-also needs a `which` on `PATH` (Git for Windows' `usr\bin` has one). Run
-`which pdftoppm` in a new shell to check both.
+with `Library\bin` added to `PATH`. `read_pdf` checks for poppler by running
+`pdftoppm -v`; confirm with the same command in a new shell. 0.4.2 and earlier
+ran `which pdftoppm` instead, which a stock Windows shell lacks, so on Windows
+those versions also need a `which` on `PATH` (Git for Windows' `usr\bin` has
+one).
 
 ## Limitations
 
