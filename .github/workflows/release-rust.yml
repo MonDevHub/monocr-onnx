@@ -54,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Pinned to a commit rather than the `stable` branch, because this job
       # holds `id-token: write` and can therefore mint a crates.io publish token.
@@ -106,6 +108,7 @@ jobs:
       - name: Fetch the shared segmentation fixture
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: MonDevHub/monocr
           ref: dc5c8ae34303152dce7ce6552398b1307475fd40
           path: .fixtures-monorepo
