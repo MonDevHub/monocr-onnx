@@ -8,9 +8,10 @@ Python, Go and Rust bindings.
 
 > [!IMPORTANT]
 > **Upgrade from anything before 0.4.0.** Every earlier npm release returned
-> noise rather than text: preprocessing read a three-channel buffer as if it were
-> one channel. On a typeset page `monocr@0.3.2` returned 168 characters of
-> garbage where 0.4.0 returns 1,178 of Mon.
+> noise rather than text. In 0.3.x, preprocessing read a three-channel buffer as
+> if it were one channel; 0.1.x pairs a 225-character charset with a 277-class
+> graph. On a typeset page `monocr@0.3.2` returned 168 characters of garbage
+> where 0.4.0 returns 1,178 of Mon.
 
 ## Install
 
@@ -18,10 +19,11 @@ Python, Go and Rust bindings.
 npm install monocr@^0.4.1
 ```
 
-Requires Node.js 20.9+. Runs on macOS, Linux and Windows on the CPU;
-`onnxruntime-node` and `sharp` ship prebuilt binaries for all three, so no
-compiler is needed. On 0.x npm's caret stops below the next minor, so `^0.4.1`
-takes 0.4.x releases only.
+Requires Node.js 20.9+. Runs on the CPU on Linux and Windows (x64, arm64) and
+on Apple-silicon macOS; `onnxruntime-node` and `sharp` ship prebuilt binaries
+there, so no compiler is needed. `onnxruntime-node` ships no Intel-macOS binary,
+so Intel Macs are not supported. On 0.x, npm's caret stops below the next minor,
+so `^0.4.1` takes 0.4.x releases only.
 
 ## Quick start
 
@@ -53,14 +55,16 @@ main();
 | `predictPage(imagePath)` | `Array<{ text, bbox }>`, one entry per detected line |
 | `predictLine(imageSource)` | `string`, for a crop of one line |
 | `read_image` / `read_images` | `string` / `string[]` |
-| `read_pdf` / `read_pdfs` | `string[]` per PDF, one per page |
-| `read_image_with_accuracy(path, groundTruth)` | `{ text, accuracy }`, accuracy as a percentage |
+| `read_pdf` / `read_pdfs` | `string[]`, one per page / `string[][]` |
+| `read_image_with_accuracy(path, groundTruth)` | `{ text, accuracy }`: `100 × (1 − edit distance ÷ length of the longer string)`, to two decimals; 0 if either string is empty |
 
-The `read_*` helpers also take `modelPath` and `charsetPath` after their first
-argument.
+Every method and helper except the constructor returns a Promise. The `read_*`
+helpers also take `modelPath` and `charsetPath` as trailing arguments: after the
+path or paths, or after `groundTruth` for `read_image_with_accuracy`.
 
-`init()` throws `ModelContractError` when the model's class count or input
-height disagrees with the charset. A mismatched pair would still run and still
+`init()` throws `ModelContractError` when the model's class count is not the
+charset's length plus one (277 for the 276-character charset; CTC reserves index
+0 for the blank) or its input height is not 160. A mismatched pair would still run and still
 return text; it would just be the wrong text.
 
 ```javascript
@@ -107,14 +111,15 @@ sudo apt-get install poppler-utils   # Debian, Ubuntu
 On Windows: `scoop install poppler`, `choco install poppler`,
 `conda install -c conda-forge poppler`, or the prebuilt binaries from
 [oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. Confirm with `pdfinfo -v` in a new shell.
+with `Library\bin` added to `PATH`. Confirm with `pdftoppm -v` in a new shell;
+that is the check `read_pdf` runs.
 
 ## Limitations
 
 Line segmentation binarises with a flat global threshold at 128, where the
 Python binding thresholds adaptively, and a line too wide for the model is
-squeezed rather than cut into tiles. Page output therefore differs from the
-other bindings; the
+squeezed rather than cut into tiles. Python differs on both, and page output
+differs between bindings; the
 [root README](https://github.com/MonDevHub/monocr-onnx#limitations) has the
 measurement. No accuracy figure is claimed here; see the
 [model card](https://huggingface.co/janakhpon/monocr).
