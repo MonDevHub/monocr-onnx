@@ -96,15 +96,7 @@ jobs:
       # it, dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's
       # network postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
-        # ff378ebe is the ANNOTATED TAG OBJECT for v6.0.10, not the commit it peels
-        # to (0977fd99, which the sibling monorepo pins for the same version). Both
-        # forms are immutable — a tag object's SHA hashes its name, target and
-        # message, so it cannot be repointed — but only the commit form resolves
-        # through `GET /repos/pnpm/action-setup/commits/<sha>`, which answers 422 on
-        # a tag object. That makes this pin read as fabricated to anyone verifying
-        # it that way, or as disagreeing with the monorepo. `git ls-remote --tags`
-        # shows both: refs/tags/v6.0.10 and refs/tags/v6.0.10^{}.
-        uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
           # bindings and the JS one lives in js/. Without this, action-setup
