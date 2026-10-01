@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # No `registry-url:` here, deliberately. It makes setup-node write an
       # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
@@ -63,7 +65,16 @@ jobs:
       # and three majors is a real upgrade that changes how distributions are
       # resolved — not something to fold into a security pin, especially under the
       # Node-24 substitution the comment above describes.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      #
+      # zizmor's cache-poisoning audit flags this step, and at this pin it is a
+      # false positive: v4.4.0 restores and saves a cache only when the `cache:`
+      # input is set (src/main.ts, `if (cache && isCacheFeatureAvailable())`),
+      # and it is not set here. The audit's remedy, `package-manager-cache:
+      # false`, is an input v4.4.0 does not have — later majors added it along
+      # with automatic caching. WHEN BUMPING setup-node past v4, add that input
+      # and drop the ignore, or a publish job holding `id-token: write` starts
+      # restoring a cache that other workflow runs in the repository write.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 # zizmor: ignore[cache-poisoning] see above
         with:
           node-version: "24"
 
@@ -74,8 +85,35 @@ jobs:
       # been tested against. Changing the Node floor is not a reason to also
       # change the npm version in the same commit. npm 11 supports
       # ^20.17.0 || >=22.9.0, so it runs on 24 without change.
+      #
+      # An exact version AND its SHA-256, not `npm@11`. This job holds
+      # `id-token: write`, and `npm@11` installed whatever the registry called
+      # the newest 11.x on the day of the release — a version nobody had chosen,
+      # running in the one job that can publish under our name. 11.20.0 was the
+      # newest 11.x when js/v0.4.2 was tagged (published 2026-09-22; 11.21.0
+      # followed on 2026-09-30), so it is what `npm@11` was resolving to, and it
+      # is past the seven-day release-age cooldown.
+      #
+      # zizmor's adhoc-packages audit flags any install outside a lockfile,
+      # because pinning a package does not pin its dependencies. npm is the
+      # exception: all of its dependencies are bundled inside its own tarball
+      # (`bundleDependencies` lists every one of them), so the single file
+      # checked here is the whole install, and nothing else is resolved.
+      #
+      # TO BUMP: read `dist.integrity` from https://registry.npmjs.org/npm/<ver>,
+      # download the tarball, confirm its sha512 matches that value, and record
+      # the tarball's sha256 below.
       - name: Use an npm that supports trusted publishing
-        run: npm install -g npm@11
+        env:
+          NPM_VERSION: 11.20.0
+          NPM_SHA256: d1a92f40e6c407b84c3a00c3cf978a10b24fd42f153c527e2016cef7bb34a483
+        run: | # zizmor: ignore[adhoc-packages] exact version, hash-checked, every dependency bundled in the tarball
+          set -euo pipefail
+          curl -sSfL -o "${RUNNER_TEMP}/npm.tgz" \
+            "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
+          echo "${NPM_SHA256}  ${RUNNER_TEMP}/npm.tgz" | sha256sum -c -
+          npm install -g "${RUNNER_TEMP}/npm.tgz"
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       # Install BEFORE the tests. This step and the one below were the other way
       # round, carrying the comment "No install needed: the suite uses a fake
