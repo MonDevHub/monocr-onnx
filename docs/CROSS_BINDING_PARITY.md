@@ -35,7 +35,39 @@ image.
 > `segSmoothWindow`. See the notes in `go/monocr.go` and
 > `python/monocr_onnx/predictor.py`.
 
-## What was measured
+## Input loading and decode guards — measured 2026-10-01
+
+Unlike the rest of this file, this section is current. It covers how each
+binding turns a file into the pixels it reads, and what its decoder does with
+a non-finite score. It does not re-run the text-agreement comparison below.
+
+| | Python | JS | Go | Rust |
+|---|---|---|---|---|
+| EXIF orientation | Pillow `exif_transpose` | sharp `autoOrient()` | own parser, JPEG APP1 and PNG eXIf | own parser, JPEG APP1 and PNG eXIf |
+| Transparency | composited onto white | `flatten` onto white | composited onto white | composited onto white |
+| NaN or infinite logit | `ModelOutputError` | `ModelOutputError` | `*predictor.OutputError` | `ModelOutputError` |
+
+Before these changes none of the four applied the tag or composited, and all
+four decoded a non-finite score into text without an error.
+
+Measured through each binding's own loading path, on the fixtures in
+`data/fixtures/input/` (`scripts/generate_input_fixtures.py`):
+
+- **All four agree exactly.** Each of the ten orientation fixtures (tags 1-8, a
+  big-endian tag, a PNG eXIf tag) reaches the model as the same input as the
+  upright image, with a maximum difference of 0.000. The transparent fixture
+  reaches it as the same input as its expected composite, also 0.000.
+- **Opaque, untagged input is unchanged.** All four return the same bytes as
+  before for the seven images in `data/images/`, and with the real model the
+  same text for all seven.
+- **One gap remains.** Go and Rust read the tag only from JPEG and PNG. Python
+  and JS also honour it in the other containers their imaging libraries decode,
+  such as TIFF and WebP.
+
+An image the caller has already decoded (a PIL `Image`, a sharp instance, an
+`image.Image`) is composited if transparent but not re-oriented in any of the
+four, because whoever decoded it owns its orientation.
+
 
 All four bindings, on all seven images in `data/images/`, against the revision-pinned
 model `a51be11` (316 classes, H=128) with the 315-character charset they shared at the
