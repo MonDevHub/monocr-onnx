@@ -119,7 +119,7 @@ with each other:
 
 | Binding | Resampler | Family | Matches training |
 |---|---|---|---|
-| Python | PIL `BILINEAR` | bilinear | yes |
+| Python | OpenCV `cv2.INTER_LINEAR` | bilinear | yes |
 | Rust | `FilterType::Triangle` | bilinear | yes |
 | Go | `draw.CatmullRom` | **bicubic** | no |
 | JS | sharp default (`fit: 'fill'`) | **lanczos3** | no |
