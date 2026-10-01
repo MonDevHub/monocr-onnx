@@ -4,11 +4,47 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
-## Unreleased
+## 0.5.0 — 2026-10-01
 
-Three input and decoding fixes, made the same way in all four bindings. On an
-opaque image with no EXIF orientation tag, and a model that returns finite
-scores, every binding returns exactly what it returned before (measured below).
+A minor release: the bindings raise new errors on a broken model output, and
+read EXIF-rotated and transparent images differently, now correctly. The model,
+the charset and the pinned revision are unchanged from 0.4.2. On an opaque image
+with no EXIF orientation tag, and a model that returns finite scores, every
+binding returns exactly what 0.4.2 returned (measured below).
+
+In short:
+
+- **New errors on a broken model output.** Logits holding a NaN or an infinity
+  raise `ModelOutputError` in Python, JavaScript and Rust, and return
+  `*predictor.OutputError` in Go, instead of decoding into a blank or wrong line.
+  Logits that are not `[1, T, C]`, with `C` the charset length plus one, are a
+  contract error in all four. Go's page and PDF calls fail on either rather than
+  returning an empty page, and JavaScript's `read_pdf` rethrows both as
+  themselves.
+- **EXIF orientation is applied** to a file the binding opens itself.
+- **Transparency is composited onto white** before the conversion to grey, so a
+  transparent background no longer reads as black.
+- **Go finds ONNX Runtime by the name its archives ship.** On Linux it asks the
+  loader for `libonnxruntime.so`, so `LD_LIBRARY_PATH` or `ldconfig` now works
+  without `MONOCR_ONNXRUNTIME_PATH`; on macOS it also checks Intel Homebrew's
+  `/usr/local/lib`.
+- **Rust's `read_pdf` works on Windows without `which`.** It probes
+  `pdftoppm -v` instead.
+- **Documentation.** The READMEs are reorganised and corrected, and describe
+  0.5.0; `CONTRIBUTING.md` is new; the Rust crate declares
+  `rust-version = "1.88"`, the floor `ort` 2.0.0-rc.11 already required.
+
+Upgrading:
+
+- A Go setup that renamed or linked the library to `onnxruntime.so` to suit the
+  old default now needs `MONOCR_ONNXRUNTIME_PATH`.
+- A dependency saved as `monocr@^0.4.x` on npm, or `monocr = "0.4"` in
+  `Cargo.toml`, stays on 0.4.x: on 0.x a caret range stops below the next minor.
+  Change it to `^0.5.0` or `"0.5"`.
+- Code that catches decoding failures should expect the new error types above.
+
+The details follow. The three input and decoding fixes are made the same way in
+all four bindings.
 
 - **A NaN or an infinity in the model output is an error, not text.** Greedy
   CTC takes an argmax per timestep, and none of the four argmaxes rejected a
