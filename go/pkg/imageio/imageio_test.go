@@ -236,6 +236,11 @@ func TestTiffOrientationAcceptsShortAndLong(t *testing.T) {
 	if got := tiffOrientation(b); got != 0 {
 		t.Errorf("huge IFD offset: %d, want 0", got)
 	}
+	// An IFD offset inside the header is refused.
+	binary.LittleEndian.PutUint32(b[4:], 2)
+	if got := tiffOrientation(b); got != 0 {
+		t.Errorf("IFD offset inside the header: %d, want 0", got)
+	}
 }
 
 // The walk has to step over fill bytes and an APP1 that is not Exif (XMP is

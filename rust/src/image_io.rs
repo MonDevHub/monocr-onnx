@@ -133,8 +133,9 @@ fn tiff_orientation(t: &[u8]) -> Option<u16> {
         return None;
     }
     let ifd = u32_at(4)? as usize;
-    // Bounded first, so the offsets below cannot overflow a 32-bit usize.
-    if ifd > t.len() {
+    // Bounded first, so the offsets below cannot overflow a 32-bit usize. An
+    // offset inside the 8-byte header is refused, as the Go parser does.
+    if ifd < 8 || ifd > t.len() {
         return None;
     }
     let count = u16_at(ifd)? as usize;
@@ -345,6 +346,10 @@ mod tests {
         // An IFD offset near 2^32 must be refused, not wrapped.
         let mut b = tiff(false, 3, 6);
         b[4..8].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+        assert_eq!(tiff_orientation(&b), None);
+        // An IFD offset inside the header is refused.
+        let mut b = tiff(false, 3, 6);
+        b[4..8].copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(tiff_orientation(&b), None);
     }
 
