@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const MonOCR = require('../src/monocr');
-const { ModelContractError } = require('../src/monocr');
+const { ModelContractError, ModelOutputError } = require('../src/monocr');
 const { PINNED, fakeSession, StubOCR, BUNDLED_CHARSET } = require('./helpers');
 
 /**
@@ -92,4 +92,33 @@ test('MonOCR preprocesses to the height the pinned model expects', () => {
     const ocr = new MonOCR();
     assert.equal(ocr.targetHeight, PINNED.inputHeight);
     assert.equal(ocr.targetWidth, 1024);
+});
+
+// A NaN or an infinity in the logits must fail the read, not decode. The argmax
+// compares with `>`, which is false for every NaN, so before this guard a NaN
+// was skipped silently and +Infinity simply won its timestep. On real input the
+// pinned model's scores are finite; this only fires on a numeric failure.
+for (const [name, bad] of [['NaN', NaN], ['+Infinity', Infinity], ['-Infinity', -Infinity]]) {
+    test(`decode refuses a logits tensor holding ${name}`, () => {
+        const ocr = ocrWithCharset(' abc');
+        const logits = logitsFor([2, 0, 3], 5);
+        logits.data[1 * 5 + 2] = bad;
+        assert.throws(() => ocr.decode(logits), (err) => {
+            assert.ok(err instanceof ModelOutputError, `got ${err && err.name}`);
+            assert.match(err.message, /non-finite/);
+            return true;
+        });
+    });
+}
+
+test('finite logits still decode after the non-finite guard', () => {
+    const ocr = ocrWithCharset(' abc');
+    assert.equal(ocr.decode(logitsFor([2, 0, 3], 5)), 'ab');
+});
+
+test('decode refuses a tensor whose data length disagrees with its dims', () => {
+    const ocr = ocrWithCharset(' abc');
+    const logits = logitsFor([2, 3], 5);
+    logits.data = logits.data.subarray(0, 7);
+    assert.throws(() => ocr.decode(logits), ModelContractError);
 });

@@ -94,6 +94,8 @@ try {
 }
 ```
 
+A model that returns NaN or infinite scores throws `ModelOutputError` at decode, rather than turning a numeric failure into a blank or wrong line.
+
 Models are downloaded from a pinned revision of [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), exported as `MODEL_REVISION`, and cached under `~/.monocr/models/<revision>/`. Bumping the revision is a cache miss, not a silent swap.
 
 ## CLI Interface
