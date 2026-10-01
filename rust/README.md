@@ -38,6 +38,9 @@ model contract violation: charset/model mismatch.
   model (/…/monocr.onnx): 225 classes
 ```
 
+A model that returns NaN or infinite scores gets a `ModelOutputError` at decode,
+rather than a numeric failure turned into a blank or wrong line.
+
 Downloads are cached per revision under `~/.monocr/models/<revision>/`, so
 re-pinning is a cache miss rather than a silent reuse of the previous artifact.
 

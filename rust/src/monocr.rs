@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::image_io::load_grey;
 use crate::model_manager::ModelManager;
 use crate::segmenter::{tile_line, LineSegment, LineSegmenter, DEFAULT_DENSITY_THRESHOLD_RATIO};
 use crate::utils::calculate_accuracy;
@@ -150,10 +151,12 @@ pub fn normalize_polarity(image: &GrayImage) -> Cow<'_, GrayImage> {
 /// the pad, the normalisation — belongs to [`MonOcr::preprocess`], per crop.
 /// This mirrors `js/src/monocr.js`'s `normalizePageForSegmentation` and
 /// `go/monocr.go`'s `predictImage`.
+///
+/// [`load_grey`] applies the EXIF orientation and flattens transparency onto
+/// white before polarity is judged: a transparent background would otherwise
+/// read as black, and the probe would invert the page into near-white text.
 fn page_for_segmentation(image_path: &Path) -> Result<GrayImage> {
-    let page = image::open(image_path)
-        .with_context(|| format!("cannot open {}", image_path.display()))?
-        .to_luma8();
+    let page = load_grey(image_path)?;
     Ok(normalize_polarity(&page).into_owned())
 }
 
@@ -185,6 +188,24 @@ impl fmt::Display for ModelContractError {
 }
 
 impl std::error::Error for ModelContractError {}
+
+/// Model scores that cannot be decoded: a NaN or an infinity.
+///
+/// The argmax in the decoder compares with `>`, which is false for every NaN,
+/// so a NaN was skipped silently and a row of them decoded as class 0, the CTC
+/// blank; `+inf` simply won its timestep. A numeric failure in the runtime or
+/// the artifact then read as a blank or wrong line. On real input the pinned
+/// model's scores are finite, so this is only returned on such a failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOutputError(pub String);
+
+impl fmt::Display for ModelOutputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "model output is not decodable: {}", self.0)
+    }
+}
+
+impl std::error::Error for ModelOutputError {}
 
 /// Strip line terminators, and nothing else.
 ///
@@ -1129,9 +1150,7 @@ impl MonOcr {
         image_path: impl AsRef<Path>,
     ) -> Result<LineResult> {
         let image_path = image_path.as_ref();
-        let crop = image::open(image_path)
-            .with_context(|| format!("cannot open {}", image_path.display()))?
-            .to_luma8();
+        let crop = load_grey(image_path)?;
 
         let (w, h) = crop.dimensions();
         if w == 0 || h == 0 {
@@ -1268,7 +1287,11 @@ impl MonOcr {
 /// as [`segment_page`]: the polarity step below is otherwise reachable only
 /// through a loaded ONNX session, and a mutation that deleted it survived the
 /// whole suite.
-fn preprocess_line(image: &GrayImage, target_height: u32, target_width: u32) -> Array4<f32> {
+pub(crate) fn preprocess_line(
+    image: &GrayImage,
+    target_height: u32,
+    target_width: u32,
+) -> Array4<f32> {
     // Per crop, which is what the single-line path needs: `predict_single_line`
     // never reaches the page-level probe in `segment_page`. On a page the probe
     // has already run and this call is a no-op, because it is idempotent.
@@ -1335,6 +1358,15 @@ fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String>
             "output tensor holds {} values, shape {shape:?} needs {}",
             data.len(),
             sequence_length * num_classes
+        ))
+        .into());
+    }
+    let non_finite = data.iter().filter(|v| !v.is_finite()).count();
+    if non_finite > 0 {
+        return Err(ModelOutputError(format!(
+            "{non_finite} non-finite value(s) (NaN or infinity) out of {}; \
+             refusing to decode them into text",
+            data.len()
         ))
         .into());
     }
@@ -1718,6 +1750,65 @@ mod tests {
         decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
         decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
             .expect_err("shape larger than the buffer");
+    }
+
+    /// The page path reads a file the way it is displayed: EXIF orientation
+    /// applied and transparency flattened onto white BEFORE the polarity probe.
+    /// Without the flattening the (0, 0, 0, 0) background reads black, the probe
+    /// inverts the page, and the dark text comes out near-white.
+    #[test]
+    fn the_page_path_reads_oriented_and_transparent_files_as_displayed() {
+        let fixture = |n: &str| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../data/fixtures/input")
+                .join(n)
+        };
+        let page = page_for_segmentation(&fixture("orient-6.jpg")).unwrap();
+        assert_eq!(page.dimensions(), (64, 32));
+
+        let page = page_for_segmentation(&fixture("alpha-text.png")).unwrap();
+        assert_eq!(page.get_pixel(0, 0)[0], 255);
+        let darkest = page.pixels().map(|p| p[0]).min().unwrap();
+        assert!(darkest < 64, "darkest pixel {darkest}: the text was lost");
+    }
+
+    /// A NaN or an infinity in the logits must fail the read, not decode. The
+    /// argmax compares with `>`, false for every NaN, so before this guard a NaN
+    /// was skipped silently and `+inf` simply won its timestep. On real input
+    /// the pinned model's scores are finite; this only fires on a numeric
+    /// failure.
+    #[test]
+    fn decode_refuses_non_finite_logits() {
+        let charset: Vec<char> = "abc".chars().collect();
+        let num_classes = charset.len() + 1;
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let argmax = [1usize, 0, 2];
+            let mut data = vec![0f32; argmax.len() * num_classes];
+            for (t, want) in argmax.iter().enumerate() {
+                data[t * num_classes + want] = 1.0;
+            }
+            data[num_classes + 2] = bad;
+            let err = decode_ctc(&charset, &data, &[1, argmax.len(), num_classes])
+                .expect_err("a non-finite logit must be refused");
+            assert!(
+                err.downcast_ref::<ModelOutputError>().is_some(),
+                "{bad}: got {err}"
+            );
+            assert!(err.to_string().contains("non-finite"), "{err}");
+        }
+    }
+
+    #[test]
+    fn finite_logits_still_decode() {
+        let charset: Vec<char> = "abc".chars().collect();
+        let num_classes = charset.len() + 1;
+        let argmax = [1usize, 1, 0, 1, 2, 3];
+        let mut data = vec![0f32; argmax.len() * num_classes];
+        for (t, want) in argmax.iter().enumerate() {
+            data[t * num_classes + want] = 1.0;
+        }
+        let text = decode_ctc(&charset, &data, &[1, argmax.len(), num_classes]).unwrap();
+        assert_eq!(text, "aabc");
     }
 
     /// A tiled line must report the box the text actually came from: the tiles

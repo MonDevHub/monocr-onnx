@@ -524,9 +524,11 @@ impl LineSegmenter {
     /// [`crate::normalize_polarity`] is that step and `MonOcr::predict_page`
     /// runs it. This method does not, because it is also the entry point for a
     /// caller who has already corrected polarity.
+    ///
+    /// The file is read the way it is displayed: its EXIF orientation applied
+    /// and any transparency composited onto white, as `MonOcr` reads it.
     pub fn segment(&self, image_path: impl AsRef<Path>) -> Result<Vec<LineSegment>> {
-        let img = image::open(image_path.as_ref())?;
-        self.segment_image(&img.to_luma8())
+        self.segment_image(&crate::image_io::load_grey(image_path.as_ref())?)
     }
 
     /// Segment an image that is already decoded and grayscale.
