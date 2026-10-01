@@ -6,6 +6,8 @@ import (
 	"image/draw"
 	"math"
 	"sort"
+
+	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 )
 
 type LineSegmenter struct {
@@ -421,6 +423,11 @@ func mergeRuns(runs [][2]int, hist []int, maxGap, minLine int) [][2]int {
 }
 
 func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
+	// Composite any transparency onto white before reading luminance: a
+	// transparent background stored as (0, 0, 0, 0) otherwise reads as black,
+	// which the `< 128` threshold below calls ink. A no-op on an opaque image.
+	img = imageio.FlattenOnWhite(img)
+
 	// Convert to Grayscale if needed (conceptually, we just need luminance)
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()

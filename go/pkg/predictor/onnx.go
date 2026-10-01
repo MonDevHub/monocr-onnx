@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 
+	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 	"github.com/yalue/onnxruntime_go"
 	"golang.org/x/image/draw"
 )
@@ -41,6 +42,20 @@ type ContractError struct {
 }
 
 func (e *ContractError) Error() string { return "model contract violation: " + e.Msg }
+
+// OutputError reports model scores that cannot be decoded: a NaN or an
+// infinity.
+//
+// The argmax in decode compares with `>`, which is false for every NaN, so a
+// NaN was skipped silently and a row of them decoded as class 0, the CTC blank;
+// +Inf simply won its timestep. A numeric failure in the runtime or the
+// artifact then read as a blank or wrong line. On real input the pinned model's
+// scores are finite, so this is only returned on such a failure.
+type OutputError struct {
+	Msg string
+}
+
+func (e *OutputError) Error() string { return "model output is not decodable: " + e.Msg }
 
 type Predictor struct {
 	session *onnxruntime_go.DynamicAdvancedSession
@@ -441,7 +456,7 @@ func (p *Predictor) preprocess(img image.Image) ([]float32, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("cannot preprocess an empty image")
 	}
 
-	img = NormalizePolarity(img)
+	img = NormalizePolarity(imageio.FlattenOnWhite(img))
 
 	targetHeight := p.targetHeight
 	targetWidth := p.targetWidth
@@ -497,6 +512,17 @@ func (p *Predictor) decode(preds []float32, shape onnxruntime_go.Shape) (string,
 	if need := seqLen * numClasses; len(preds) < need {
 		return "", &ContractError{Msg: fmt.Sprintf(
 			"output tensor holds %d values, shape %v needs %d", len(preds), shape, need)}
+	}
+	nonFinite := 0
+	for _, v := range preds {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			nonFinite++
+		}
+	}
+	if nonFinite > 0 {
+		return "", &OutputError{Msg: fmt.Sprintf(
+			"%d non-finite value(s) (NaN or infinity) out of %d; refusing to decode them into text",
+			nonFinite, len(preds))}
 	}
 
 	var decoded []rune

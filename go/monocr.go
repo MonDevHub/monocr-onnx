@@ -2,6 +2,7 @@ package monocr
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 	"github.com/MonDevHub/monocr-onnx/go/pkg/model"
 	"github.com/MonDevHub/monocr-onnx/go/pkg/predictor"
 	"github.com/MonDevHub/monocr-onnx/go/pkg/segmenter"
@@ -178,19 +180,31 @@ func ReadImageWithModel(imagePath, modelPath, charset string) (string, error) {
 // ReadPDF("page.pdf") gave different answers for the same page. Segmenting here
 // uses the same LineSegmenter with the same parameters as readPDFWithModel, so
 // the two paths now agree.
-func predictFile(pred *predictor.Predictor, imagePath string) (string, error) {
-	f, err := os.Open(imagePath)
+func predictFile(pred linePredictor, imagePath string) (string, error) {
+	// imageio.Load applies the EXIF Orientation tag, which image.Decode ignores.
+	img, err := imageio.Load(imagePath)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode image: %v", err)
-	}
 
 	return predictImage(pred, img)
+}
+
+// linePredictor is what the page paths need from a Predictor, so they can be
+// tested without an ONNX session.
+type linePredictor interface {
+	Predict(img image.Image) (string, error)
+}
+
+// fatalLineError reports whether a line's error means the MODEL is broken
+// rather than the line. The page paths skip a line that fails and read the
+// rest, which is right for one bad crop and wrong for these: a model that
+// returns NaN or disagrees with the charset fails every line the same way, and
+// skipping them all returned an empty page with no error.
+func fatalLineError(err error) bool {
+	var oe *predictor.OutputError
+	var ce *predictor.ContractError
+	return errors.As(err, &oe) || errors.As(err, &ce)
 }
 
 // predictImage reads every line of an already-decoded image, top to bottom.
@@ -198,7 +212,7 @@ func predictFile(pred *predictor.Predictor, imagePath string) (string, error) {
 // A page the segmenter finds no lines in is read whole rather than returning
 // nothing, because a single cropped line is a legitimate input and produces
 // zero segments. That matches readPDFWithModel.
-func predictImage(pred *predictor.Predictor, img image.Image) (string, error) {
+func predictImage(pred linePredictor, img image.Image) (string, error) {
 	seg := segmenter.NewLineSegmenter(segMinLineHeight, segSmoothWindow)
 
 	// Polarity BEFORE segmentation, and this ordering is the point. The segmenter
@@ -209,7 +223,10 @@ func predictImage(pred *predictor.Predictor, img image.Image) (string, error) {
 	// An audit caught this after the probe was added to preprocess alone. The probe
 	// is idempotent -- once the corners are light a second call is a no-op -- so
 	// both call sites are safe, and the per-crop one still covers ReadLine.
-	img = predictor.NormalizePolarity(img)
+	//
+	// Transparency is flattened onto white first, for the same reason: the
+	// segmenter reads a transparent background as black.
+	img = predictor.NormalizePolarity(imageio.FlattenOnWhite(img))
 
 	lines, err := seg.Segment(img)
 	if err != nil || len(lines) == 0 {
@@ -221,7 +238,11 @@ func predictImage(pred *predictor.Predictor, img image.Image) (string, error) {
 		text, err := pred.Predict(line.Img)
 		if err != nil {
 			// One unreadable line must not lose the rest of the page. The PDF
-			// path has always skipped and continued; this matches it.
+			// path has always skipped and continued; this matches it. A broken
+			// model is not one unreadable line, so that fails the read.
+			if fatalLineError(err) {
+				return "", err
+			}
 			continue
 		}
 		if strings.TrimSpace(text) != "" {
@@ -307,53 +328,65 @@ func readPDFWithModel(pdfPath, modelPath, charset string) ([]string, error) {
 	var results []string
 	for _, file := range files {
 		if strings.HasSuffix(file.Name(), ".png") {
-			imgPath := filepath.Join(tempDir, file.Name())
-
-			// Open image for segmentation
-			f, err := os.Open(imgPath)
-			if err != nil {
-				continue
-			}
-			img, _, err := image.Decode(f)
-			f.Close()
+			img, err := imageio.Load(filepath.Join(tempDir, file.Name()))
 			if err != nil {
 				continue
 			}
 
-			// Segment lines
-			// Polarity BEFORE segmentation, and this ordering is the point. The segmenter
-			// treats dark as ink (segmenter.go's `< 128`), so handed a light-on-dark page it
-			// segments the BACKGROUND and returns the gaps between lines. Inverting each
-			// crop inside preprocess afterwards cannot recover a line never found.
-			//
-			// An audit caught this after the probe was added to preprocess alone. The probe
-			// is idempotent -- once the corners are light a second call is a no-op -- so
-			// both call sites are safe, and the per-crop one still covers ReadLine.
-			img = predictor.NormalizePolarity(img)
-
-			lines, err := seg.Segment(img)
-			if err != nil || len(lines) == 0 {
-				// Fallback to full page prediction (single line assumption)
-				text, err := pred.Predict(img)
-				if err == nil {
-					results = append(results, text)
-				}
-				continue
+			text, ok, err := readPDFPage(pred, seg, img)
+			if err != nil {
+				return nil, err
 			}
-
-			// Predict each line
-			var pageLines []string
-			for _, line := range lines {
-				text, err := pred.Predict(line.Img)
-				if err == nil {
-					pageLines = append(pageLines, text)
-				}
+			if ok {
+				results = append(results, text)
 			}
-			results = append(results, strings.Join(pageLines, "\n"))
 		}
 	}
 
 	return results, nil
+}
+
+// readPDFPage reads one rendered page. ok is false when the page contributes
+// nothing to the result: no lines were found and reading it whole failed.
+//
+// A failed line is skipped, as it always was, unless the failure says the model
+// itself is broken (fatalLineError), which fails the whole read.
+func readPDFPage(pred linePredictor, seg *segmenter.LineSegmenter, img image.Image) (string, bool, error) {
+	// Polarity BEFORE segmentation, and this ordering is the point. The segmenter
+	// treats dark as ink (segmenter.go's `< 128`), so handed a light-on-dark page it
+	// segments the BACKGROUND and returns the gaps between lines. Inverting each
+	// crop inside preprocess afterwards cannot recover a line never found.
+	//
+	// An audit caught this after the probe was added to preprocess alone. The probe
+	// is idempotent -- once the corners are light a second call is a no-op -- so
+	// both call sites are safe, and the per-crop one still covers ReadLine.
+	img = predictor.NormalizePolarity(imageio.FlattenOnWhite(img))
+
+	lines, err := seg.Segment(img)
+	if err != nil || len(lines) == 0 {
+		// Fallback to full page prediction (single line assumption)
+		text, err := pred.Predict(img)
+		if err != nil {
+			if fatalLineError(err) {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		return text, true, nil
+	}
+
+	var pageLines []string
+	for _, line := range lines {
+		text, err := pred.Predict(line.Img)
+		if err != nil {
+			if fatalLineError(err) {
+				return "", false, err
+			}
+			continue
+		}
+		pageLines = append(pageLines, text)
+	}
+	return strings.Join(pageLines, "\n"), true, nil
 }
 
 // Levenshtein distance calculation

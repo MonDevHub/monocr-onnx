@@ -239,3 +239,35 @@ func TestResolveSharedLibraryPathDefersWhenHomebrewIsAbsent(t *testing.T) {
 		t.Errorf("with no Homebrew install the loader should decide, got %q", got)
 	}
 }
+
+// A NaN or an infinity in the logits must fail the read, not decode. The argmax
+// compares with `>`, false for every NaN, so before this guard a NaN was skipped
+// silently and +Inf simply won its timestep. On real input the pinned model's
+// scores are finite; this only fires on a numeric failure.
+func TestDecodeRefusesNonFiniteLogits(t *testing.T) {
+	charset := []rune("abc")
+	p := &Predictor{charset: charset}
+	numClasses := len(charset) + 1
+	for name, bad := range map[string]float32{
+		"NaN":  float32(math.NaN()),
+		"+Inf": float32(math.Inf(1)),
+		"-Inf": float32(math.Inf(-1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			argmax := []int{1, 0, 2}
+			preds := make([]float32, len(argmax)*numClasses)
+			for ts, want := range argmax {
+				preds[ts*numClasses+want] = 1
+			}
+			preds[1*numClasses+2] = bad
+			_, err := p.decode(preds, onnxruntime_go.NewShape(1, int64(len(argmax)), int64(numClasses)))
+			var oe *OutputError
+			if !errors.As(err, &oe) {
+				t.Fatalf("expected an OutputError for %s, got %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "non-finite") {
+				t.Errorf("error should say what was wrong, got: %v", err)
+			}
+		})
+	}
+}
