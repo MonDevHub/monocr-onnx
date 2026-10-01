@@ -22,10 +22,15 @@ scores, every binding returns exactly what it returned before (measured below).
   `ModelOutputError`, Go returns `*predictor.OutputError`, Rust returns
   `ModelOutputError`. Python now also checks the logits are `[1, T, C]` with
   `C` equal to the charset length plus one, and JS that the data length matches
-  the dims; Go and Rust already checked both. Go's image and PDF paths skip a
-  line whose read fails so one bad crop does not lose the page; they still do,
-  but an `OutputError` or `ContractError` means the model is broken rather than
-  the line, so those now fail the read instead of returning an empty page.
+  the dims. Go and Rust already checked the rank and the class axis, but
+  accepted any batch and a buffer longer than the shape, so a `[2, T, C]`
+  tensor decoded its first item; all four now require a batch of 1 and an
+  exact length. Go's image and PDF paths skip a line whose read fails, so one
+  bad crop does not lose the page. They still do, but an `OutputError` or
+  `ContractError` means the model is broken rather than the line, so those now
+  fail the read instead of returning an empty page.
+  JS's `read_pdf`, which wraps any failure in a plain `Error`, rethrows these
+  two as themselves.
 
   No A/B was run for this one, deliberately. It can change output only when the
   model returns a non-finite score, and there failing loudly is strictly better
@@ -39,9 +44,9 @@ scores, every binding returns exactly what it returned before (measured below).
   mirrored or rotated. Python now opens files with Pillow's `exif_transpose`,
   JS with sharp's `autoOrient()`, and Go (`pkg/imageio`) and Rust read the tag
   from a JPEG APP1 segment or a PNG eXIf chunk themselves, without a new
-  dependency. Only a file the binding decodes is oriented; an image the caller
-  already decoded (a PIL `Image`, a sharp instance, an `image.Image`) is left as
-  given.
+  dependency, accepting it stored as SHORT or as LONG. Only a file the binding
+  decodes is oriented; an image the caller already decoded (a PIL `Image`, a
+  sharp instance, an `image.Image`) is left as given.
 
 - **Transparency is composited onto white.** Converting RGBA to grey dropped
   the alpha channel in all four, so a transparent background stored as
@@ -64,24 +69,55 @@ wrongly before. The evidence:
   them through the binding's own path. Before, tags 2-8 differed from the
   upright image by up to 1.8-2.0 in model-input units (the full range is 2.0),
   and the transparent PNG by 1.6-1.8. After, both differ by 0.000 in all four.
-  Each guard was reverted on its own to check that its test fails.
+  Each guard in this entry was reverted on its own and its test failed, except
+  Rust's 32-bit offset bound, which a test on a 64-bit machine cannot reach.
 - **Opaque, untagged input is byte-identical.** Each binding has a test that
   its new loader returns the same bytes as the old path for all seven images in
   `data/images` and the opaque fixtures. With the real model, all four bindings
   return the same text before and after for all seven images.
 - **Real-model check on derived inputs**, not committed: two of those images
   stored with each orientation tag 2-8 as lossless PNG read identically to the
-  upright image in all four bindings (7 of 7 each). Stored as JPEG instead,
-  before the fix they read at CER 0.78-1.00 against the upright image. After,
+  upright image in all four bindings (7 of 7 each). One of them stored as JPEG
+  instead read at CER 0.78-1.00 against the upright image before the fix. After,
   tags 2-4 read identically and tags 5-8 at CER 0.032-0.055: re-encoding a
   transposed image changes its JPEG blocks, so those pixels are not quite the
   upright image's. A transparent copy of two images read 0 characters before
   and exactly the opaque original's text after, in all four.
 
-Not covered: Go and Rust read the tag only from JPEG and PNG. Python and JS
-use their imaging libraries and also honour it in other containers such as
-TIFF and WebP. Go decodes only JPEG and PNG anyway; Rust's `image` crate
-decodes more formats than that.
+Not covered: Go and Rust read the tag only from JPEG and from a PNG eXIf chunk
+placed before the image data. Python and JS use their imaging libraries and
+also honour it in other containers such as TIFF and WebP, and Python in a few
+non-standard PNG placements; `docs/CROSS_BINDING_PARITY.md` lists them. Go
+decodes only JPEG and PNG anyway; Rust's `image` crate decodes more formats
+than that.
+
+Also in this release:
+
+- **The Python transparency check does not need Pillow 10.1.** It first used
+  `Image.has_transparency_data`, which arrived in Pillow 10.1, while
+  `pyproject.toml` allows 9.0. The test is now written out, and the suite passes
+  on Pillow 9.3, 9.4, 9.5, 10.0.1 and 10.1. Pillow 9.0-9.2 publish no wheels for
+  the Python 3.11 floor and were not tried.
+- **Rust: `read_pdf` no longer needs `which`.** It checked for poppler with
+  `which pdftoppm`, which Windows does not have, so PDF reading failed on a
+  Windows machine with poppler on its PATH. It now starts `pdftoppm -v` and
+  reports only a missing executable as "pdftoppm not found: please install
+  poppler-utils", the same message as before. Python goes through `pdf2image`,
+  JS runs `pdftoppm -v` and Go uses `exec.LookPath`, so none of them had this
+  problem.
+- **Go: the ONNX Runtime library is found on Linux without a full path.** With
+  `MONOCR_ONNXRUNTIME_PATH` unset the wrapper loaded its default name,
+  `onnxruntime.so`. The official `onnxruntime-linux-x64-1.24.1.tgz` has only
+  `libonnxruntime.so`, `.so.1` and `.so.1.24.1`, and `dlopen` adds no `lib`
+  prefix, so the README's `LD_LIBRARY_PATH` setup never loaded anything. The SDK
+  now asks for `libonnxruntime.so` on Linux. On macOS it checks the Intel
+  Homebrew path, `/usr/local/lib`, after the Apple-silicon one, then asks for
+  `libonnxruntime.dylib`. On Windows it is unchanged, `onnxruntime.dll`, which
+  is what the release zips ship. Measured on macOS: a bare
+  `libonnxruntime.dylib` loaded through `DYLD_LIBRARY_PATH` and
+  `DYLD_FALLBACK_LIBRARY_PATH`. With neither set, `dlopen` tried only the working
+  directory and `/usr/lib`, not `/usr/local/lib`, which is why the Intel path is
+  checked by name. Loading on Linux has not been run.
 
 ## 0.4.2 — 2026-09-24
 

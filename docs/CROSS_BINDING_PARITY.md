@@ -60,13 +60,30 @@ Measured through each binding's own loading path, on the fixtures in
 - **Opaque, untagged input is unchanged.** All four return the same bytes as
   before for the seven images in `data/images/`, and with the real model the
   same text for all seven.
-- **One gap remains.** Go and Rust read the tag only from JPEG and PNG. Python
-  and JS also honour it in the other containers their imaging libraries decode,
-  such as TIFF and WebP.
+- **Agreement beyond the fixtures**, checked on hand-made files: all four take
+  the first of two Exif segments, ignore a tag value outside 1-8, read a tag
+  stored as LONG as well as SHORT, and composite palette transparency, a tRNS
+  colour key and grey-plus-alpha the same way.
+
+Where they still differ:
+
+- **Containers.** Go and Rust read the tag only from a JPEG APP1 segment and a
+  PNG eXIf chunk placed before the image data, as the PNG extension requires.
+  Pillow is more lenient, and Python alone honours an eXIf chunk after IDAT, an
+  eXIf chunk with a stray `Exif\0\0` prefix, and an ImageMagick "Raw profile
+  type exif" text chunk. Python and JS also read the tag from the other
+  containers their libraries decode, such as TIFF and WebP.
+- **Rounding.** Compositing a partly transparent pixel can differ by one grey
+  level: Python and Rust round the exact value, JS and Go are within one of it.
+- **16-bit greyscale PNG**, unrelated to these changes: Python's conversion to
+  8 bits clips it, so a page with background 60000 and ink 6000 reads as all
+  white in Python and as 233 or 234 on 23 in the other three.
 
 An image the caller has already decoded (a PIL `Image`, a sharp instance, an
 `image.Image`) is composited if transparent but not re-oriented in any of the
 four, because whoever decoded it owns its orientation.
+
+## What was measured
 
 
 All four bindings, on all seven images in `data/images/`, against the revision-pinned
