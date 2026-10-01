@@ -64,12 +64,18 @@ print(text)
 line_text = engine.predict_line("single_line_crop.png")
 ```
 
-Each binding's README has its own quick start and CLI. Runnable examples for
-Python, JavaScript and Go are in [`examples/`](examples/).
+Each binding's README has its own quick start; the Python, JavaScript and Go
+ones also cover a CLI. Runnable examples for Python, JavaScript and Go are in
+[`examples/`](examples/).
 
 ## Supported platforms
 
-All four run on macOS, Linux and Windows, on the CPU.
+All four run on the CPU, and are built for Linux, Windows and Apple-silicon
+macOS. Intel Macs are narrower: `onnxruntime-node` ships no Intel-macOS binary,
+the Rust crate's build has no prebuilt ONNX Runtime to link there, and neither
+Microsoft's 1.24.1 release nor Homebrew has a prebuilt Intel-macOS library for
+Go. Python still installs there, on onnxruntime 1.23.2 (the last release with an
+Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
 
 | Binding | Directory | Package | Requires | Latest |
 | :--- | :--- | :--- | :--- | :--- |
@@ -81,7 +87,7 @@ All four run on macOS, Linux and Windows, on the CPU.
 Go is the only binding that needs ONNX Runtime installed separately; it loads the
 shared library at run time. [`go/README.md`](go/README.md) covers installing it.
 The Python and JavaScript packages bring the runtime with them, and the Rust
-crate links a prebuilt one at build time.
+crate links a prebuilt one at build time on the targets `ort` publishes one for.
 
 "Latest" was read on 2026-10-01 from each registry's own API (registry.npmjs.org,
 pypi.org, crates.io, proxy.golang.org). A tag and a publish are different
@@ -98,7 +104,8 @@ Image (File/Buffer)
                   → ONNX Runtime session → greedy CTC decode → String
 ```
 
-The names are the Python and JavaScript classes. Rust spells the engine
+The names are the Python and JavaScript classes; JavaScript's page method is
+`predictPage`. Rust spells the engine
 `MonOcr`; Go uses `model.Manager`, `segmenter.LineSegmenter` and
 `predictor.Predictor`.
 
@@ -130,11 +137,12 @@ on 1, and JavaScript matches Go on 3. Rust matches Python on 3. The widest gap i
 return 55 and 61.
 
 The cause is two things compounding: four different image-resampling kernels,
-two of them the wrong family, and four line segmenters whose density threshold
-has four live values across the ports under two different formulas. Python
-binarises adaptively where the other three use a flat threshold at 128, and
-Python and Rust cut a line too wide for the model into tiles where JavaScript
-and Go squeeze it.
+two of them the wrong family, and line segmenters that are not configured alike.
+Python binarises adaptively where the other three use a flat threshold at 128;
+Python sets its gap threshold at 0.02 of the profile's maximum with a smoothing
+window of 5, where the other three use 0.05 of the non-zero mean and a window of
+3; and Python and Rust cut a line too wide for the model into tiles where
+JavaScript and Go squeeze it.
 
 **That is agreement, not accuracy.** These images have no ground truth, and four
 implementations reading the same wrong thing would agree perfectly.
