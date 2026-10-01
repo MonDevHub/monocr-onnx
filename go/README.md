@@ -99,10 +99,10 @@ manifest can pin, so the version is stated here and read back at load time.
   this binding.
 
 **Choosing the library.** `MONOCR_ONNXRUNTIME_PATH` set to an absolute path
-overrides every default. Resolution order is that variable, then the Homebrew
-path on Apple-silicon macOS, then the platform loader, which the wrapper asks
-for the bare names `onnxruntime.so` (Linux) and `onnxruntime.dll` (Windows). If
-the variable is set but no file is there, the SDK fails with that message rather
+overrides every default. Resolution order is that variable, then the two
+Homebrew paths on macOS, then the platform loader, asked for the bare name
+`libonnxruntime.so` (Linux), `libonnxruntime.dylib` (macOS) or
+`onnxruntime.dll` (Windows). If the variable is set but no file is there, the SDK fails with that message rather
 than quietly loading something else. An initialisation failure names the library
 and version it loaded and what was required, or, when nothing loaded, where it
 looked.
@@ -117,10 +117,12 @@ MONOCR_ONNXRUNTIME_PATH=/opt/onnxruntime-1.24.1/lib/libonnxruntime.dylib monocr 
 brew install onnxruntime
 ```
 
-On Apple silicon this installs `/opt/homebrew/lib/libonnxruntime.dylib`, which
-the SDK finds on its own. It is the only platform with a built-in default.
-Homebrew on an Intel Mac has no bottle, so it builds ONNX Runtime from source,
-and installs under `/usr/local/lib`, which is not a default, so set `MONOCR_ONNXRUNTIME_PATH` to the library there.
+On Apple silicon this installs `/opt/homebrew/lib/libonnxruntime.dylib`.
+Homebrew on an Intel Mac has no bottle, so it builds ONNX Runtime from source and
+installs `/usr/local/lib/libonnxruntime.dylib`. The SDK checks both paths. With
+neither present it asks the loader for `libonnxruntime.dylib`, which finds a copy
+on `DYLD_LIBRARY_PATH`. The loader does not search `/usr/local/lib` for a bare
+name, which is why that path is checked explicitly.
 
 **Linux**
 
@@ -130,10 +132,12 @@ tar xzf onnxruntime-linux-x64-1.24.1.tgz
 export MONOCR_ONNXRUNTIME_PATH="$PWD/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so"
 ```
 
-Set the variable. `LD_LIBRARY_PATH` or `ldconfig` alone does not work in 0.4.2:
-the platform loader is asked for `onnxruntime.so`, and ONNX Runtime packages
-ship `libonnxruntime.so`. Distribution packages work the same way; check the
-version is at least 1.18.0.
+With `MONOCR_ONNXRUNTIME_PATH` unset the SDK asks the loader for
+`libonnxruntime.so`, so instead of the variable you can put the archive's `lib`
+directory on `LD_LIBRARY_PATH` or register it with `ldconfig`. Distribution
+packages work too where they exist; check the version is at least 1.18.0. A
+package that ships only `libonnxruntime.so.1` (the unversioned link is often in a
+`-dev` package) needs the variable pointed at that file.
 
 **Windows**
 
@@ -144,11 +148,12 @@ Download `onnxruntime-win-x64-<version>.zip` from the same releases page
 $env:MONOCR_ONNXRUNTIME_PATH = "C:\onnxruntime\lib\onnxruntime.dll"
 ```
 
-Copying `onnxruntime.dll` next to your `.exe` also works, because the Windows
-loader searches the application's directory first. Adding its `lib` directory to
-`PATH` is the weakest option: the loader searches `System32` before `PATH`, and
-some Windows installs carry an older `onnxruntime.dll` there that would be
-loaded instead.
+With the variable unset the wrapper asks the loader for `onnxruntime.dll`, the
+name the release zip ships. So copying `onnxruntime.dll` next to your `.exe` also
+works, because the Windows loader searches the application's directory first.
+Adding its `lib` directory to `PATH` is the weakest option: the loader searches
+`System32` before `PATH`, and some Windows installs carry an older
+`onnxruntime.dll` there that would be loaded instead.
 
 ## PDFs need poppler
 

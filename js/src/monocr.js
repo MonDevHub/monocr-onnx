@@ -121,6 +121,46 @@ function assertModelContract(session, charset, targetHeight, modelPath) {
     // the real dims of every output tensor, which are always concrete.
 }
 
+/**
+ * Raised when the model's scores cannot be decoded: a NaN or an infinity.
+ *
+ * The argmax below compares with `>`, and every comparison with NaN is false,
+ * so a NaN is never picked and never reported: a row of NaN decodes as class 0,
+ * the CTC blank, and the line comes back empty or short. A numeric failure in
+ * the runtime or the artifact then looks like a blank line. On real input the
+ * pinned model's scores are finite, so this only ever fires on such a failure.
+ */
+class ModelOutputError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ModelOutputError';
+    }
+}
+
+/**
+ * Open an image source the right way up.
+ *
+ * A path or a Buffer is decoded with its EXIF Orientation tag applied, so a
+ * phone photo stored sideways is read as it is displayed; sharp returns the
+ * stored pixels unless asked. A sharp instance the caller built is returned as
+ * given -- whoever built the pipeline owns its orientation, and the segmenter's
+ * crops come from an already-upright page.
+ *
+ * The other three bindings make the same split.
+ */
+function openImage(source) {
+    if (source && typeof source.metadata === 'function') return source;
+    return imaging()(source).autoOrient();
+}
+
+// White, for compositing a transparent image before it is converted to grey.
+// `.grayscale()` drops the alpha channel, so a transparent background stored as
+// (0, 0, 0, 0) -- the common encoding -- became black and dark text on it
+// vanished. The web and mobile apps flatten onto white before reading.
+// `flatten` is a no-op on an image with no alpha channel, and on an opaque one
+// it returns the colour unchanged (pinned in test/image-loading.test.js).
+const FLATTEN_ONTO_WHITE = { background: '#ffffff' };
+
 // Polarity. The model is trained on dark text on a light background and this
 // binding never checked which it was given.
 //
@@ -197,7 +237,8 @@ function normalizePolarity(gray, width, height) {
  * the pad, the normalisation — belongs to `preprocess`, per crop.
  */
 async function normalizePageForSegmentation(imagePath) {
-    const { data, info } = await imaging()(imagePath)
+    const { data, info } = await openImage(imagePath)
+        .flatten(FLATTEN_ONTO_WHITE)
         .grayscale()
         .raw()
         .toBuffer({ resolveWithObject: true });
@@ -299,12 +340,7 @@ class MonOCR {
      * is not one edit; grep the file for the old digit before claiming it.
      */
     async preprocess(imageSource) {
-        let sharpImg;
-        if (typeof imageSource.metadata === 'function') {
-            sharpImg = imageSource;
-        } else {
-            sharpImg = imaging()(imageSource);
-        }
+        const sharpImg = openImage(imageSource);
         // Dimensions come from the DECODED buffer, not from `metadata()`.
         //
         // `metadata()` reads the input header and, as sharp's own docs put it,
@@ -325,6 +361,7 @@ class MonOCR {
         // Materialising the grayscale raw buffer first costs one decode and
         // reports the true post-`extract` size in `info`.
         const { data: grayData, info } = await sharpImg
+            .flatten(FLATTEN_ONTO_WHITE)
             .grayscale()
             .raw()
             .toBuffer({ resolveWithObject: true });
@@ -433,6 +470,23 @@ class MonOCR {
                 `(+ 1 CTC blank = ${idx2char.length}).`
             );
         }
+        const expectedValues = dims.reduce((a, b) => a * b, 1);
+        if (dims.length !== 3 || dims[0] !== 1 || data.length !== expectedValues) {
+            throw new ModelContractError(
+                `Expected a [1, sequence, ${numClasses}] logits tensor, got dims ` +
+                `[${dims.join(', ')}] holding ${data.length} values.`
+            );
+        }
+        let nonFinite = 0;
+        for (let i = 0; i < data.length; i++) {
+            if (!Number.isFinite(data[i])) nonFinite++;
+        }
+        if (nonFinite > 0) {
+            throw new ModelOutputError(
+                `Model output holds ${nonFinite} non-finite value(s) (NaN or infinity) ` +
+                `out of ${data.length}; refusing to decode it into text.`
+            );
+        }
 
         let decodedText = "";
         let prevIdx = -1;
@@ -528,6 +582,8 @@ class MonOCR {
 
 module.exports = MonOCR;
 module.exports.ModelContractError = ModelContractError;
+module.exports.ModelOutputError = ModelOutputError;
+module.exports.openImage = openImage;
 // Exported for tests: the probe is the load-bearing half of preprocess.
 module.exports.normalizePolarity = normalizePolarity;
 module.exports.backgroundIsDark = backgroundIsDark;

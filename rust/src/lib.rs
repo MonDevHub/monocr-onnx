@@ -45,6 +45,7 @@
 use anyhow::Result;
 use std::path::Path;
 
+mod image_io;
 pub mod model_manager;
 mod monocr;
 pub mod segmenter;
@@ -52,8 +53,8 @@ mod utils;
 
 pub use model_manager::ModelManager;
 pub use monocr::{
-    normalize_charset, normalize_polarity, page_text, BBox, LineResult, ModelContractError, MonOcr,
-    MonOcrBuilder, DEFAULT_INPUT_WIDTH, EXPECTED_INPUT_HEIGHT,
+    normalize_charset, normalize_polarity, page_text, BBox, LineResult, ModelContractError,
+    ModelOutputError, MonOcr, MonOcrBuilder, DEFAULT_INPUT_WIDTH, EXPECTED_INPUT_HEIGHT,
 };
 pub use segmenter::{
     cut_column, tile_line, CUT_INK_THRESHOLD, CUT_SEARCH_FRACTION, DEFAULT_DENSITY_THRESHOLD_RATIO,

@@ -102,7 +102,9 @@ model contract violation: charset/model mismatch.
 ```
 
 The error arrives inside `anyhow::Error`; match it with
-`err.downcast_ref::<monocr_onnx::ModelContractError>()`.
+`err.downcast_ref::<monocr_onnx::ModelContractError>()`. A model that returns
+NaN or infinite scores gets a `ModelOutputError` at decode, matched the same way,
+rather than a numeric failure turned into a blank or wrong line.
 
 ## PDFs need poppler
 

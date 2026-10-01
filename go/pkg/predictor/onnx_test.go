@@ -135,6 +135,16 @@ func TestDecodeRejectsUnexpectedShapes(t *testing.T) {
 	if _, err := p.decode(preds, onnxruntime_go.NewShape(1, 16, pinnedClasses)); err == nil {
 		t.Error("a shape larger than the buffer must be refused")
 	}
+	// Shape promises fewer values than the buffer holds.
+	if _, err := p.decode(preds, onnxruntime_go.NewShape(1, 4, pinnedClasses)); err == nil {
+		t.Error("a shape smaller than the buffer must be refused")
+	}
+	// A batch of two used to decode the first item and drop the second. The
+	// buffer holds both items, so only the batch check can refuse it.
+	_, err := p.decode(preds, onnxruntime_go.NewShape(2, 4, pinnedClasses))
+	if err == nil || !strings.Contains(err.Error(), "batch of 1") {
+		t.Errorf("a batch other than 1 must be refused, got %v", err)
+	}
 }
 
 // CTC: index 0 is blank, repeats collapse, and index n maps to charset[n-1].
@@ -218,24 +228,77 @@ func TestResolveSharedLibraryPathFallsBackToHomebrewOnDarwin(t *testing.T) {
 	}
 }
 
-// Empty means "say nothing, let the platform loader search" — which is how
-// Linux finds the library via LD_LIBRARY_PATH.
-func TestResolveSharedLibraryPathDefersToTheLoader(t *testing.T) {
-	got, err := resolveSharedLibraryPath("linux", envReturning(nil), existsAmong(homebrewLibPath))
-	if err != nil {
-		t.Fatalf("resolveSharedLibraryPath: %v", err)
+// With no override and no install at a known path, each platform gets the name
+// its loader can find. Linux and macOS used to get "", which the wrapper turned
+// into "onnxruntime.so" -- a name no official archive ships -- so the
+// documented LD_LIBRARY_PATH setup loaded nothing.
+func TestResolveSharedLibraryPathPerPlatform(t *testing.T) {
+	cases := []struct {
+		goos      string
+		installed []string
+		want      string
+	}{
+		{"linux", nil, "libonnxruntime.so"},
+		{"linux", []string{homebrewLibPath}, "libonnxruntime.so"},
+		{"freebsd", nil, "libonnxruntime.so"},
+		{"darwin", []string{homebrewLibPath, intelHomebrewLibPath}, homebrewLibPath},
+		{"darwin", []string{intelHomebrewLibPath}, intelHomebrewLibPath},
+		{"darwin", nil, "libonnxruntime.dylib"},
+		// The wrapper's Windows default, onnxruntime.dll, is the name the
+		// release zips ship, so Windows still defers to it.
+		{"windows", nil, ""},
 	}
-	if got != "" {
-		t.Errorf("on linux with no override the loader should decide, got %q", got)
+	for _, c := range cases {
+		got, err := resolveSharedLibraryPath(c.goos, envReturning(nil), existsAmong(c.installed...))
+		if err != nil {
+			t.Fatalf("%s %v: %v", c.goos, c.installed, err)
+		}
+		if got != c.want {
+			t.Errorf("%s with %v installed: got %q, want %q", c.goos, c.installed, got, c.want)
+		}
 	}
 }
 
-func TestResolveSharedLibraryPathDefersWhenHomebrewIsAbsent(t *testing.T) {
-	got, err := resolveSharedLibraryPath("darwin", envReturning(nil), existsAmong())
-	if err != nil {
-		t.Fatalf("resolveSharedLibraryPath: %v", err)
+func TestTheEnvironmentStillWinsOnEveryPlatform(t *testing.T) {
+	const custom = "/opt/ort/lib/libonnxruntime.so.1.24.1"
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		got, err := resolveSharedLibraryPath(goos,
+			envReturning(map[string]string{SharedLibraryPathEnv: custom}),
+			existsAmong(custom, homebrewLibPath))
+		if err != nil || got != custom {
+			t.Errorf("%s: got %q, %v; want %q", goos, got, err, custom)
+		}
 	}
-	if got != "" {
-		t.Errorf("with no Homebrew install the loader should decide, got %q", got)
+}
+
+// A NaN or an infinity in the logits must fail the read, not decode. The argmax
+// compares with `>`, false for every NaN, so before this guard a NaN was skipped
+// silently and +Inf simply won its timestep. On real input the pinned model's
+// scores are finite; this only fires on a numeric failure.
+func TestDecodeRefusesNonFiniteLogits(t *testing.T) {
+	charset := []rune("abc")
+	p := &Predictor{charset: charset}
+	numClasses := len(charset) + 1
+	for name, bad := range map[string]float32{
+		"NaN":  float32(math.NaN()),
+		"+Inf": float32(math.Inf(1)),
+		"-Inf": float32(math.Inf(-1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			argmax := []int{1, 0, 2}
+			preds := make([]float32, len(argmax)*numClasses)
+			for ts, want := range argmax {
+				preds[ts*numClasses+want] = 1
+			}
+			preds[1*numClasses+2] = bad
+			_, err := p.decode(preds, onnxruntime_go.NewShape(1, int64(len(argmax)), int64(numClasses)))
+			var oe *OutputError
+			if !errors.As(err, &oe) {
+				t.Fatalf("expected an OutputError for %s, got %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "non-finite") {
+				t.Errorf("error should say what was wrong, got: %v", err)
+			}
+		})
 	}
 }
