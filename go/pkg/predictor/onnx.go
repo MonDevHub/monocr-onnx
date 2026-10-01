@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 	"github.com/yalue/onnxruntime_go"
@@ -131,6 +132,34 @@ const SharedLibraryPathEnv = "MONOCR_ONNXRUNTIME_PATH"
 // fallback on darwin when the environment variable is unset.
 const homebrewLibPath = "/opt/homebrew/lib/libonnxruntime.dylib"
 
+// intelHomebrewLibPath is where Homebrew installs it on an Intel Mac. It is
+// checked by path because the loader does not search /usr/local/lib for a bare
+// name: measured on macOS with a binary built by Go 1.26, dlopen of a bare name
+// tried the working directory and /usr/lib and nothing else.
+const intelHomebrewLibPath = "/usr/local/lib/libonnxruntime.dylib"
+
+// bareLibraryName is the file name handed to the platform loader when no path
+// applies, so it searches LD_LIBRARY_PATH (or DYLD_LIBRARY_PATH) and the
+// system directories for it.
+//
+// Saying nothing is not an option on Linux or macOS. The wrapper's own default
+// there is "onnxruntime.so", and no official ONNX Runtime archive ships that
+// name: onnxruntime-linux-x64-1.24.1.tgz has lib/libonnxruntime.so (a link to
+// .so.1, a link to .so.1.24.1), and dlopen does not add a "lib" prefix. So the
+// documented LD_LIBRARY_PATH setup never loaded anything. On Windows the
+// wrapper's default, onnxruntime.dll, is what the release zips ship, so ""
+// still defers to it.
+func bareLibraryName(goos string) string {
+	switch goos {
+	case "windows":
+		return ""
+	case "darwin":
+		return "libonnxruntime.dylib"
+	default:
+		return "libonnxruntime.so"
+	}
+}
+
 // loadedVersion is the version string of the ONNX Runtime that initEnvironment
 // actually loaded, recorded once so errors and reports can name it. Empty until
 // initialisation has been attempted.
@@ -144,10 +173,11 @@ var loadedVersion string
 // of a result — it identifies the runtime that produced it.
 func RuntimeVersion() string { return loadedVersion }
 
-// resolveSharedLibraryPath picks the shared library to hand to the wrapper.
-// It returns "" to mean "say nothing and let the platform loader decide".
+// resolveSharedLibraryPath picks the shared library to hand to the wrapper: a
+// path, a bare name for the platform loader to search for (bareLibraryName),
+// or "" on Windows to keep the wrapper's own default.
 //
-// Precedence is explicit request, then platform default, then the loader. An
+// Precedence is explicit request, then a known install path, then the loader. An
 // explicit request that does not exist is an error rather than a silent
 // fallthrough: someone who set the variable is choosing a runtime, and quietly
 // loading a different one is the failure this whole change exists to prevent.
@@ -158,10 +188,14 @@ func resolveSharedLibraryPath(goos string, getenv func(string) string, exists fu
 		}
 		return p, nil
 	}
-	if goos == "darwin" && exists(homebrewLibPath) {
-		return homebrewLibPath, nil
+	if goos == "darwin" {
+		for _, p := range []string{homebrewLibPath, intelHomebrewLibPath} {
+			if exists(p) {
+				return p, nil
+			}
+		}
 	}
-	return "", nil
+	return bareLibraryName(goos), nil
 }
 
 func fileExists(path string) bool {
@@ -224,8 +258,11 @@ func InitRuntime() error { return initEnvironment() }
 
 // describeSource names where the runtime was loaded from, for error messages.
 func describeSource(libPath string) string {
-	if libPath == "" {
-		return "the system library path"
+	switch {
+	case libPath == "":
+		return "the wrapper's default name, searched on the system library path"
+	case !strings.ContainsAny(libPath, `/\`):
+		return libPath + ", searched on the system library path"
 	}
 	return libPath
 }

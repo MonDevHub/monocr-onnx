@@ -218,25 +218,46 @@ func TestResolveSharedLibraryPathFallsBackToHomebrewOnDarwin(t *testing.T) {
 	}
 }
 
-// Empty means "say nothing, let the platform loader search" — which is how
-// Linux finds the library via LD_LIBRARY_PATH.
-func TestResolveSharedLibraryPathDefersToTheLoader(t *testing.T) {
-	got, err := resolveSharedLibraryPath("linux", envReturning(nil), existsAmong(homebrewLibPath))
-	if err != nil {
-		t.Fatalf("resolveSharedLibraryPath: %v", err)
+// With no override and no install at a known path, each platform gets the name
+// its loader can find. Linux and macOS used to get "", which the wrapper turned
+// into "onnxruntime.so" -- a name no official archive ships -- so the
+// documented LD_LIBRARY_PATH setup loaded nothing.
+func TestResolveSharedLibraryPathPerPlatform(t *testing.T) {
+	cases := []struct {
+		goos      string
+		installed []string
+		want      string
+	}{
+		{"linux", nil, "libonnxruntime.so"},
+		{"linux", []string{homebrewLibPath}, "libonnxruntime.so"},
+		{"freebsd", nil, "libonnxruntime.so"},
+		{"darwin", []string{homebrewLibPath, intelHomebrewLibPath}, homebrewLibPath},
+		{"darwin", []string{intelHomebrewLibPath}, intelHomebrewLibPath},
+		{"darwin", nil, "libonnxruntime.dylib"},
+		// The wrapper's Windows default, onnxruntime.dll, is the name the
+		// release zips ship, so Windows still defers to it.
+		{"windows", nil, ""},
 	}
-	if got != "" {
-		t.Errorf("on linux with no override the loader should decide, got %q", got)
+	for _, c := range cases {
+		got, err := resolveSharedLibraryPath(c.goos, envReturning(nil), existsAmong(c.installed...))
+		if err != nil {
+			t.Fatalf("%s %v: %v", c.goos, c.installed, err)
+		}
+		if got != c.want {
+			t.Errorf("%s with %v installed: got %q, want %q", c.goos, c.installed, got, c.want)
+		}
 	}
 }
 
-func TestResolveSharedLibraryPathDefersWhenHomebrewIsAbsent(t *testing.T) {
-	got, err := resolveSharedLibraryPath("darwin", envReturning(nil), existsAmong())
-	if err != nil {
-		t.Fatalf("resolveSharedLibraryPath: %v", err)
-	}
-	if got != "" {
-		t.Errorf("with no Homebrew install the loader should decide, got %q", got)
+func TestTheEnvironmentStillWinsOnEveryPlatform(t *testing.T) {
+	const custom = "/opt/ort/lib/libonnxruntime.so.1.24.1"
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		got, err := resolveSharedLibraryPath(goos,
+			envReturning(map[string]string{SharedLibraryPathEnv: custom}),
+			existsAmong(custom, homebrewLibPath))
+		if err != nil || got != custom {
+			t.Errorf("%s: got %q, %v; want %q", goos, got, err, custom)
+		}
 	}
 }
 

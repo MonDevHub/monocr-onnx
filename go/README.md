@@ -115,8 +115,11 @@ and needs nothing installed.
 brew install onnxruntime
 ```
 
-Installs `/opt/homebrew/lib/libonnxruntime.dylib` on Apple silicon, which the SDK
-finds on its own — this is the only platform with a built-in default.
+Installs `/opt/homebrew/lib/libonnxruntime.dylib` on Apple silicon, or
+`/usr/local/lib/libonnxruntime.dylib` on Intel, and the SDK checks both paths. With
+neither present it asks the loader for `libonnxruntime.dylib`, which finds a copy
+on `DYLD_LIBRARY_PATH`. It does not search `/usr/local/lib` for a bare name, which
+is why that path is checked explicitly.
 
 **Linux**
 
@@ -126,11 +129,15 @@ tar xzf onnxruntime-linux-x64-1.24.1.tgz
 export LD_LIBRARY_PATH="$PWD/onnxruntime-linux-x64-1.24.1/lib:$LD_LIBRARY_PATH"
 ```
 
-There is no default path on Linux: with `MONOCR_ONNXRUNTIME_PATH` unset the SDK
-says nothing and lets the platform loader decide, so `libonnxruntime.so` has to
-be somewhere the loader already looks — `LD_LIBRARY_PATH`, or a directory
-registered with `ldconfig`. Distribution packages work too where they exist;
-check the version against the table above, because the minimum is 1.18.0.
+With `MONOCR_ONNXRUNTIME_PATH` unset the SDK asks the loader for
+`libonnxruntime.so`, so it has to be somewhere the loader already looks —
+`LD_LIBRARY_PATH`, or a directory registered with `ldconfig`. Until this release
+it asked for `onnxruntime.so`, the wrapper's default, which the release archive
+does not contain, so this setup only worked with the variable set. Distribution
+packages work too where they exist; check the version against the table above,
+because the minimum is 1.18.0. A package that ships only `libonnxruntime.so.1`
+(the unversioned link is often in a `-dev` package) needs the variable pointed
+at that file.
 
 **Windows**
 
@@ -143,7 +150,8 @@ directory to `PATH` — the Windows loader searches `PATH`, not
 $env:MONOCR_ONNXRUNTIME_PATH = "C:\onnxruntime\lib\onnxruntime.dll"
 ```
 
-As on Linux, there is no built-in default.
+With the variable unset the SDK leaves the name to the wrapper, whose default,
+`onnxruntime.dll`, is the name the release zip ships.
 
 ### Choosing a specific library
 
@@ -154,8 +162,9 @@ MONOCR_ONNXRUNTIME_PATH=/opt/onnxruntime-1.24.1/lib/libonnxruntime.dylib monocr 
 # .so on Linux, onnxruntime.dll on Windows
 ```
 
-Resolution order is: `MONOCR_ONNXRUNTIME_PATH`, then the Homebrew path on macOS,
-then the platform loader. If the variable is set but no file is there, the SDK
+Resolution order is: `MONOCR_ONNXRUNTIME_PATH`, then the two Homebrew paths on
+macOS, then the platform loader (`libonnxruntime.so` on Linux,
+`libonnxruntime.dylib` on macOS, `onnxruntime.dll` on Windows). If the variable is set but no file is there, the SDK
 fails with that message rather than quietly loading something else — the point
 of setting it is to choose, and a silent substitution defeats that.
 
