@@ -1,137 +1,103 @@
-# MonOCR (JavaScript SDK)
+# MonOCR (JavaScript)
 
 [![npm](https://img.shields.io/npm/v/monocr.svg)](https://www.npmjs.com/package/monocr)
 
-The official JavaScript SDK for Mon language OCR, powered by ONNX Runtime. Designed for high-performance server-side and desktop Node.js applications.
+On-device OCR for the Mon language (mnw) in Node.js, running on ONNX Runtime.
+Part of [monocr-onnx](https://github.com/MonDevHub/monocr-onnx), which also has
+Python, Go and Rust bindings.
 
-## Installation
+> [!IMPORTANT]
+> **Upgrade from anything before 0.4.0.** Every earlier npm release returned
+> noise rather than text: preprocessing read a three-channel buffer as if it were
+> one channel. On a typeset page `monocr@0.3.2` returned 168 characters of
+> garbage where 0.4.0 returns 1,178 of Mon.
+
+## Install
 
 ```bash
 npm install monocr@^0.4.1
 ```
 
-## Features
+Requires Node.js 20.9+. Runs on macOS, Linux and Windows on the CPU;
+`onnxruntime-node` and `sharp` ship prebuilt binaries for all three, so no
+compiler is needed. On 0.x npm's caret stops below the next minor, so `^0.4.1`
+takes 0.4.x releases only.
 
-- **Pinned to one network**: the v3.5 recogniser at revision `d3d9d5e`, with 160px input
-  height, 276 characters, 277 CTC classes. No accuracy figure is claimed here; see
-  the [model card](https://huggingface.co/janakhpon/monocr) for the held-out result
-  and its caveats.
-- **Pinned Model**: Weights and charset are fetched from one immutable Hugging Face revision, so two installs of the same version decode with the same network.
-- **Fails Closed**: A model whose class count or input height disagrees with the charset is refused at load rather than decoded into wrong text.
-- **Line segmentation**: horizontal projection profile over a **flat global
-  threshold at 128**, with padding relative to each line's height. Not adaptive —
-  `src/segmenter.js:382`. The Python binding thresholds adaptively; this binding
-  does not. The coverage note at the top of `src/segmenter.js` lists what is
-  tested; the binarisation threshold itself is not.
-
-## Quick Start
+## Quick start
 
 ```javascript
-const { MonOCR } = require("monocr");
+const { MonOCR, read_image, read_pdf } = require("monocr");
 
 async function main() {
+  // One-shot helpers. The first call downloads the pinned model and caches it.
+  console.log(await read_image("page.png"));
+  const pages = await read_pdf("document.pdf"); // one string per page; needs poppler
+
+  // Or keep one engine for many calls.
   const engine = new MonOCR();
   await engine.init();
-
-  // Recognize a full page: one entry per detected line
-  const lines = await engine.predictPage("scanned_text.png");
+  const lines = await engine.predictPage("page.png"); // [{ text, bbox }, ...]
   console.log(lines.map((l) => l.text).join("\n"));
+  console.log(await engine.predictLine("line.png")); // a crop of one line
 }
 
 main();
 ```
 
-Or the one-shot helpers:
+## API
 
-```javascript
-const { read_image, read_pdf } = require("monocr");
+| Call | Returns |
+| :--- | :--- |
+| `new MonOCR(modelPath?, charsetPath?)` | The engine. Omit both to use the pinned model and its charset. |
+| `init()` | Loads the model and checks it against the charset. The predict methods call it for you. |
+| `predictPage(imagePath)` | `Array<{ text, bbox }>`, one entry per detected line |
+| `predictLine(imageSource)` | `string`, for a crop of one line |
+| `read_image` / `read_images` | `string` / `string[]` |
+| `read_pdf` / `read_pdfs` | `string[]` per PDF, one per page |
+| `read_image_with_accuracy(path, groundTruth)` | `{ text, accuracy }`, accuracy as a percentage |
 
-const text = await read_image("scanned_text.png");
-const pages = await read_pdf("document.pdf"); // needs poppler-utils
-```
+The `read_*` helpers also take `modelPath` and `charsetPath` after their first
+argument.
 
-## API Reference
-
-### `new MonOCR(modelPath?, charsetPath?)`
-
-Initialize the OCR engine. Both arguments are positional and optional.
-
-- `modelPath`: path to a local ONNX model. Omit it to download the pinned model on first use.
-- `charsetPath`: path to a local charset file. Omit it to use the charset that shipped with the model.
-
-### `init()` -> `Promise<void>`
-
-Load the model and charset, and verify they describe the same network. Called automatically by the predict methods.
-
-### `predictPage(imagePath)` -> `Promise<Array<{text: string, bbox: object}>>`
-
-Segment an image into lines and recognize each.
-
-### `predictLine(imageSource)` -> `Promise<string>`
-
-Recognize text from a single cropped text line image.
-
-### `read_image` / `read_images` / `read_pdf` / `read_pdfs` / `read_image_with_accuracy`
-
-Convenience wrappers returning plain strings.
-
-## The model contract
-
-The charset, the model's input height and its classifier width are one contract. If they drift apart the model still runs and still returns text — it is just the wrong text, with no error anywhere.
-
-`init()` reads the class count and input height off the loaded session and compares them to the charset. On a mismatch it throws `ModelContractError` instead of decoding:
+`init()` throws `ModelContractError` when the model's class count or input
+height disagrees with the charset. A mismatched pair would still run and still
+return text; it would just be the wrong text.
 
 ```javascript
 const { MonOCR, ModelContractError } = require("monocr");
 
-try {
-  await new MonOCR("./my-model.onnx").init();
-} catch (err) {
-  if (err instanceof ModelContractError) {
-    // This model does not match the bundled charset. Supply the charset it was
-    // trained with, rather than decoding with the wrong vocabulary.
+async function load(modelPath, charsetPath) {
+  try {
+    const engine = new MonOCR(modelPath, charsetPath);
+    await engine.init();
+    return engine;
+  } catch (err) {
+    if (err instanceof ModelContractError) {
+      // Supply the charset this model was trained with.
+    }
+    throw err;
   }
 }
 ```
 
-Models are downloaded from a pinned revision of [`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), exported as `MODEL_REVISION`, and cached under `~/.monocr/models/<revision>/`. Bumping the revision is a cache miss, not a silent swap.
+Models come from revision `MODEL_REVISION` (`d3d9d5e`) of
+[janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
+`~/.monocr/models/<revision>/`, so a new pin is a cache miss, not a silent swap.
 
-## CLI Interface
+## CLI
 
 ```bash
-# Global installation for CLI usage
 npm install -g monocr
-
-# Process an image
 monocr image input.jpg
-
-# Process a PDF
 monocr pdf document.pdf
-
-# Pre-fetch the model into the cache
-monocr download
+monocr batch ./input
+monocr download      # pre-fetch the model
 ```
 
-## Development
+## PDFs need poppler
 
-```bash
-npm install
-npm test     # offline: no model download, no network
-```
-
-## Requirements
-
-- Node.js 18.17+
-- sharp (for image processing)
-- onnxruntime-node
-- poppler-utils, for the PDF entry points only — see Platforms below
-
-## Platforms
-
-Runs on macOS, Linux and Windows. `onnxruntime-node` declares all three, and
-`sharp` ships prebuilt binaries for them, so `npm install` needs no compiler.
-
-Only poppler is manual, and only for `read_pdf` / `read_pdfs`:
+`read_pdf` and `read_pdfs` shell out to poppler's `pdftoppm`. Images need
+nothing extra.
 
 ```bash
 brew install poppler                 # macOS
@@ -143,9 +109,22 @@ On Windows: `scoop install poppler`, `choco install poppler`,
 [oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
 with `Library\bin` added to `PATH`. Confirm with `pdfinfo -v` in a new shell.
 
-## Maintenance
+## Limitations
 
-Maintained by [MonDevHub](https://github.com/MonDevHub).
+Line segmentation binarises with a flat global threshold at 128, where the
+Python binding thresholds adaptively, and a line too wide for the model is
+squeezed rather than cut into tiles. Page output therefore differs from the
+other bindings; the
+[root README](https://github.com/MonDevHub/monocr-onnx#limitations) has the
+measurement. No accuracy figure is claimed here; see the
+[model card](https://huggingface.co/janakhpon/monocr).
+
+## Development
+
+```bash
+npm install
+npm test     # offline: no model download, no network
+```
 
 ## License
 
