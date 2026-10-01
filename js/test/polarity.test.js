@@ -110,7 +110,7 @@ test('predictPage normalises the page before segmenting it', async () => {
     // THE ORDERING. The segmenter treats dark as ink, so a light-on-dark page
     // segments the BACKGROUND and returns the gaps between lines. A probe inside
     // preprocess runs per crop, after segmentation, and cannot recover a line that
-    // was never found. An audit caught that after the probe shipped there alone.
+    // was never found.
     //
     // Behavioural, not structural: an inverted page must segment into the same
     // number of lines as its upright twin.

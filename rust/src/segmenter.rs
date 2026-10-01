@@ -699,8 +699,8 @@ impl LineSegmenter {
     /// For each position, the mean of `[i - half, i + half]` with
     /// `half = smooth_window / 2`, over the rows actually in range. Neither
     /// divergence below is reconciled here: the formula is published behaviour
-    /// for anyone reading the profile, so changing it changes this port's output
-    /// and that is an owner decision.
+    /// for anyone reading the profile, and changing it changes output for this
+    /// binding's users, so it is left as is.
     ///
     /// 1. **Span is `2 * (smooth_window / 2) + 1`, not `smooth_window`.** An EVEN
     ///    window therefore spans one row MORE than asked and is bit-identical to
@@ -1066,7 +1066,7 @@ mod tests {
     /// come back as several tiles covering the full width. If it ever returned
     /// one tile the crop would be squeezed into the model window. Measured cost of
     /// that on this binding: nothing at 3 tiles, 4.1x the error at 4, and 23x at 8
-    /// (`examples/tiling_ab.rs`, and the 2026-08-22 A/B over 201 rendered lines).
+    /// (`examples/tiling_ab.rs`, over 201 rendered lines).
     #[test]
     fn a_wide_crop_is_tiled_not_squeezed() {
         let f = fixture();

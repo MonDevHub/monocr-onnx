@@ -503,8 +503,7 @@ impl MonOcrBuilder {
     /// has to happen on each port before either is trusted, and which was
     /// impossible while the squeeze arm was unreachable.
     ///
-    /// An A/B over 201 rendered lines (2026-08-22) found the answer
-    /// is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
+    /// Measured over 201 rendered lines, the answer is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
     /// 24x worse from 4 tiles up, where it drives CER above 0.9. Tiling is the
     /// safe default because its downside is bounded and squeezing's is not.
     pub fn tile_wide_lines(mut self, tile: bool) -> Self {
@@ -1054,7 +1053,7 @@ impl MonOcr {
     /// A line wider than the model window is tiled by
     /// [`crate::segmenter::tile_line`], not squeezed.
     ///
-    /// Measured on **this** binding, 2026-08-22, over 201 rendered Mon lines by
+    /// Measured on **this** binding over 201 rendered Mon lines by
     /// `examples/tiling_ab.rs`. The answer depends on how wide the line is:
     ///
     /// ```text
@@ -1072,11 +1071,9 @@ impl MonOcr {
     /// argument — the downside is a fraction of a point on already-low rates, and
     /// the upside is not losing the line.
     ///
-    /// Char-level CER here; the 2026-08-22 A/B over 201 rendered lines scores the same
-    /// images by grapheme cluster and finds the same crossover. That report also
-    /// records that these numbers do **not** reproduce the older
-    /// squeezed-0.1434-against-tiled-0.0795 figures quoted elsewhere, whose
-    /// harness was never committed.
+    /// Char-level CER here; scored by grapheme cluster, the same images give the
+    /// same crossover: squeezing wins at 2 tiles, the two are level at 3, and
+    /// tiling wins from 4.
     ///
     /// The measurement is one held-out font at one size, on rendered lines rather
     /// than photographed pages. If the pinned model moves, re-run the example
@@ -1094,10 +1091,9 @@ impl MonOcr {
         // between lines. Inverting each crop inside `preprocess` afterwards
         // cannot recover a line that was never found.
         //
-        // The three sibling bindings all fixed this after an audit caught the
-        // probe sitting in `preprocess` alone — `go/monocr.go` `predictImage`,
-        // `js/src/monocr.js` `predictPage`, `python/monocr_onnx/predictor.py`
-        // `predict_page`. This binding had the probe in neither place.
+        // The other three bindings order it the same way: `go/monocr.go`
+        // `predictImage`, `js/src/monocr.js` `predictPage`,
+        // `python/monocr_onnx/predictor.py` `predict_page`.
         //
         // The probe is idempotent, so the per-crop call in `preprocess_line` still
         // covers `predict_single_line` without fighting this one.

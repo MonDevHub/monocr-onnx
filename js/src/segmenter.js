@@ -132,7 +132,7 @@ function suppressPageRules(binary, width, height) {
  *     side. On a page cropped flush to the ink the threshold moved 0.21% at
  *     window 3 (17.2455 here against Go's 17.2096) and 1.17% at window 15, and no
  *     band count changed. Unifying the divisors would change output for users of
- *     at least one binding, so it is an owner decision, not a cleanup.
+ *     at least one binding, so it is left as is.
  */
 function smoothProfile(hist, window) {
     if (window <= 1) return hist;

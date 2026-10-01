@@ -531,17 +531,13 @@ class MonOCR {
     /**
      * Processes full page: segments into lines and predicts each.
 
-     * NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
-     * canvas. The Python binding tiles instead, cutting at whitespace columns.
+     * This binding SQUEEZES a wide line into the model canvas. The Python
+     * binding tiles instead, cutting at whitespace columns.
      *
-     * This comment used to quote `v3.5 squeezed 0.1434 against tiled 0.0795` and
-     * conclude "this binding is on the worse side of that". RETIRED 2026-08-22:
-     * that harness was never committed and the figures do not reproduce.
-     * Remeasured over 201 rendered lines, twice — Python arms and the Rust
-     * binding, in one A/B dated 2026-08-22 — the answer is
-     * width-dependent: squeezing wins at 2 tiles, the two arms are level at 3,
-     * and tiling wins from 4 up. On a real book page at 150 dpi every line
-     * fitted one tile, so tiling never engaged.
+     * Measured over 201 rendered lines, with the Python arms and the Rust
+     * binding: squeezing wins at 2 tiles, the two arms are level at 3, and
+     * tiling wins from 4 up. On a real book page at 150 dpi every line fitted
+     * one tile, so tiling never engaged.
      *
      * Porting `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py
      * is still worth doing — squeezing's downside on very wide input is
@@ -556,8 +552,7 @@ class MonOCR {
         // segmenter treats dark as ink (`grayBuffer[idx] < 128`), so handed a
         // light-on-dark page it segments the BACKGROUND and returns the gaps
         // between lines. Inverting each crop inside `preprocess` afterwards cannot
-        // recover a line that was never found. An audit caught this after the probe
-        // shipped in `preprocess` alone.
+        // recover a line that was never found.
         //
         // `segment` takes a path or a Buffer, so the page is normalised into a
         // Buffer first. The probe is idempotent — once the corners are light a

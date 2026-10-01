@@ -343,30 +343,20 @@ class MonOCR:
         rejoined with no separator. Squeezing it into the canvas instead breaks
         the aspect ratio the model was trained on.
 
-        Which of the two is better was recorded here as a property of the network
-        — `v2 squeezed 0.0676 / tiled 0.0758` against `v3.5 squeezed 0.1434 /
-        tiled 0.0795`, "so the direction flips with the pin". RETIRED 2026-08-22:
-        that harness was never committed and neither pair reproduces.
-
-        MEASURED 2026-08-22 over 201 rendered lines, twice — these Python arms
-        and the Rust binding, same images. The answer is **width-dependent,
-        not a property of the graph**: squeezing wins at 2 tiles, the two arms
-        are level at 3, and tiling wins from 4 up, reaching 24x (Python) and 36x
-        (Rust) by 6 tiles, where squeezing is above 0.83 CER.
+        Measured over 201 rendered lines, with these Python arms and the Rust
+        binding on the same images. The answer is **width-dependent**:
+        squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins
+        from 4 up, reaching 24x (Python) and 36x (Rust) by 6 tiles, where
+        squeezing is above 0.83 CER.
 
         This package tiles because that asymmetry is the argument — tiling costs
         a fraction of a point on narrow input and saves the line on wide input.
         It is not a claim that tiling is better on average: on a real book page
         at 150 dpi every line fitted one tile and tiling never engaged.
 
-        **Re-measure before repinning the model.** This used to read "anything
-        repinned to v2 at a51be11 should not tile, because the direction flips",
-        and the figures behind that flip are the ones retired above — so the
-        instruction has lost its evidence, not gained a counter-proof. v2 is still
-        served at `a51be11`, and `segmenter.py` still says a51be11 "gets v2 and
-        must keep the old numbers", so the question is live rather than closed.
-        The web and iOS ports still carry the old imperative verbatim; treat that
-        as unreconciled, not as authority.
+        **Re-measure before repinning the model.** The measurement above is for
+        the pinned model only; whether another model, such as v2 at `a51be11`,
+        prefers squeezing has not been measured.
 
         Rendered lines rather than photographed pages, so this is a preview and
         not an evaluation; the two arms differ only in the choice under test.
@@ -381,7 +371,6 @@ class MonOCR:
         # BACKGROUND and returns the gaps between lines. Inverting each crop
         # afterwards cannot recover a line that was never found.
         #
-        # An audit caught this after the probe was added to `preprocess` alone.
         # The probe is idempotent — once the corners are light a second call is a
         # no-op, pinned by `test_inverting_twice_returns_the_original` — so both
         # call sites are safe, and the per-crop one still covers `predict_line`.

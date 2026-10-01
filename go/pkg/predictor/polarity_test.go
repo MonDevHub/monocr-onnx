@@ -138,7 +138,6 @@ func TestPreprocessNormalisesPolarity(t *testing.T) {
 // The segmenter treats dark as ink, so handed a light-on-dark page it segments the
 // BACKGROUND and returns the gaps between lines. A probe inside preprocess runs
 // per crop, after segmentation, and cannot recover a line that was never found.
-// An audit caught that after the probe shipped in preprocess alone.
 func TestNormalizePolarityIsExportedForThePagePath(t *testing.T) {
 	out := NormalizePolarity(page(200, 60, 0, 255))
 	if g := color.GrayModel.Convert(out.At(0, 0)).(color.Gray); g.Y != 255 {

@@ -137,7 +137,7 @@ func suppressPageRules(mask []uint8, width, height int) bool {
 //
 // THREE MEASURED DIVERGENCES FROM THE PYTHON BINDING, none of them reconciled
 // here. The formula is published behaviour for anyone reading the profile, so
-// changing it changes output for this binding's users; that is an owner decision.
+// changing it changes output for this binding's users, so it is left as is.
 //
 //  1. SPAN IS 2*(window/2)+1, NOT window. The loop is [-overflow, +overflow] with
 //     overflow = window/2, so an EVEN window spans window+1 rows -- one MORE than

@@ -33,12 +33,6 @@ All three publish by **trusted publishing (OIDC)**. There is no `PYPI_TOKEN`, no
 `id-token: write` mints a short-lived credential per run, and on npm it also attaches a
 provenance attestation tying the tarball to the run and the commit.
 
-**Corrected 2026-09-03.** This section used to open "Credentials are not on the dev
-machine by default" and tell you to check `npm whoami` and `~/.pypirc`. That describes a
-manual local publish, which is not how either binding ships and has not been since these
-workflows were written. It is plausibly why `0.3.0` has been tagged and unpublished:
-the runbook asked for a login, the workflows wanted a tag, and the two never met.
-
 ## The one-time registry setup, which is the actual blocker
 
 **Nothing here is a GitHub permission.** All three workflows already declare what they need:

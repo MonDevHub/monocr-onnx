@@ -101,14 +101,10 @@ func resolveModel() (modelPath, charset string, err error) {
 // cut into tiles at whitespace columns, which is what the Python binding and
 // the web app do.
 //
-// This comment used to quote `v3.5 squeezed 0.1434 against tiled 0.0795` and
-// conclude "this binding is still on the worse side of that". RETIRED
-// 2026-08-22: that harness was never committed and the figures do not
-// reproduce. Remeasured over 201 rendered lines, twice — Python arms and the
-// Rust binding, in one A/B dated 2026-08-22 — the answer is
-// width-dependent: squeezing wins at 2 tiles, the two arms are level at 3, and
-// tiling wins from 4 up. On a real book page at 150 dpi every line fitted one
-// tile, so tiling never engaged at all.
+// Measured over 201 rendered lines, with the Python arms and the Rust binding:
+// squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins from
+// 4 up. On a real book page at 150 dpi every line fitted one tile, so tiling
+// never engaged at all.
 //
 // So squeezing is not a standing accuracy loss here; it is an unbounded one on
 // unusually wide input, where tiling's downside stays bounded. Porting
@@ -220,9 +216,9 @@ func predictImage(pred linePredictor, img image.Image) (string, error) {
 	// segments the BACKGROUND and returns the gaps between lines. Inverting each
 	// crop inside preprocess afterwards cannot recover a line never found.
 	//
-	// An audit caught this after the probe was added to preprocess alone. The probe
-	// is idempotent -- once the corners are light a second call is a no-op -- so
-	// both call sites are safe, and the per-crop one still covers ReadLine.
+	// The probe also runs per crop inside preprocess. It is idempotent -- once the
+	// corners are light a second call is a no-op -- so both call sites are safe,
+	// and the per-crop one still covers ReadLine.
 	//
 	// Transparency is flattened onto white first, for the same reason: the
 	// segmenter reads a transparent background as black.
@@ -357,9 +353,9 @@ func readPDFPage(pred linePredictor, seg *segmenter.LineSegmenter, img image.Ima
 	// segments the BACKGROUND and returns the gaps between lines. Inverting each
 	// crop inside preprocess afterwards cannot recover a line never found.
 	//
-	// An audit caught this after the probe was added to preprocess alone. The probe
-	// is idempotent -- once the corners are light a second call is a no-op -- so
-	// both call sites are safe, and the per-crop one still covers ReadLine.
+	// The probe also runs per crop inside preprocess. It is idempotent -- once the
+	// corners are light a second call is a no-op -- so both call sites are safe,
+	// and the per-crop one still covers ReadLine.
 	img = predictor.NormalizePolarity(imageio.FlattenOnWhite(img))
 
 	lines, err := seg.Segment(img)

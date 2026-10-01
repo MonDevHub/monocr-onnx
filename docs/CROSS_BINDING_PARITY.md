@@ -18,17 +18,12 @@ image.
 > plausibly survives the model change. It has not been re-checked either.
 >
 > There is also a **second axis this file never covered**: Python and Rust tile a wide
-> line into canvas-width pieces, while JS and Go squeeze it into the window. This note
-> used to price that gap at `CER 0.1434 squeezed against 0.0795 tiled` and call it
-> "larger than any disagreement recorded here". **Retired 2026-08-22**: that harness
-> was never committed and the figures do not reproduce. Remeasured over 201 rendered
-> lines in an A/B dated 2026-08-22, the gap is width-dependent —
-> squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
-> On the ordinary page input that report describes — a book page at 150 dpi, where
-> every line fitted one tile — the gap is not smaller than the disagreements below,
-> it is **absent**, because tiling never engages. It is also a CER and those are
-> agreement counts, so the two were never comparable by magnitude in the first place.
-> Rust gained tiling on 2026-08-22; JS and Go have not.
+> line into canvas-width pieces, while JS and Go squeeze it into the window. Measured
+> over 201 rendered lines, the gap is width-dependent: squeezing wins at 2 tiles, the
+> two arms are level at 3, and tiling wins from 4 up. On an ordinary book page at
+> 150 dpi, where every line fits one tile, the gap is **absent**, because tiling never
+> engages. It is also a CER and the counts below are agreement counts, so the two are
+> not comparable by magnitude.
 >
 > Go's `ReadImage` no longer reads a multi-line page as one strip — that gap closed
 > 2026-08-18 and both its image and PDF paths now share `segMinLineHeight` and
