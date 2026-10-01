@@ -1,8 +1,8 @@
 // onnxruntime-node and sharp are native modules: loading them costs a dlopen
 // and, on a fresh install, a postinstall download. They are required lazily so
-// that importing this package -- and running its test suite, which uses a fake
-// session and never touches either -- does not depend on them being built.
-// CI installs no native deps for the js job as a result.
+// that importing this package loads neither. The test suite replaces the
+// session with a fake, but several tests encode real PNG fixtures with sharp,
+// so CI installs the native dependencies from the lockfile before running it.
 let ort = null;
 function onnxRuntime() {
     if (ort === null) ort = require('onnxruntime-node');

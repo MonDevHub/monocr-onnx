@@ -141,9 +141,11 @@ in the other order swaps an unmeasured disagreement for an unmeasured agreement.
 
 ## Reproducing
 
-Run each binding over `data/images/` and diff. Python, JS and Go emit one line per
-image; the Rust CLI writes a `.txt` beside each input instead, and emits multiple lines
-for the page image, so its output needs aligning per-image rather than by line number.
+Run each binding over `data/images/` and diff. Every binding segments an image into
+lines before reading it, so the page image, `pdf_screenshot.png`, comes back as several
+lines (five from the Python CLI at 0.5.0). Python, JS and Go print to stdout; the Rust
+CLI writes a `.txt` beside each input instead. Align the outputs per image rather than
+by line number.
 
 ## What this does not cover
 

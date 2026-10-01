@@ -16,10 +16,14 @@ Requires Python 3.11+. Keep the floor: 0.1.0 is the only release that accepts
 Python 3.9 or 3.10, so an unpinned install there resolves to it, and 0.1.x pairs
 a 225-character charset with a 277-class graph and returns wrong characters.
 
-The wheel is pure Python and every native dependency publishes wheels for Linux,
-macOS and Windows, so no compiler is needed. On an Intel Mac that means
-onnxruntime 1.23.2, its last Intel-macOS wheel, and Python 3.11 to 3.13. It runs
-on the CPU only.
+The wheel is pure Python and every native dependency publishes wheels for glibc
+Linux (x86_64 and aarch64), macOS and x64 Windows, so no compiler is needed
+there. On an Intel Mac that means onnxruntime 1.23.2, its last Intel-macOS wheel,
+and Python 3.11 to 3.13. Two platforms are not covered: `opencv-python-headless`
+has never published a Windows-on-ARM wheel, so pip builds it from source there,
+and neither it nor `onnxruntime` publishes a musllinux wheel, so Alpine and other
+musl distributions cannot install `onnxruntime`, which has no sdist. It runs on
+the CPU only.
 
 ## Quick start
 

@@ -139,15 +139,18 @@ export MONOCR_ONNXRUNTIME_PATH="$PWD/onnxruntime-linux-x64-1.24.1/lib/libonnxrun
 ```
 
 With `MONOCR_ONNXRUNTIME_PATH` unset the SDK asks the loader for
-`libonnxruntime.so`, so instead of the variable you can put the archive's `lib`
-directory on `LD_LIBRARY_PATH` or register it with `ldconfig`. Distribution
+`libonnxruntime.so`, so `LD_LIBRARY_PATH` or `ldconfig` should find it in place
+of the variable: put the archive's `lib` directory on `LD_LIBRARY_PATH` or
+register it with `ldconfig` (not yet run on Linux). Distribution
 packages work too where they exist; check the version is at least 1.18.0. A
 package that ships only `libonnxruntime.so.1` (the unversioned link is often in a
 `-dev` package) needs the variable pointed at that file.
 
-0.4.2 and earlier asked the Linux loader for `onnxruntime.so`, which ONNX Runtime
-packages do not ship, and checked only the Apple-silicon Homebrew path. On those
-versions, set the variable on Linux and on an Intel Mac.
+0.4.2 and earlier checked only `/opt/homebrew/lib/libonnxruntime.dylib`, and
+without it asked the loader for the wrapper's default, `onnxruntime.so`, on macOS
+as well as Linux; ONNX Runtime packages do not ship that name. On those
+versions, set the variable on Linux and on any Mac without
+`/opt/homebrew/lib/libonnxruntime.dylib`.
 
 **Windows**
 

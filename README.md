@@ -83,7 +83,7 @@ Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
 | Python | [`python/`](python/) | [PyPI: monocr-onnx](https://pypi.org/project/monocr-onnx/) | Python 3.11+ | 0.5.0 |
 | JavaScript | [`js/`](js/) | [npm: monocr](https://www.npmjs.com/package/monocr) | Node.js 20.9+ | 0.5.0 |
 | Go | [`go/`](go/) | [pkg.go.dev](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go) | Go 1.23+, ONNX Runtime 1.18.0+ shared library | v0.5.0 |
-| Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | nothing beyond Cargo | 0.5.0 |
+| Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | Rust 1.88+ | 0.5.0 |
 
 Go is the only binding that always needs ONNX Runtime installed separately; it
 loads the shared library at run time. [`go/README.md`](go/README.md) covers installing it.
@@ -129,11 +129,14 @@ or an infinity raise `ModelOutputError` (Go: `*predictor.OutputError`), and
 logits that are not `[1, sequence, N + 1]` raise `ModelContractError` (Go:
 `*predictor.ContractError`), rather than decoding into a blank or wrong line.
 
-A file the binding opens itself is turned the way it is displayed, from its EXIF
-Orientation tag, and transparency is composited onto white before the conversion
-to grey, so a transparent background is not read as black. An image you pass in
+A file the binding opens itself, and in JavaScript an encoded `Buffer`, is turned
+the way it is displayed, from its EXIF Orientation tag. An image you pass in
 already decoded (a PIL `Image`, a sharp instance, an `image.Image`) is not
-re-oriented. Go and Rust read the tag only from JPEG and from a PNG eXIf chunk;
+re-oriented. Transparency is composited onto white before the conversion to grey
+for every input, opened by the binding or decoded by you, so a transparent
+background is not read as black; the one exception is a NumPy array handed
+straight to Python's `LineSegmenter.segment`, which is converted as given. Go and
+Rust read the tag only from JPEG and from a PNG eXIf chunk;
 Python and JavaScript also read it from the other formats their imaging libraries
 decode, such as TIFF and WebP.
 [`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md#input-loading-and-decode-guards--measured-2026-10-01)
