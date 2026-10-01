@@ -19,8 +19,8 @@ Python, Go and Rust bindings.
 npm install monocr@^0.4.1
 ```
 
-Requires Node.js 20.9+. Runs on the CPU on Linux and Windows (x64, arm64) and
-on Apple-silicon macOS; `onnxruntime-node` and `sharp` ship prebuilt binaries
+Requires Node.js 20.9+. Runs on the CPU on Linux (x64, arm64; glibc), Windows
+(x64, arm64) and Apple-silicon macOS; `onnxruntime-node` and `sharp` ship prebuilt binaries
 there, so no compiler is needed. `onnxruntime-node` ships no Intel-macOS binary,
 so Intel Macs are not supported. On 0.x, npm's caret stops below the next minor,
 so `^0.4.1` takes 0.4.x releases only.
@@ -58,7 +58,7 @@ main();
 | `read_pdf` / `read_pdfs` | `string[]`, one per page / `string[][]` |
 | `read_image_with_accuracy(path, groundTruth)` | `{ text, accuracy }`: `100 × (1 − edit distance ÷ length of the longer string)`, to two decimals; 0 if either string is empty |
 
-Every method and helper except the constructor returns a Promise. The `read_*`
+Every call in this table except the constructor returns a Promise. The `read_*`
 helpers also take `modelPath` and `charsetPath` as trailing arguments: after the
 path or paths, or after `groundTruth` for `read_image_with_accuracy`.
 

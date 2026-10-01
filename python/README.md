@@ -47,7 +47,7 @@ path as an image and raises `PIL.UnidentifiedImageError`. Use `read_pdf`.
 | Call | Returns |
 | :--- | :--- |
 | `MonOCR(model_path=None, charset_path=None)` | The engine. Omit both paths to use the pinned model and its charset. |
-| `.predict(image)` / `.predict_page(image)` | `str`, one line of text per detected line, for a path or PIL image. A line too wide for the model is cut into tiles. |
+| `.predict(image)` / `.predict_page(image)` | `str`, one line of text per detected line, for a path or PIL image. A detected line too wide for the model is cut into tiles. |
 | `.predict_line(image)` | `str`, for a path or PIL image of one line. A crop too wide for the model is squeezed to fit, not tiled. |
 | `read_image(path)` / `read_images(paths, workers=4)` | `str` / `list[str]` |
 | `read_pdf(path)` / `read_pdfs(paths, workers=4)` | `list[str]`, one per page / `list[list[str]]` |

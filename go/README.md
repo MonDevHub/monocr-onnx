@@ -119,8 +119,8 @@ brew install onnxruntime
 
 On Apple silicon this installs `/opt/homebrew/lib/libonnxruntime.dylib`, which
 the SDK finds on its own. It is the only platform with a built-in default.
-Homebrew on an Intel Mac installs under `/usr/local/lib`, which is not a
-default, so set `MONOCR_ONNXRUNTIME_PATH` to the library there.
+Homebrew on an Intel Mac has no bottle, so it builds ONNX Runtime from source,
+and installs under `/usr/local/lib`, which is not a default, so set `MONOCR_ONNXRUNTIME_PATH` to the library there.
 
 **Linux**
 

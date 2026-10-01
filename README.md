@@ -84,8 +84,8 @@ Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
 | Go | [`go/`](go/) | [pkg.go.dev](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go) | Go 1.23+, ONNX Runtime 1.18.0+ shared library | v0.4.2 |
 | Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | nothing beyond Cargo | 0.4.2 |
 
-Go is the only binding that needs ONNX Runtime installed separately; it loads the
-shared library at run time. [`go/README.md`](go/README.md) covers installing it.
+Go is the only binding that always needs ONNX Runtime installed separately; it
+loads the shared library at run time. [`go/README.md`](go/README.md) covers installing it.
 The Python and JavaScript packages bring the runtime with them, and the Rust
 crate links a prebuilt one at build time on the targets `ort` publishes one for.
 

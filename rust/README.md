@@ -21,9 +21,11 @@ Needs Rust 1.88 or newer, the floor `ort` 2.0.0-rc.11 declares. Runs on the CPU.
 ONNX Runtime does not need installing on Linux (x86_64, aarch64, glibc),
 Apple-silicon macOS and Windows (x86_64, aarch64, MSVC): `ort` downloads a
 prebuilt runtime for those targets at build time and links it in, so the first
-build needs network access. Other targets, Intel macOS among them, have no
-prebuilt; point `ORT_LIB_LOCATION` at your own ONNX Runtime build (see
-[ort's linking guide](https://ort.pyke.io/setup/linking)).
+build needs network access. Other desktop targets, Intel macOS among them, have
+no prebuilt; point `ORT_LIB_LOCATION` at your own ONNX Runtime build. The
+current [ort linking guide](https://ort.pyke.io/setup/linking) calls that
+variable `ORT_LIB_PATH`, which is a later release's name; rc.11 reads
+`ORT_LIB_LOCATION`.
 
 ## Quick start
 
@@ -86,8 +88,8 @@ Weights and their charset come from revision `d3d9d5e`
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
 `~/.monocr/models/<revision>/`, so re-pinning is a cache miss rather than a
 silent reuse. The graph takes a `[batch, 1, 160, 1024]` input and emits
-`[batch, sequence, 277]` logits: 276 characters plus the CTC blank. Height and
-width are both static; batch is the only dynamic axis.
+`[batch, sequence, 277]` logits: 276 characters plus the CTC blank. Input
+height and width are both static; batch is the only dynamic input axis.
 
 The SDK reads the real graph on load and returns a `ModelContractError` when its
 class count disagrees with the charset or its input height is not 160, because a
