@@ -169,3 +169,21 @@ test('LineSegmenter.segment reads a transparent page as dark on white', async ()
     assert.equal(want.length, 2);
     assert.deepEqual((await linesOf(transparent)).map((l) => l.bbox), want.map((l) => l.bbox));
 });
+
+// read_pdf wraps a failure in a plain Error naming the PDF, but a broken model
+// is rethrown as itself so `instanceof` works on the PDF path too. Needs
+// pdftoppm to render the page, so it is skipped where poppler is absent.
+const { execSync } = require('child_process');
+let havePdftoppm = true;
+try { execSync('pdftoppm -v', { stdio: 'ignore' }); } catch (e) { havePdftoppm = false; }
+
+test('read_pdf rethrows ModelOutputError as itself', { skip: !havePdftoppm && 'pdftoppm not installed' }, async (t) => {
+    const MonOCR = require('../src/monocr');
+    const { ModelOutputError } = MonOCR;
+    const { read_pdf } = require('../src/index');
+    t.mock.method(MonOCR.prototype, 'init', async function () { this.session = {}; });
+    t.mock.method(MonOCR.prototype, 'predictPage', async () => {
+        throw new ModelOutputError('non-finite');
+    });
+    await assert.rejects(read_pdf(path.join(REPO, 'data', 'pdfs', 'party_mission.pdf')), ModelOutputError);
+});

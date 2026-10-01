@@ -119,6 +119,9 @@ async function read_pdf(pdfPath, modelPath = null, charsetPath = null) {
         
         return pages;
     } catch (err) {
+        // A broken model is rethrown as itself, so `instanceof` still works on
+        // the PDF path the way it does on the image path.
+        if (err instanceof ModelOutputError || err instanceof ModelContractError) throw err;
         throw new Error(`Failed to process PDF: ${err.message}`);
     } finally {
         // Cleanup
