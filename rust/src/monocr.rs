@@ -900,15 +900,7 @@ impl MonOcr {
 
         let pdf_path = pdf_path.as_ref();
 
-        // Check for pdftoppm
-        let check = Command::new("which").arg("pdftoppm").output().await;
-
-        if check.is_err() || !check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-            anyhow::bail!("pdftoppm not found: please install poppler-utils");
-        }
-        if check.as_ref().map(|o| o.stdout.is_empty()).unwrap_or(true) {
-            anyhow::bail!("pdftoppm not found: please install poppler-utils");
-        }
+        require_program("pdftoppm").await?;
 
         // Create temp directory
         let temp_dir = tempfile::tempdir()?;
@@ -1323,6 +1315,31 @@ pub(crate) fn preprocess_line(
     }
 
     tensor
+}
+
+/// Check that `program` can be started, by running `program -v`.
+///
+/// This used to ask `which`, which Windows does not have, so `read_pdf` failed
+/// on a Windows machine with poppler on its PATH. Starting the program itself
+/// works wherever it can be run later. Only a missing executable (`NotFound`)
+/// is reported as not installed; the exit status is ignored, because the probe
+/// asks whether the program exists, not what `-v` returns.
+async fn require_program(program: &str) -> Result<()> {
+    use std::process::Stdio;
+    let status = tokio::process::Command::new(program)
+        .arg("-v")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match status {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("{program} not found: please install poppler-utils")
+        }
+        Err(e) => Err(anyhow::Error::new(e).context(format!("cannot run {program}"))),
+    }
 }
 
 /// CTC greedy decode of a flat logits buffer.
@@ -1750,6 +1767,25 @@ mod tests {
         decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
         decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
             .expect_err("shape larger than the buffer");
+    }
+
+    /// A missing program is reported as not installed, without `which`.
+    #[tokio::test]
+    async fn require_program_reports_a_missing_program_as_not_installed() {
+        let err = require_program("monocr-no-such-program")
+            .await
+            .expect_err("a missing program must be refused");
+        assert_eq!(
+            err.to_string(),
+            "monocr-no-such-program not found: please install poppler-utils"
+        );
+    }
+
+    /// A program on PATH passes, whatever its `-v` exits with. `cargo` is on
+    /// PATH wherever this suite runs.
+    #[tokio::test]
+    async fn require_program_accepts_a_program_on_path() {
+        require_program("cargo").await.expect("cargo is on PATH");
     }
 
     /// The page path reads a file the way it is displayed: EXIF orientation
