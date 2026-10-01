@@ -8,6 +8,7 @@ import onnxruntime as ort
 from PIL import Image, ImageOps
 
 from .model_manager import ModelManager
+from .imaging import load_image, to_grey
 from .segmenter import LineSegmenter, tile_line
 
 # The input height this binding targets, and the height the pinned artifact was
@@ -82,6 +83,36 @@ def normalize_polarity(img: "Image.Image") -> "Image.Image":
     if float(np.median(corners)) < _DARK_BACKGROUND_MEDIAN:
         return ImageOps.invert(img)
     return img
+
+
+class ModelOutputError(RuntimeError):
+    """
+    Raised when the model's scores cannot be decoded: a NaN or an infinity.
+
+    Greedy decoding takes an argmax per timestep, and an argmax over NaN is not
+    an error -- ``np.argmax`` returns the first NaN's index, which is often 0,
+    the CTC blank. A numeric failure in the runtime or the artifact then reads
+    as an empty or truncated line, indistinguishable from a blank one. On real
+    input the pinned model's scores are finite, so this only ever fires on such
+    a failure.
+    """
+
+
+def check_logits(logits, num_classes):
+    """Refuse a logits array that is not [1, T, num_classes] of finite values."""
+    arr = np.asarray(logits)
+    if arr.ndim != 3 or arr.shape[0] != 1 or arr.shape[2] != num_classes:
+        raise ModelContractError(
+            f"expected logits of shape [1, sequence, {num_classes}], got {list(arr.shape)}"
+        )
+    finite = np.isfinite(arr)
+    if not finite.all():
+        bad = int(arr.size - np.count_nonzero(finite))
+        raise ModelOutputError(
+            f"model output holds {bad} non-finite value(s) (NaN or infinity) out of "
+            f"{arr.size}; refusing to decode it into text"
+        )
+    return arr
 
 
 class ModelContractError(RuntimeError):
@@ -245,8 +276,7 @@ class MonOCR:
         was trained on white=+1.0 / black=-1.0 and was being fed white=1.0 /
         black=0.0. The JS, Go and Rust bindings all use /127.5 - 1.0.
         """
-        if img.mode != "L":
-            img = img.convert("L")
+        img = to_grey(img)
 
         if img.height == 0 or img.width == 0:
             return None
@@ -292,15 +322,15 @@ class MonOCR:
         return "".join(decoded_text)
 
     def predict_line(self, img):
-        if isinstance(img, (str, Path)):
-            img = Image.open(img)
+        img = load_image(img)
 
         input_data = self.preprocess(img)
         if input_data is None:
             return ""
 
         outputs = self.session.run([self.output_name], {self.input_name: input_data})
-        preds = np.argmax(outputs[0], axis=2)[0]  # Batch size 1
+        logits = check_logits(outputs[0], len(self.charset) + 1)
+        preds = np.argmax(logits, axis=2)[0]  # Batch size 1
 
         return self.decode(preds)
 
@@ -341,10 +371,7 @@ class MonOCR:
         Rendered lines rather than photographed pages, so this is a preview and
         not an evaluation; the two arms differ only in the choice under test.
         """
-        if isinstance(img_path, (str, Path)):
-            img = Image.open(img_path)
-        else:
-            img = img_path
+        img = load_image(img_path)
 
         # Polarity BEFORE segmentation, and this ordering is the whole point.
         #
@@ -358,7 +385,7 @@ class MonOCR:
         # The probe is idempotent — once the corners are light a second call is a
         # no-op, pinned by `test_inverting_twice_returns_the_original` — so both
         # call sites are safe, and the per-crop one still covers `predict_line`.
-        img = normalize_polarity(img.convert("L") if img.mode != "L" else img)
+        img = normalize_polarity(to_grey(img))
 
         lines = self.segmenter.segment(img)
 
