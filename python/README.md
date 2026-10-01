@@ -12,12 +12,14 @@ JavaScript, Go and Rust bindings.
 pip install "monocr-onnx>=0.4.1"
 ```
 
-Requires Python 3.11+: onnxruntime 1.24.1 ships no wheel below cp311 and no
-sdist. Keep the floor; 0.1.x pairs a 225-character charset with a 277-class graph
-and returns wrong characters.
+Requires Python 3.11+. Keep the floor: 0.1.0 is the only release that accepts
+Python 3.9 or 3.10, so an unpinned install there resolves to it, and 0.1.x pairs
+a 225-character charset with a 277-class graph and returns wrong characters.
 
 The wheel is pure Python and every native dependency publishes wheels for Linux,
-macOS and Windows, so no compiler is needed. It runs on the CPU only.
+macOS and Windows, so no compiler is needed. On an Intel Mac that means
+onnxruntime 1.23.2, its last Intel-macOS wheel, and Python 3.11 to 3.13. It runs
+on the CPU only.
 
 ## Quick start
 
@@ -45,16 +47,18 @@ path as an image and raises `PIL.UnidentifiedImageError`. Use `read_pdf`.
 | Call | Returns |
 | :--- | :--- |
 | `MonOCR(model_path=None, charset_path=None)` | The engine. Omit both paths to use the pinned model and its charset. |
-| `.predict(path)` / `.predict_page(path)` | `str`, one line of text per detected line |
-| `.predict_line(image)` | `str`, for a path or PIL image of one line |
+| `.predict(image)` / `.predict_page(image)` | `str`, one line of text per detected line, for a path or PIL image. A line too wide for the model is cut into tiles. |
+| `.predict_line(image)` | `str`, for a path or PIL image of one line. A crop too wide for the model is squeezed to fit, not tiled. |
 | `read_image(path)` / `read_images(paths, workers=4)` | `str` / `list[str]` |
-| `read_pdf(path)` / `read_pdfs(paths, workers=4)` | `list[str]` per PDF, one per page |
+| `read_pdf(path)` / `read_pdfs(paths, workers=4)` | `list[str]`, one per page / `list[list[str]]` |
 | `read_image_with_accuracy(path, ground_truth)` | `(str, float)`: the text, and `100 × (1 − edit distance ÷ length of the longer string)` |
 
-The module-level functions also take `model_path` and `charset_path`.
+The module-level functions also take `model_path` and `charset_path` as
+keyword arguments.
 
-Loading refuses a model whose output class count or input height disagrees with
-the charset, raising `ModelContractError`. A mismatched pair would still run and
+Loading raises `ModelContractError` when the model's output class count is not
+the charset's length plus one (277 for the 276-character charset; CTC reserves
+index 0 for the blank) or its input height is not 160. A mismatched pair would still run and
 still return text; it would just be the wrong text.
 
 ## CLI
