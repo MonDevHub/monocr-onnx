@@ -546,9 +546,15 @@ func (p *Predictor) decode(preds []float32, shape onnxruntime_go.Shape) (string,
 			"charset/model mismatch at decode time: charset has %d characters -> expects %d classes, tensor has %d",
 			len(p.charset), expected, numClasses)}
 	}
-	if need := seqLen * numClasses; len(preds) < need {
+	// An exact length and a batch of 1, as the other three bindings require. A
+	// [2, T, C] tensor used to decode its first item and drop the second.
+	batch := int(shape[0])
+	if need := batch * seqLen * numClasses; len(preds) != need {
 		return "", &ContractError{Msg: fmt.Sprintf(
 			"output tensor holds %d values, shape %v needs %d", len(preds), shape, need)}
+	}
+	if batch != 1 {
+		return "", &ContractError{Msg: fmt.Sprintf("expected a batch of 1, got shape %v", shape)}
 	}
 	nonFinite := 0
 	for _, v := range preds {

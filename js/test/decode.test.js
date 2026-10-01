@@ -122,3 +122,13 @@ test('decode refuses a tensor whose data length disagrees with its dims', () => 
     logits.data = logits.data.subarray(0, 7);
     assert.throws(() => ocr.decode(logits), ModelContractError);
 });
+
+test('decode refuses a batch other than 1', () => {
+    // Two items would have decoded the first and dropped the second.
+    const ocr = ocrWithCharset(' abc');
+    const one = logitsFor([2, 3], 5);
+    const data = new Float32Array(one.data.length * 2);
+    data.set(one.data);
+    data.set(one.data, one.data.length);
+    assert.throws(() => ocr.decode({ data, dims: [2, 2, 5] }), ModelContractError);
+});

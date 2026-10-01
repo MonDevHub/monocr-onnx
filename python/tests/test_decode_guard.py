@@ -67,3 +67,11 @@ def test_a_class_axis_that_disagrees_with_the_charset_is_refused(make_ocr):
     ocr = make_ocr(logits=_logits_for([1, 2], num_classes=NUM_CLASSES - 1))
     with pytest.raises(ModelContractError, match="shape"):
         ocr.predict_line(_line())
+
+
+def test_a_batch_other_than_one_is_refused(make_ocr):
+    """Two items would have decoded the first and dropped the second."""
+    logits = np.concatenate([_logits_for([1, 2]), _logits_for([2, 3])], axis=0)
+    ocr = make_ocr(logits=logits)
+    with pytest.raises(ModelContractError, match="shape"):
+        ocr.predict_line(_line())

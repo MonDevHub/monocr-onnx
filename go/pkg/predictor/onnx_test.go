@@ -135,6 +135,16 @@ func TestDecodeRejectsUnexpectedShapes(t *testing.T) {
 	if _, err := p.decode(preds, onnxruntime_go.NewShape(1, 16, pinnedClasses)); err == nil {
 		t.Error("a shape larger than the buffer must be refused")
 	}
+	// Shape promises fewer values than the buffer holds.
+	if _, err := p.decode(preds, onnxruntime_go.NewShape(1, 4, pinnedClasses)); err == nil {
+		t.Error("a shape smaller than the buffer must be refused")
+	}
+	// A batch of two used to decode the first item and drop the second. The
+	// buffer holds both items, so only the batch check can refuse it.
+	_, err := p.decode(preds, onnxruntime_go.NewShape(2, 4, pinnedClasses))
+	if err == nil || !strings.Contains(err.Error(), "batch of 1") {
+		t.Errorf("a batch other than 1 must be refused, got %v", err)
+	}
 }
 
 // CTC: index 0 is blank, repeats collapse, and index n maps to charset[n-1].

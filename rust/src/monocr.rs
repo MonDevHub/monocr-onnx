@@ -1370,13 +1370,24 @@ fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String>
         ))
         .into());
     }
-    if data.len() < sequence_length * num_classes {
+    // An exact length and a batch of 1, as the other three bindings require. A
+    // [2, T, C] tensor used to decode its first item and drop the second.
+    let batch = shape[0];
+    let need = batch
+        .checked_mul(sequence_length)
+        .and_then(|n| n.checked_mul(num_classes));
+    if need != Some(data.len()) {
         return Err(ModelContractError(format!(
             "output tensor holds {} values, shape {shape:?} needs {}",
             data.len(),
-            sequence_length * num_classes
+            need.map_or_else(|| "more than fits".to_string(), |n| n.to_string())
         ))
         .into());
+    }
+    if batch != 1 {
+        return Err(
+            ModelContractError(format!("expected a batch of 1, got shape {shape:?}")).into(),
+        );
     }
     let non_finite = data.iter().filter(|v| !v.is_finite()).count();
     if non_finite > 0 {
@@ -1767,6 +1778,13 @@ mod tests {
         decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
         decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
             .expect_err("shape larger than the buffer");
+        decode_ctc(&charset, &data, &[1, 4, PINNED_CLASSES])
+            .expect_err("shape smaller than the buffer");
+        // A batch of two used to decode the first item and drop the second. The
+        // buffer holds both items, so only the batch check can refuse it.
+        let err =
+            decode_ctc(&charset, &data, &[2, 4, PINNED_CLASSES]).expect_err("batch other than 1");
+        assert!(err.to_string().contains("batch of 1"), "{err}");
     }
 
     /// A missing program is reported as not installed, without `which`.
