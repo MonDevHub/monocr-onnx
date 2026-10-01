@@ -84,10 +84,12 @@ fn jpeg_exif(data: &[u8]) -> Option<&[u8]> {
 /// The contents of the eXIf chunk: a bare TIFF structure, no "Exif\0\0" prefix.
 fn png_exif(data: &[u8]) -> Option<&[u8]> {
     let mut i = 8;
-    while i + 8 <= data.len() {
+    while i + 12 <= data.len() {
         let n = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
         let typ = &data[i + 4..i + 8];
-        if i + 12 + n > data.len() {
+        // Subtracted rather than added, so a length near 2^32 cannot overflow a
+        // 32-bit usize past the bounds check.
+        if n > data.len() - i - 12 {
             return None;
         }
         if typ == b"eXIf" {
@@ -131,12 +133,23 @@ fn tiff_orientation(t: &[u8]) -> Option<u16> {
         return None;
     }
     let ifd = u32_at(4)? as usize;
+    // Bounded first, so the offsets below cannot overflow a 32-bit usize.
+    if ifd > t.len() {
+        return None;
+    }
     let count = u16_at(ifd)? as usize;
     for k in 0..count {
         let e = ifd + 2 + 12 * k;
-        if u16_at(e)? == 0x0112 && u16_at(e + 2)? == 3 {
-            return u16_at(e + 8);
+        if u16_at(e)? != 0x0112 {
+            continue;
         }
+        // The standard type is SHORT (3). Some writers use LONG (4), and
+        // Pillow and libvips both accept it, so this does too.
+        return match u16_at(e + 2)? {
+            3 => u16_at(e + 8),
+            4 => u32_at(e + 8).and_then(|v| u16::try_from(v).ok()),
+            _ => None,
+        };
     }
     None
 }
@@ -285,6 +298,68 @@ mod tests {
         ] {
             assert_eq!(exif_orientation(junk), 1);
         }
+    }
+
+    /// A minimal TIFF header with one IFD0 entry for tag 0x0112.
+    fn tiff(big: bool, typ: u16, value: u32) -> Vec<u8> {
+        let p16 = |v: u16| {
+            if big {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let p32 = |v: u32| {
+            if big {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let mut b = Vec::new();
+        b.extend_from_slice(if big { b"MM" } else { b"II" });
+        b.extend_from_slice(&p16(42));
+        b.extend_from_slice(&p32(8));
+        b.extend_from_slice(&p16(1));
+        b.extend_from_slice(&p16(0x0112));
+        b.extend_from_slice(&p16(typ));
+        b.extend_from_slice(&p32(1));
+        if typ == 3 {
+            b.extend_from_slice(&p16(value as u16));
+            b.extend_from_slice(&[0, 0]);
+        } else {
+            b.extend_from_slice(&p32(value));
+        }
+        b.extend_from_slice(&p32(0));
+        b
+    }
+
+    #[test]
+    fn tiff_orientation_accepts_short_and_long() {
+        for big in [false, true] {
+            assert_eq!(tiff_orientation(&tiff(big, 3, 6)), Some(6));
+            assert_eq!(tiff_orientation(&tiff(big, 4, 8)), Some(8));
+            assert_eq!(tiff_orientation(&tiff(big, 4, 1 << 31)), None);
+            assert_eq!(tiff_orientation(&tiff(big, 7, 6)), None);
+        }
+        // An IFD offset near 2^32 must be refused, not wrapped.
+        let mut b = tiff(false, 3, 6);
+        b[4..8].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+        assert_eq!(tiff_orientation(&b), None);
+    }
+
+    /// The walk has to step over fill bytes and an APP1 that is not Exif (XMP
+    /// is the common one) to reach the Exif segment behind them.
+    #[test]
+    fn jpeg_exif_skips_fill_bytes_and_other_app1_segments() {
+        let data = std::fs::read(fixture("orient-6.jpg")).unwrap();
+        let xmp = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>";
+        let mut b = data[..2].to_vec(); // SOI
+        b.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xE1]); // fill bytes, then APP1
+        b.extend_from_slice(&((xmp.len() + 2) as u16).to_be_bytes());
+        b.extend_from_slice(xmp);
+        b.extend_from_slice(&data[2..]);
+        assert_eq!(exif_orientation(&b), 6);
     }
 
     #[test]

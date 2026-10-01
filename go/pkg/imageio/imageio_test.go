@@ -2,6 +2,7 @@ package imageio
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"os"
@@ -188,5 +189,72 @@ func TestOpaqueRGBAIsNotAlteredByFlattening(t *testing.T) {
 	_, _, b := greyPixels(decodeFile(t, filepath.Join(fixtures, "upright.png")))
 	if !bytes.Equal(a, b) {
 		t.Fatal("an RGBA image with alpha 255 everywhere changed when flattened")
+	}
+}
+
+// tiff builds a minimal TIFF header with one IFD0 entry for tag 0x0112.
+func tiff(bigEndian bool, typ uint16, value uint32) []byte {
+	var bo binary.ByteOrder = binary.LittleEndian
+	head := []byte("II")
+	if bigEndian {
+		bo, head = binary.BigEndian, []byte("MM")
+	}
+	b := make([]byte, 8+2+12+4)
+	copy(b, head)
+	bo.PutUint16(b[2:], 42)
+	bo.PutUint32(b[4:], 8)
+	bo.PutUint16(b[8:], 1)
+	bo.PutUint16(b[10:], 0x0112)
+	bo.PutUint16(b[12:], typ)
+	bo.PutUint32(b[14:], 1)
+	if typ == 3 {
+		bo.PutUint16(b[18:], uint16(value))
+	} else {
+		bo.PutUint32(b[18:], value)
+	}
+	return b
+}
+
+func TestTiffOrientationAcceptsShortAndLong(t *testing.T) {
+	for _, big := range []bool{false, true} {
+		if got := tiffOrientation(tiff(big, 3, 6)); got != 6 {
+			t.Errorf("SHORT, big-endian %v: %d, want 6", big, got)
+		}
+		if got := tiffOrientation(tiff(big, 4, 8)); got != 8 {
+			t.Errorf("LONG, big-endian %v: %d, want 8", big, got)
+		}
+		if got := tiffOrientation(tiff(big, 4, 1<<31)); got != 0 {
+			t.Errorf("LONG out of range, big-endian %v: %d, want 0", big, got)
+		}
+		if got := tiffOrientation(tiff(big, 7, 6)); got != 0 {
+			t.Errorf("UNDEFINED type, big-endian %v: %d, want 0", big, got)
+		}
+	}
+	// An IFD offset near 2^32 must be refused, not wrapped.
+	b := tiff(false, 3, 6)
+	binary.LittleEndian.PutUint32(b[4:], 0xFFFFFFFE)
+	if got := tiffOrientation(b); got != 0 {
+		t.Errorf("huge IFD offset: %d, want 0", got)
+	}
+}
+
+// The walk has to step over fill bytes and an APP1 that is not Exif (XMP is
+// the common one) to reach the Exif segment behind them.
+func TestJpegExifSkipsFillBytesAndOtherAPP1Segments(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures, "orient-6.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	xmp := append([]byte("http://ns.adobe.com/xap/1.0/\x00"), []byte("<x:xmpmeta/>")...)
+	seg := []byte{0xFF, 0xE1, 0, 0}
+	binary.BigEndian.PutUint16(seg[2:], uint16(len(xmp)+2))
+	seg = append(seg, xmp...)
+	var b []byte
+	b = append(b, data[:2]...)      // SOI
+	b = append(b, 0xFF, 0xFF, 0xFF) // fill bytes before the next marker
+	b = append(b, seg[1:]...)       // the fill run ends with this marker's FF
+	b = append(b, data[2:]...)
+	if got := ExifOrientation(b); got != 6 {
+		t.Fatalf("orientation %d, want 6", got)
 	}
 }

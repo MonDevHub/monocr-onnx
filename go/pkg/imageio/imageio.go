@@ -93,12 +93,15 @@ func jpegExif(data []byte) []byte {
 // structure with no "Exif\0\0" prefix.
 func pngExif(data []byte) []byte {
 	i := 8
-	for i+8 <= len(data) {
-		n := int(binary.BigEndian.Uint32(data[i : i+4]))
-		typ := string(data[i+4 : i+8])
-		if n < 0 || i+12+n > len(data) {
+	for i+12 <= len(data) {
+		// Compared as uint64 before converting, so a length near 2^32 cannot
+		// wrap a 32-bit int negative and slip past the bounds check.
+		length := binary.BigEndian.Uint32(data[i : i+4])
+		if uint64(length) > uint64(len(data)-i-12) {
 			return nil
 		}
+		n := int(length)
+		typ := string(data[i+4 : i+8])
 		if typ == "eXIf" {
 			return data[i+8 : i+8+n]
 		}
@@ -128,19 +131,31 @@ func tiffOrientation(t []byte) int {
 	if bo.Uint16(t[2:4]) != 42 {
 		return 0
 	}
-	ifd := int(bo.Uint32(t[4:8]))
-	if ifd < 8 || ifd+2 > len(t) {
+	off := bo.Uint32(t[4:8])
+	if off < 8 || uint64(off)+2 > uint64(len(t)) {
 		return 0
 	}
+	ifd := int(off)
 	count := int(bo.Uint16(t[ifd : ifd+2]))
 	for k := 0; k < count; k++ {
 		e := ifd + 2 + 12*k
 		if e+12 > len(t) {
 			return 0
 		}
-		if bo.Uint16(t[e:e+2]) == 0x0112 && bo.Uint16(t[e+2:e+4]) == 3 {
-			return int(bo.Uint16(t[e+8 : e+10]))
+		if bo.Uint16(t[e:e+2]) != 0x0112 {
+			continue
 		}
+		// The standard type is SHORT (3). Some writers use LONG (4), and
+		// Pillow and libvips both accept it, so this does too.
+		switch bo.Uint16(t[e+2 : e+4]) {
+		case 3:
+			return int(bo.Uint16(t[e+8 : e+10]))
+		case 4:
+			if v := bo.Uint32(t[e+8 : e+12]); v <= 8 {
+				return int(v)
+			}
+		}
+		return 0
 	}
 	return 0
 }
