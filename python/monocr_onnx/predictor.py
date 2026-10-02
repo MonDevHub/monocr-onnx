@@ -8,6 +8,7 @@ import onnxruntime as ort
 from PIL import Image, ImageOps
 
 from .model_manager import ModelManager
+from .imaging import load_image, to_grey
 from .segmenter import LineSegmenter, tile_line
 
 # The input height this binding targets, and the height the pinned artifact was
@@ -82,6 +83,36 @@ def normalize_polarity(img: "Image.Image") -> "Image.Image":
     if float(np.median(corners)) < _DARK_BACKGROUND_MEDIAN:
         return ImageOps.invert(img)
     return img
+
+
+class ModelOutputError(RuntimeError):
+    """
+    Raised when the model's scores cannot be decoded: a NaN or an infinity.
+
+    Greedy decoding takes an argmax per timestep, and an argmax over NaN is not
+    an error -- ``np.argmax`` returns the first NaN's index, which is often 0,
+    the CTC blank. A numeric failure in the runtime or the artifact then reads
+    as an empty or truncated line, indistinguishable from a blank one. On real
+    input the pinned model's scores are finite, so this only ever fires on such
+    a failure.
+    """
+
+
+def check_logits(logits, num_classes):
+    """Refuse a logits array that is not [1, T, num_classes] of finite values."""
+    arr = np.asarray(logits)
+    if arr.ndim != 3 or arr.shape[0] != 1 or arr.shape[2] != num_classes:
+        raise ModelContractError(
+            f"expected logits of shape [1, sequence, {num_classes}], got {list(arr.shape)}"
+        )
+    finite = np.isfinite(arr)
+    if not finite.all():
+        bad = int(arr.size - np.count_nonzero(finite))
+        raise ModelOutputError(
+            f"model output holds {bad} non-finite value(s) (NaN or infinity) out of "
+            f"{arr.size}; refusing to decode it into text"
+        )
+    return arr
 
 
 class ModelContractError(RuntimeError):
@@ -245,8 +276,7 @@ class MonOCR:
         was trained on white=+1.0 / black=-1.0 and was being fed white=1.0 /
         black=0.0. The JS, Go and Rust bindings all use /127.5 - 1.0.
         """
-        if img.mode != "L":
-            img = img.convert("L")
+        img = to_grey(img)
 
         if img.height == 0 or img.width == 0:
             return None
@@ -292,15 +322,15 @@ class MonOCR:
         return "".join(decoded_text)
 
     def predict_line(self, img):
-        if isinstance(img, (str, Path)):
-            img = Image.open(img)
+        img = load_image(img)
 
         input_data = self.preprocess(img)
         if input_data is None:
             return ""
 
         outputs = self.session.run([self.output_name], {self.input_name: input_data})
-        preds = np.argmax(outputs[0], axis=2)[0]  # Batch size 1
+        logits = check_logits(outputs[0], len(self.charset) + 1)
+        preds = np.argmax(logits, axis=2)[0]  # Batch size 1
 
         return self.decode(preds)
 
@@ -313,38 +343,25 @@ class MonOCR:
         rejoined with no separator. Squeezing it into the canvas instead breaks
         the aspect ratio the model was trained on.
 
-        Which of the two is better was recorded here as a property of the network
-        — `v2 squeezed 0.0676 / tiled 0.0758` against `v3.5 squeezed 0.1434 /
-        tiled 0.0795`, "so the direction flips with the pin". RETIRED 2026-08-22:
-        that harness was never committed and neither pair reproduces.
-
-        MEASURED 2026-08-22 over 201 rendered lines, twice — these Python arms
-        and the Rust binding, same images. The answer is **width-dependent,
-        not a property of the graph**: squeezing wins at 2 tiles, the two arms
-        are level at 3, and tiling wins from 4 up, reaching 24x (Python) and 36x
-        (Rust) by 6 tiles, where squeezing is above 0.83 CER.
+        Measured over 201 rendered lines, with these Python arms and the Rust
+        binding on the same images. The answer is **width-dependent**:
+        squeezing wins at 2 tiles, the two arms are level at 3, and tiling wins
+        from 4 up, reaching 24x (Python) and 36x (Rust) by 6 tiles, where
+        squeezing is above 0.83 CER.
 
         This package tiles because that asymmetry is the argument — tiling costs
         a fraction of a point on narrow input and saves the line on wide input.
         It is not a claim that tiling is better on average: on a real book page
         at 150 dpi every line fitted one tile and tiling never engaged.
 
-        **Re-measure before repinning the model.** This used to read "anything
-        repinned to v2 at a51be11 should not tile, because the direction flips",
-        and the figures behind that flip are the ones retired above — so the
-        instruction has lost its evidence, not gained a counter-proof. v2 is still
-        served at `a51be11`, and `segmenter.py` still says a51be11 "gets v2 and
-        must keep the old numbers", so the question is live rather than closed.
-        The web and iOS ports still carry the old imperative verbatim; treat that
-        as unreconciled, not as authority.
+        **Re-measure before repinning the model.** The measurement above is for
+        the pinned model only; whether another model, such as v2 at `a51be11`,
+        prefers squeezing has not been measured.
 
         Rendered lines rather than photographed pages, so this is a preview and
         not an evaluation; the two arms differ only in the choice under test.
         """
-        if isinstance(img_path, (str, Path)):
-            img = Image.open(img_path)
-        else:
-            img = img_path
+        img = load_image(img_path)
 
         # Polarity BEFORE segmentation, and this ordering is the whole point.
         #
@@ -354,11 +371,10 @@ class MonOCR:
         # BACKGROUND and returns the gaps between lines. Inverting each crop
         # afterwards cannot recover a line that was never found.
         #
-        # An audit caught this after the probe was added to `preprocess` alone.
         # The probe is idempotent — once the corners are light a second call is a
         # no-op, pinned by `test_inverting_twice_returns_the_original` — so both
         # call sites are safe, and the per-crop one still covers `predict_line`.
-        img = normalize_polarity(img.convert("L") if img.mode != "L" else img)
+        img = normalize_polarity(to_grey(img))
 
         lines = self.segmenter.segment(img)
 

@@ -6,6 +6,8 @@ import (
 	"image/draw"
 	"math"
 	"sort"
+
+	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 )
 
 type LineSegmenter struct {
@@ -135,7 +137,7 @@ func suppressPageRules(mask []uint8, width, height int) bool {
 //
 // THREE MEASURED DIVERGENCES FROM THE PYTHON BINDING, none of them reconciled
 // here. The formula is published behaviour for anyone reading the profile, so
-// changing it changes output for this binding's users; that is an owner decision.
+// changing it changes output for this binding's users, so it is left as is.
 //
 //  1. SPAN IS 2*(window/2)+1, NOT window. The loop is [-overflow, +overflow] with
 //     overflow = window/2, so an EVEN window spans window+1 rows -- one MORE than
@@ -421,6 +423,11 @@ func mergeRuns(runs [][2]int, hist []int, maxGap, minLine int) [][2]int {
 }
 
 func (s *LineSegmenter) Segment(img image.Image) ([]SegmentResult, error) {
+	// Composite any transparency onto white before reading luminance: a
+	// transparent background stored as (0, 0, 0, 0) otherwise reads as black,
+	// which the `< 128` threshold below calls ink. A no-op on an opaque image.
+	img = imageio.FlattenOnWhite(img)
+
 	// Convert to Grayscale if needed (conceptually, we just need luminance)
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()

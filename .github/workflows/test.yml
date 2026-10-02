@@ -37,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -55,6 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         # 24, not the 20 in package.json's `engines.node` floor — GitHub
         # deprecated Node 20 runners on 2025-09-19 and silently substitutes 24
@@ -92,15 +96,7 @@ jobs:
       # it, dropped pnpm.onlyBuiltDependencies, and ran onnxruntime-node's
       # network postinstall unsandboxed. That is what failed here on 2026-08-15.
       - name: Install dependencies from the committed lockfile
-        # ff378ebe is the ANNOTATED TAG OBJECT for v6.0.10, not the commit it peels
-        # to (0977fd99, which the sibling monorepo pins for the same version). Both
-        # forms are immutable — a tag object's SHA hashes its name, target and
-        # message, so it cannot be repointed — but only the commit form resolves
-        # through `GET /repos/pnpm/action-setup/commits/<sha>`, which answers 422 on
-        # a tag object. That makes this pin read as fabricated to anyone verifying
-        # it that way, or as disagreeing with the monorepo. `git ls-remote --tags`
-        # shows both: refs/tags/v6.0.10 and refs/tags/v6.0.10^{}.
-        uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           # There is no package.json at the repo root — this tree ships four
           # bindings and the JS one lives in js/. Without this, action-setup
@@ -131,6 +127,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Commit-pinned for the reason release-rust.yml states at length, and with
       # the same commit so the two jobs cannot install different toolchains.
       - name: Set up Rust
@@ -184,8 +182,8 @@ jobs:
       #   RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin" \
       #     cargo test
       #
-      # With that set the full suite passes locally (28 lib + 14 doc-tests). That
-      # is a real and unrelated issue; it is not why this job was red.
+      # With that set the full suite passes locally (76 lib + 14 doc-tests at
+      # 0.5.0). That is a real and unrelated issue; it is not why this job was red.
       # PINNED, added 2026-09-03. This step had no `ref:`, so it took whatever was on
       # MonDevHub/monocr's default branch and this repository's Rust suite was validated
       # against a moving target. Two failure modes, and both had already happened in one
@@ -209,6 +207,7 @@ jobs:
       - name: Fetch the shared segmentation fixture
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: MonDevHub/monocr
           ref: dc5c8ae34303152dce7ce6552398b1307475fd40
           path: .fixtures-monorepo
@@ -253,6 +252,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -290,6 +291,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: All four bundled charsets are identical
         run: |
           set -euo pipefail
@@ -313,6 +316,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: No unrelated-language asides in authored files
         run: |
           set -euo pipefail
@@ -325,3 +330,82 @@ jobs:
             exit 1
           fi
           echo "clean: no authored file names an unrelated language"
+
+  # Lints every workflow in this repository for the defects that turn CI into
+  # a way in: unpinned actions, credentials persisted into the workspace,
+  # caches restored into publish jobs, template injection, over-broad tokens.
+  # The release workflows here hold `id-token: write`, so a defect in one of
+  # them is a defect in what gets published under this project's name.
+  #
+  # Scans the repository root (the action's default input, `.`), not only
+  # .github/workflows, so the CI gate and a local run cover the same files.
+  # Reproduce locally with:  uvx zizmor@1.30.1 --offline .
+  # The local run skips the online audits; this job runs them.
+  #
+  # `advanced-security: false` because uploading SARIF needs
+  # `security-events: write`, and results as annotations are readable by anyone
+  # who can see the run — the job log is not.
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the workflows
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: false
+          annotations: true
+
+  # Scans the full git history for committed credentials, not just the tree: a
+  # secret removed in a later commit is still in every clone. fetch-depth 0 is
+  # what makes the history available to scan.
+  #
+  # The gitleaks binary, not gitleaks-action: the action needs a paid licence
+  # once a repository is organization-owned, and the binary needs no token at
+  # all. Pinned to a version AND the SHA-256 of its
+  # release tarball, from the release's gitleaks_8.30.1_checksums.txt, so the
+  # URL cannot serve something else on a later day. TO BUMP: take the
+  # linux_x64 line from the new release's checksums file and verify it against
+  # a download before changing either value.
+  #
+  # `--redact` keeps any secret it finds out of the log. A finding is
+  # annotated as file and line only.
+  secrets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "${RUNNER_TEMP}/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum -c -
+          tar -xz -C "${RUNNER_TEMP}" -f "${RUNNER_TEMP}/gitleaks.tar.gz" gitleaks
+          "${RUNNER_TEMP}/gitleaks" version
+      - name: Scan the full history for secrets
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/gitleaks.json"
+          set +e
+          "${RUNNER_TEMP}/gitleaks" git --redact --verbose --no-banner --no-color \
+            --report-format json --report-path "$report" .
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            if [ -s "$report" ]; then
+              jq -r '.[] | "::error file=\(.File),line=\(.StartLine),title=gitleaks: \(.RuleID)::commit \(.Commit[0:12])"' "$report"
+            fi
+            exit "$status"
+          fi

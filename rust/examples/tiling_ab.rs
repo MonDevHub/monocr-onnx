@@ -1,16 +1,14 @@
 //! Squeezing against tiling, measured on THIS pipeline.
 //!
-//! The tiling direction has to be re-measured on a port before it is trusted,
-//! because the app segmenters are not the Python one. Until this example
-//! existed, no port
-//! had ever been measured — the numbers in the doc comment on `predict_page`
-//! came from an uncommitted Python harness.
+//! The tiling direction has to be measured on each port before it is trusted,
+//! because the ports' segmenters are not the Python one. This example produces
+//! the figures in the doc comment on `predict_page`.
 //!
-//! This reads a directory of pre-rendered line images with a `labels.txt`
-//! (produced by the Python A/B harness's `--dump-dir`), runs each image
-//! through this crate twice — once tiling, once squeezing — and reports the
-//! character error rate of each arm. Reading the same images the Python harness
-//! scored is the point: it isolates the pipeline as the variable rather than
+//! The input is a directory of pre-rendered line images plus a `labels.txt`
+//! holding one `<file name>\t<reference text>` entry per line. Each image runs
+//! through this crate twice — once tiling, once squeezing — and the example
+//! reports the character error rate of each arm, grouped by tile count. Scoring
+//! the same images in both arms isolates the choice under test rather than
 //! re-rendering and changing two things at once.
 //!
 //! Usage:

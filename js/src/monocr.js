@@ -1,8 +1,8 @@
 // onnxruntime-node and sharp are native modules: loading them costs a dlopen
 // and, on a fresh install, a postinstall download. They are required lazily so
-// that importing this package -- and running its test suite, which uses a fake
-// session and never touches either -- does not depend on them being built.
-// CI installs no native deps for the js job as a result.
+// that importing this package loads neither. The test suite replaces the
+// session with a fake, but several tests encode real PNG fixtures with sharp,
+// so CI installs the native dependencies from the lockfile before running it.
 let ort = null;
 function onnxRuntime() {
     if (ort === null) ort = require('onnxruntime-node');
@@ -121,6 +121,46 @@ function assertModelContract(session, charset, targetHeight, modelPath) {
     // the real dims of every output tensor, which are always concrete.
 }
 
+/**
+ * Raised when the model's scores cannot be decoded: a NaN or an infinity.
+ *
+ * The argmax below compares with `>`, and every comparison with NaN is false,
+ * so a NaN is never picked and never reported: a row of NaN decodes as class 0,
+ * the CTC blank, and the line comes back empty or short. A numeric failure in
+ * the runtime or the artifact then looks like a blank line. On real input the
+ * pinned model's scores are finite, so this only ever fires on such a failure.
+ */
+class ModelOutputError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ModelOutputError';
+    }
+}
+
+/**
+ * Open an image source the right way up.
+ *
+ * A path or a Buffer is decoded with its EXIF Orientation tag applied, so a
+ * phone photo stored sideways is read as it is displayed; sharp returns the
+ * stored pixels unless asked. A sharp instance the caller built is returned as
+ * given -- whoever built the pipeline owns its orientation, and the segmenter's
+ * crops come from an already-upright page.
+ *
+ * The other three bindings make the same split.
+ */
+function openImage(source) {
+    if (source && typeof source.metadata === 'function') return source;
+    return imaging()(source).autoOrient();
+}
+
+// White, for compositing a transparent image before it is converted to grey.
+// `.grayscale()` drops the alpha channel, so a transparent background stored as
+// (0, 0, 0, 0) -- the common encoding -- became black and dark text on it
+// vanished. The web and mobile apps flatten onto white before reading.
+// `flatten` is a no-op on an image with no alpha channel, and on an opaque one
+// it returns the colour unchanged (pinned in test/image-loading.test.js).
+const FLATTEN_ONTO_WHITE = { background: '#ffffff' };
+
 // Polarity. The model is trained on dark text on a light background and this
 // binding never checked which it was given.
 //
@@ -197,7 +237,8 @@ function normalizePolarity(gray, width, height) {
  * the pad, the normalisation — belongs to `preprocess`, per crop.
  */
 async function normalizePageForSegmentation(imagePath) {
-    const { data, info } = await imaging()(imagePath)
+    const { data, info } = await openImage(imagePath)
+        .flatten(FLATTEN_ONTO_WHITE)
         .grayscale()
         .raw()
         .toBuffer({ resolveWithObject: true });
@@ -299,12 +340,7 @@ class MonOCR {
      * is not one edit; grep the file for the old digit before claiming it.
      */
     async preprocess(imageSource) {
-        let sharpImg;
-        if (typeof imageSource.metadata === 'function') {
-            sharpImg = imageSource;
-        } else {
-            sharpImg = imaging()(imageSource);
-        }
+        const sharpImg = openImage(imageSource);
         // Dimensions come from the DECODED buffer, not from `metadata()`.
         //
         // `metadata()` reads the input header and, as sharp's own docs put it,
@@ -325,6 +361,7 @@ class MonOCR {
         // Materialising the grayscale raw buffer first costs one decode and
         // reports the true post-`extract` size in `info`.
         const { data: grayData, info } = await sharpImg
+            .flatten(FLATTEN_ONTO_WHITE)
             .grayscale()
             .raw()
             .toBuffer({ resolveWithObject: true });
@@ -433,6 +470,23 @@ class MonOCR {
                 `(+ 1 CTC blank = ${idx2char.length}).`
             );
         }
+        const expectedValues = dims.reduce((a, b) => a * b, 1);
+        if (dims.length !== 3 || dims[0] !== 1 || data.length !== expectedValues) {
+            throw new ModelContractError(
+                `Expected a [1, sequence, ${numClasses}] logits tensor, got dims ` +
+                `[${dims.join(', ')}] holding ${data.length} values.`
+            );
+        }
+        let nonFinite = 0;
+        for (let i = 0; i < data.length; i++) {
+            if (!Number.isFinite(data[i])) nonFinite++;
+        }
+        if (nonFinite > 0) {
+            throw new ModelOutputError(
+                `Model output holds ${nonFinite} non-finite value(s) (NaN or infinity) ` +
+                `out of ${data.length}; refusing to decode it into text.`
+            );
+        }
 
         let decodedText = "";
         let prevIdx = -1;
@@ -477,17 +531,13 @@ class MonOCR {
     /**
      * Processes full page: segments into lines and predicts each.
 
-     * NOTE (2026-08-16): this binding SQUEEZES a wide line into the model
-     * canvas. The Python binding tiles instead, cutting at whitespace columns.
+     * This binding SQUEEZES a wide line into the model canvas. The Python
+     * binding tiles instead, cutting at whitespace columns.
      *
-     * This comment used to quote `v3.5 squeezed 0.1434 against tiled 0.0795` and
-     * conclude "this binding is on the worse side of that". RETIRED 2026-08-22:
-     * that harness was never committed and the figures do not reproduce.
-     * Remeasured over 201 rendered lines, twice — Python arms and the Rust
-     * binding, in one A/B dated 2026-08-22 — the answer is
-     * width-dependent: squeezing wins at 2 tiles, the two arms are level at 3,
-     * and tiling wins from 4 up. On a real book page at 150 dpi every line
-     * fitted one tile, so tiling never engaged.
+     * Measured over 201 rendered lines, with the Python arms and the Rust
+     * binding: squeezing wins at 2 tiles, the two arms are level at 3, and
+     * tiling wins from 4 up. On a real book page at 150 dpi every line fitted
+     * one tile, so tiling never engaged.
      *
      * Porting `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py
      * is still worth doing — squeezing's downside on very wide input is
@@ -502,8 +552,7 @@ class MonOCR {
         // segmenter treats dark as ink (`grayBuffer[idx] < 128`), so handed a
         // light-on-dark page it segments the BACKGROUND and returns the gaps
         // between lines. Inverting each crop inside `preprocess` afterwards cannot
-        // recover a line that was never found. An audit caught this after the probe
-        // shipped in `preprocess` alone.
+        // recover a line that was never found.
         //
         // `segment` takes a path or a Buffer, so the page is normalised into a
         // Buffer first. The probe is idempotent — once the corners are light a
@@ -528,6 +577,8 @@ class MonOCR {
 
 module.exports = MonOCR;
 module.exports.ModelContractError = ModelContractError;
+module.exports.ModelOutputError = ModelOutputError;
+module.exports.openImage = openImage;
 // Exported for tests: the probe is the load-bearing half of preprocess.
 module.exports.normalizePolarity = normalizePolarity;
 module.exports.backgroundIsDark = backgroundIsDark;

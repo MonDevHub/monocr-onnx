@@ -33,12 +33,6 @@ All three publish by **trusted publishing (OIDC)**. There is no `PYPI_TOKEN`, no
 `id-token: write` mints a short-lived credential per run, and on npm it also attaches a
 provenance attestation tying the tarball to the run and the commit.
 
-**Corrected 2026-09-03.** This section used to open "Credentials are not on the dev
-machine by default" and tell you to check `npm whoami` and `~/.pypirc`. That describes a
-manual local publish, which is not how either binding ships and has not been since these
-workflows were written. It is plausibly why `0.3.0` has been tagged and unpublished:
-the runbook asked for a login, the workflows wanted a tag, and the two never met.
-
 ## The one-time registry setup, which is the actual blocker
 
 **Nothing here is a GitHub permission.** All three workflows already declare what they need:
@@ -137,7 +131,7 @@ present under the current version. Point at it:
 
 ```bash
 export RUSTFLAGS="-C link-arg=-L/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin"
-cargo test        # 28 lib tests + 14 doc-tests
+cargo test        # 76 lib tests + 14 doc-tests at 0.5.0
 ```
 
 Adjust `21` to whatever `ls /Library/Developer/CommandLineTools/usr/lib/clang/`
@@ -198,12 +192,12 @@ Irreversible. A PyPI version number can never be reused even after deletion, and
 npm `unpublish` closes after 72 hours.
 
 ```bash
-cd python && uv publish --token "$PYPI_TOKEN" ../dist/monocr_onnx-0.4.2*
-cd ../js  && npm publish ../dist/monocr-0.4.2.tgz --access public
+cd python && uv publish --token "$PYPI_TOKEN" ../dist/monocr_onnx-0.5.0*
+cd ../js  && npm publish ../dist/monocr-0.5.0.tgz --access public
 cd ../rust && cargo publish
 ```
 
-Go needs no registry step — modules resolve by tag, so pushing `go/v0.4.2` is the
+Go needs no registry step — modules resolve by tag, so pushing `go/v0.5.0` is the
 release.
 
 ## 5. Tag and push
@@ -214,8 +208,8 @@ nobody can find from `main`. Pull first, so the tag lands on what origin has:
 
 ```bash
 git checkout main && git pull origin main
-git log -1 --oneline        # the release commit, e.g. "chore(release): 0.4.2"
-for t in js python rust go; do git tag -a "$t/v0.4.2" -m "$t/v0.4.2"; done
+git log -1 --oneline        # the release commit, e.g. "chore(release): 0.5.0"
+for t in js python rust go; do git tag -a "$t/v0.5.0" -m "$t/v0.5.0"; done
 ```
 
 **Push each tag by name, one at a time.** Each push starts its own workflow, so a failure
@@ -223,10 +217,10 @@ is attributable to one binding, and the next push can wait until the previous ru
 green:
 
 ```bash
-git push origin js/v0.4.2
-git push origin python/v0.4.2
-git push origin rust/v0.4.2
-git push origin go/v0.4.2
+git push origin js/v0.5.0
+git push origin python/v0.5.0
+git push origin rust/v0.5.0
+git push origin go/v0.5.0
 ```
 
 Never `git push --tags`. It pushes every local tag, including stale or experimental ones,

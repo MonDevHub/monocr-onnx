@@ -253,7 +253,7 @@ func TestTheBoxSpansOneMoreRowThanAnEvenWindowAsks(t *testing.T) {
 // 2/3 of the true mean of the two rows in range, and at window 15 it is 8/15 of it.
 // JS and Rust divide by the rows they visited and report the true mean.
 // Recorded, not reconciled -- unifying the divisors changes output for at least one
-// binding's users, so it is an owner decision. See smoothProfile's header.
+// binding's users, so it is left as is. See smoothProfile's header.
 func TestTheDivisorIsTheRequestedWindow(t *testing.T) {
 	flat := make([]int, 60)
 	for i := range flat {
@@ -286,8 +286,9 @@ func TestTheDivisorIsTheRequestedWindow(t *testing.T) {
 // 16.36 at window 4. The default SmoothWindow is 3, so only a caller who passes an
 // even window or sets the exported field to one reaches it.
 //
-// This test pins the behaviour as it ships. Changing the divisor is an owner
-// decision, and this test is where the change would announce itself.
+// This test pins the behaviour as it ships. Changing the divisor changes output for
+// this binding's users, so it is left as is, and this test is where a change would
+// announce itself.
 func TestAnEvenWindowInflatesTheProfileAboveItsRawPeak(t *testing.T) {
 	profile := bandedProfile(30, 0, 300)
 	for window := 2; window <= 12; window++ {

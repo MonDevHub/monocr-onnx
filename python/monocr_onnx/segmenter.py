@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from .imaging import to_grey
+
 # Printed-rule suppression. A page border adds a constant ink floor to every row
 # it spans, and once that floor clears the gap threshold no in-frame row reads as
 # a gap: the page comes back as one band and is squeezed into the model window.
@@ -308,6 +310,12 @@ class LineSegmenter:
         Returns:
             list: List of dicts with keys 'img' (PIL.Image) and 'bbox' (x, y, w, h).
         """
+        # A PIL image is converted the way the predictor converts it: any
+        # transparency composited onto white first, or a transparent background
+        # reads as black and this binarisation calls it ink.
+        if isinstance(image, Image.Image):
+            image = to_grey(image)
+
         # Convert to CV2 grayscale
         img_np = np.array(image)
         if len(img_np.shape) == 3:

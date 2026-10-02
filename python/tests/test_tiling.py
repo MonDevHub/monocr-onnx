@@ -3,14 +3,11 @@
 `preprocess` clamps a line's width to the canvas, which compresses the whole
 line horizontally and breaks the aspect ratio the model was trained on.
 
-This docstring used to price that at `CER 0.1434 squeezed against 0.0795 tiled`.
-RETIRED 2026-08-22: that harness was never committed and the figures do not
-reproduce. Remeasured in an A/B over 201 rendered lines (2026-08-22), the cost
-is width-dependent — squeezing
-wins at 2 tiles, the two arms are level at 3, and tiling wins from 4 up.
+Measured over 201 rendered lines: squeezing wins at 2 tiles, the two arms are
+level at 3, and tiling wins from 4 up.
 
-These tests pin the mechanism rather than the preference, which is why the
-retirement does not change any assertion below.
+These tests pin the mechanism rather than the preference, so no assertion below
+depends on those figures.
 
 The cut position is the whole point. Cutting at an arbitrary pixel lands inside
 a glyph, and the model then reads each half as a whole character — upstream this

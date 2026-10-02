@@ -4,6 +4,178 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## 0.5.0 — 2026-10-01
+
+A minor release: the bindings raise new errors on a broken model output, and
+read EXIF-rotated and transparent images differently, now correctly. The model,
+the charset and the pinned revision are unchanged from 0.4.2. On an opaque image
+with no EXIF orientation tag, and a model that returns finite scores, every
+binding returns exactly what 0.4.2 returned (measured below).
+
+In short:
+
+- **New errors on a broken model output.** Logits holding a NaN or an infinity
+  raise `ModelOutputError` in Python, JavaScript and Rust, and return
+  `*predictor.OutputError` in Go, instead of decoding into a blank or wrong line.
+  Logits that are not `[1, T, C]`, with `C` the charset length plus one, are a
+  contract error in all four. Go's page and PDF calls fail on either rather than
+  returning an empty page, and JavaScript's `read_pdf` rethrows both as
+  themselves.
+- **EXIF orientation is applied** to a file the binding opens itself, and in
+  JavaScript to an encoded `Buffer`.
+- **Transparency is composited onto white** before the conversion to grey, so a
+  transparent background no longer reads as black.
+- **Go finds ONNX Runtime by the name its archives ship.** On Linux it asks the
+  loader for `libonnxruntime.so`, so `LD_LIBRARY_PATH` or `ldconfig` should find
+  it without `MONOCR_ONNXRUNTIME_PATH` (not yet run on Linux); on macOS it also
+  checks Intel Homebrew's `/usr/local/lib`.
+- **Rust's `read_pdf` works on Windows without `which`.** It probes
+  `pdftoppm -v` instead.
+- **Documentation.** The READMEs are reorganised and corrected, and describe
+  0.5.0; `CONTRIBUTING.md` is new; the Rust crate declares
+  `rust-version = "1.88"`, the floor `ort` 2.0.0-rc.11 already required.
+
+Upgrading:
+
+- A Go setup that renamed or linked the library to `onnxruntime.so` to suit the
+  old default now needs `MONOCR_ONNXRUNTIME_PATH`.
+- A dependency saved as `monocr@^0.4.x` on npm, or `monocr = "0.4"` in
+  `Cargo.toml`, stays on 0.4.x: on 0.x a caret range stops below the next minor.
+  Change it to `^0.5.0` or `"0.5"`.
+- Code that catches decoding failures should expect the new error types above.
+
+The details follow. The three input and decoding fixes are made the same way in
+all four bindings.
+
+- **A NaN or an infinity in the model output is an error, not text.** Greedy
+  CTC takes an argmax per timestep, and none of the four argmaxes rejected a
+  non-finite score: NumPy's picks the NaN, the JS, Go and Rust loops skip it
+  (every comparison with NaN is false), and `+inf` wins its timestep. A numeric
+  failure in the runtime or the artifact therefore came back as a blank, short
+  or wrong line. Measured on the old code with one NaN, `+inf` or `-inf`
+  injected at the blank of one timestep, all four returned text and no error;
+  depending on the value and the binding, the text was unchanged or gained a
+  character. Each decoder now refuses the tensor: Python and JS raise
+  `ModelOutputError`, Go returns `*predictor.OutputError`, Rust returns
+  `ModelOutputError`. Python now also checks the logits are `[1, T, C]` with
+  `C` equal to the charset length plus one, and JS that the data length matches
+  the dims. Go and Rust already checked the rank and the class axis, but
+  accepted any batch and a buffer longer than the shape, so a `[2, T, C]`
+  tensor decoded its first item; all four now require a batch of 1 and an
+  exact length. Go's image and PDF paths skip a line whose read fails, so one
+  bad crop does not lose the page. They still do, but an `OutputError` or
+  `ContractError` means the model is broken rather than the line, so those now
+  fail the read instead of returning an empty page.
+  JS's `read_pdf` wraps a failure while it converts or reads the pages in a
+  plain `Error`, and now rethrows these two as themselves. Its `init()` call
+  runs before that wrapper, so an error raised while the model loads, such as a
+  contract error, already propagated as itself.
+
+  No A/B was run for this one, deliberately. It can change output only when the
+  model returns a non-finite score, and there failing loudly is strictly better
+  than any text. On real input the scores are finite: measured on the pinned
+  `monocr.onnx` over the seven images in `data/images` through the Python page
+  path (26 model calls), every score was finite and they ranged from -22.1 to
+  +35.7.
+
+- **EXIF orientation is applied.** None of the four bindings read the
+  Orientation tag, so a photo stored sideways (tags 2-8) reached the model
+  mirrored or rotated. Python now opens files with Pillow's `exif_transpose`,
+  JS with sharp's `autoOrient()`, and Go (`pkg/imageio`) and Rust read the tag
+  from a JPEG APP1 segment or a PNG eXIf chunk themselves, without a new
+  dependency, accepting it stored as SHORT or as LONG. Only a file the binding
+  decodes, or in JavaScript an encoded `Buffer`, is oriented; an image the
+  caller already decoded (a PIL `Image`, a sharp instance, an `image.Image`) is
+  left as given.
+
+- **Transparency is composited onto white.** Converting RGBA to grey dropped
+  the alpha channel in all four, so a transparent background stored as
+  (0, 0, 0, 0), the common encoding, read as black. The polarity probe then
+  inverted the page and the dark text became near-white. Every greyscale
+  conversion, in the line path, the page path and the segmenters, now
+  composites onto white first, as the web and mobile apps do; the one exception
+  is a NumPy array handed straight to Python's segmenter. In Python, Go and
+  Rust only an image with a pixel that is not fully opaque is composited; an
+  opaque one, including RGBA with alpha 255 everywhere such as
+  `data/images/pdf_screenshot.png`, takes the old conversion unchanged.
+  JavaScript flattens every image, which returns an opaque one's pixels
+  unchanged.
+
+The orientation and transparency fixes are correctness and parity fixes: they
+change output only for an EXIF-tagged or transparent input, which was read
+wrongly before. The evidence:
+
+- **Shared fixtures**, `data/fixtures/input/`, generated by
+  `scripts/generate_input_fixtures.py`: an upright image, one JPEG per
+  orientation tag 1-8, a big-endian tag, a PNG eXIf tag, a transparent PNG with
+  its expected composite, and an opaque RGBA PNG. Each binding's new tests load
+  them through the binding's own path. Before, tags 2-8 differed from the
+  upright image by up to 1.8-2.0 in model-input units (the full range is 2.0),
+  and the transparent PNG by 1.6-1.8. After, both differ by 0.000 in all four.
+  Each guard in this entry was reverted on its own and its test failed, with
+  one exception. That includes the Go and Rust bounds on the PNG chunk length
+  and Go's on the IFD offset: without one, a crafted chunk length or an IFD
+  offset past the end of the buffer panics, or has a tag read from bytes past
+  the chunk, where the tests expect no orientation. The exception is Rust's IFD
+  bound: every read after it is checked already, so on a 64-bit machine
+  removing it changes no outcome. Nor does writing the bounds so that they
+  cannot overflow rather than as a plain sum; that form matters only on a
+  32-bit target, which no test here runs on.
+- **Opaque, untagged input is byte-identical.** Each binding has a test that
+  its new loader returns the same bytes as the old path for all seven images in
+  `data/images` and the opaque fixtures. With the real model, all four bindings
+  return the same text before and after for all seven images.
+- **Real-model check on derived inputs**, not committed: two of those images
+  stored with each orientation tag 2-8 as lossless PNG read identically to the
+  upright image in all four bindings (7 of 7 each). One of them stored as JPEG
+  instead read at CER 0.78-1.00 against the upright image before the fix. After,
+  tags 2-4 read identically and tags 5-8 at CER 0.032-0.055: re-encoding a
+  transposed image changes its JPEG blocks, so those pixels are not quite the
+  upright image's. A transparent copy of two images read 0 characters before
+  and exactly the opaque original's text after, in all four.
+
+Not covered: Go and Rust read the tag only from JPEG and from a PNG eXIf chunk
+placed before the image data. Python and JS use their imaging libraries and
+also honour it in other containers such as TIFF and WebP, and Python in a few
+non-standard PNG placements; `docs/CROSS_BINDING_PARITY.md` lists them. Go
+decodes only JPEG and PNG anyway; Rust's `image` crate decodes more formats
+than that.
+
+Also in this release:
+
+- **The Python transparency check does not need Pillow 10.1.** It first used
+  `Image.has_transparency_data`, which arrived in Pillow 10.1, while
+  `pyproject.toml` allows 9.0. The test is now written out, and the suite passes
+  on Pillow 9.2, 9.3, 9.4, 9.5, 10.0.1 and 10.1. Pillow 9.0 and 9.1 publish no
+  cp311 wheels, so the Python 3.11 floor cannot install them from a wheel, and
+  they were not tried.
+- **Rust: `read_pdf` no longer needs `which`.** It checked for poppler with
+  `which pdftoppm`, which Windows does not have, so PDF reading failed on a
+  Windows machine with poppler on its PATH. It now starts `pdftoppm -v` and
+  reports only a missing executable as "pdftoppm not found: please install
+  poppler-utils", the same message as before. Python goes through `pdf2image`,
+  JS runs `pdftoppm -v` and Go uses `exec.LookPath`, so none of them had this
+  problem.
+- **Go: on Linux the ONNX Runtime library is asked for by the name the archives
+  ship.** With `MONOCR_ONNXRUNTIME_PATH` unset the wrapper loaded its default
+  name, `onnxruntime.so`. The official `onnxruntime-linux-x64-1.24.1.tgz` has only
+  `libonnxruntime.so`, `.so.1` and `.so.1.24.1`, and `dlopen` adds no `lib`
+  prefix, so the README's `LD_LIBRARY_PATH` setup never loaded anything. The SDK
+  now asks for `libonnxruntime.so` on Linux. On macOS it checks the Intel
+  Homebrew path, `/usr/local/lib`, after the Apple-silicon one, then asks for
+  `libonnxruntime.dylib`. On Windows it is unchanged, `onnxruntime.dll`, which
+  is what the release zips ship. Measured on macOS: a bare
+  `libonnxruntime.dylib` loaded through `DYLD_LIBRARY_PATH` and
+  `DYLD_FALLBACK_LIBRARY_PATH`. With neither set, `dlopen` tried only the working
+  directory and `/usr/lib`, not `/usr/local/lib`, which is why the Intel path is
+  checked by name. Loading on Linux has not been run. A setup that renamed or
+  linked the library to `onnxruntime.so` to suit the old default now needs
+  `MONOCR_ONNXRUNTIME_PATH`.
+- **The packages carry the licence.** The npm tarball, the crate and the Python
+  wheel and sdist shipped no `LICENSE`, although `js/package.json` listed one in
+  `files`. A copy of the root `LICENSE` now sits in `js/`, `rust/` and
+  `python/`, so each package includes it.
+
 ## 0.4.2 — 2026-09-24
 
 A patch release. The model, the charset, the pinned revision and every binding's
@@ -19,9 +191,8 @@ API are unchanged from 0.4.1.
   next minor, so that installed 0.3.2, which returns noise (see 0.4.0). It is now
   `^0.4.1`. The pip and uv lines floor at `>=0.4.1` and the crates.io README's
   snippet is `monocr = "0.4"` (it was `"0.3"`, which resolved to 0.3.1).
-- **Root README version table** shows 0.4.2 as this release for all four
-  bindings, beside what each registry answered when last queried (0.4.1 on
-  2026-09-24), so the table is not false in the window between tag and publish.
+- **Root README version table** shows 0.4.2 for all four bindings, beside what
+  each registry answered when last queried.
 - **Public-doc corrections.** The Python README quotes the model card's held-out
   CER (0.0100 on 150 unseen rendered lines, 95% interval [0.0056, 0.0147]) and
   its synthetic-renderer caveat instead of an unspecified "validation figure",
