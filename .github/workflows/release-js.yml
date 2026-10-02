@@ -66,15 +66,12 @@ jobs:
       # resolved — not something to fold into a security pin, especially under the
       # Node-24 substitution the comment above describes.
       #
-      # zizmor's cache-poisoning audit flags this step, and at this pin it is a
-      # false positive: v4.4.0 restores and saves a cache only when the `cache:`
-      # input is set (src/main.ts, `if (cache && isCacheFeatureAvailable())`),
-      # and it is not set here. The audit's remedy, `package-manager-cache:
-      # false`, is an input v4.4.0 does not have — later majors added it along
-      # with automatic caching. WHEN BUMPING setup-node past v4, add that input
-      # and drop the ignore, or a publish job holding `id-token: write` starts
-      # restoring a cache that other workflow runs in the repository write.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 # zizmor: ignore[cache-poisoning] see above
+      # v4.4.0 restores and saves a cache only when the `cache:` input is set,
+      # and it is not set here. Later majors cache automatically: WHEN BUMPING
+      # setup-node past v4, add `package-manager-cache: false`, or a publish job
+      # holding `id-token: write` starts restoring a cache that other workflow
+      # runs in the repository write.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
 
@@ -94,8 +91,7 @@ jobs:
       # followed on 2026-09-30), so it is what `npm@11` was resolving to, and it
       # is past the seven-day release-age cooldown.
       #
-      # zizmor's adhoc-packages audit flags any install outside a lockfile,
-      # because pinning a package does not pin its dependencies. npm is the
+      # Pinning a package does not usually pin its dependencies. npm is the
       # exception: all of its dependencies are bundled inside its own tarball
       # (`bundleDependencies` lists every one of them), so the single file
       # checked here is the whole install, and nothing else is resolved.
@@ -107,7 +103,7 @@ jobs:
         env:
           NPM_VERSION: 11.20.0
           NPM_SHA256: d1a92f40e6c407b84c3a00c3cf978a10b24fd42f153c527e2016cef7bb34a483
-        run: | # zizmor: ignore[adhoc-packages] exact version, hash-checked, every dependency bundled in the tarball
+        run: |
           set -euo pipefail
           curl -sSfL -o "${RUNNER_TEMP}/npm.tgz" \
             "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
