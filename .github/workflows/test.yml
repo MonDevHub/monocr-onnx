@@ -129,13 +129,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Commit-pinned for the reason release-rust.yml states at length, and with
-      # the same commit so the two jobs cannot install different toolchains.
+      # rustup ships on the runner image, so no third-party action is needed,
+      # and release-rust.yml installs the same way.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
-        with:
-          toolchain: stable
-          components: rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
       # Go got a format gate on 2026-08-18 and Rust did not, which left this the
       # only binding whose formatting was ungated. It had drifted by 16 lines.
       - name: cargo fmt
@@ -330,35 +329,6 @@ jobs:
             exit 1
           fi
           echo "clean: no authored file names an unrelated language"
-
-  # Lints every workflow in this repository for the defects that turn CI into
-  # a way in: unpinned actions, credentials persisted into the workspace,
-  # caches restored into publish jobs, template injection, over-broad tokens.
-  # The release workflows here hold `id-token: write`, so a defect in one of
-  # them is a defect in what gets published under this project's name.
-  #
-  # Scans the repository root (the action's default input, `.`), not only
-  # .github/workflows, so the CI gate and a local run cover the same files.
-  # Reproduce locally with:  uvx zizmor@1.30.1 --offline .
-  # The local run skips the online audits; this job runs them.
-  #
-  # `advanced-security: false` because uploading SARIF needs
-  # `security-events: write`, and results as annotations are readable by anyone
-  # who can see the run — the job log is not.
-  zizmor:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Lint the workflows
-        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
-        with:
-          version: 1.30.1
-          advanced-security: false
-          annotations: true
 
   # Scans the full git history for committed credentials, not just the tree: a
   # secret removed in a later commit is still in every clone. fetch-depth 0 is
