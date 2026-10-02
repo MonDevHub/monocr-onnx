@@ -1,7 +1,8 @@
 [package]
 name = "monocr"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
+rust-version = "1.88"
 description = "On-device Mon (mnw) OCR, powered by ONNX Runtime"
 license = "MIT"
 authors = ["Janakh"]

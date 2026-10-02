@@ -10,7 +10,9 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strings"
 
+	"github.com/MonDevHub/monocr-onnx/go/pkg/imageio"
 	"github.com/yalue/onnxruntime_go"
 	"golang.org/x/image/draw"
 )
@@ -41,6 +43,20 @@ type ContractError struct {
 }
 
 func (e *ContractError) Error() string { return "model contract violation: " + e.Msg }
+
+// OutputError reports model scores that cannot be decoded: a NaN or an
+// infinity.
+//
+// The argmax in decode compares with `>`, which is false for every NaN, so a
+// NaN was skipped silently and a row of them decoded as class 0, the CTC blank;
+// +Inf simply won its timestep. A numeric failure in the runtime or the
+// artifact then read as a blank or wrong line. On real input the pinned model's
+// scores are finite, so this is only returned on such a failure.
+type OutputError struct {
+	Msg string
+}
+
+func (e *OutputError) Error() string { return "model output is not decodable: " + e.Msg }
 
 type Predictor struct {
 	session *onnxruntime_go.DynamicAdvancedSession
@@ -116,6 +132,34 @@ const SharedLibraryPathEnv = "MONOCR_ONNXRUNTIME_PATH"
 // fallback on darwin when the environment variable is unset.
 const homebrewLibPath = "/opt/homebrew/lib/libonnxruntime.dylib"
 
+// intelHomebrewLibPath is where Homebrew installs it on an Intel Mac. It is
+// checked by path because the loader does not search /usr/local/lib for a bare
+// name: measured on macOS with a binary built by Go 1.26, dlopen of a bare name
+// tried the working directory and /usr/lib and nothing else.
+const intelHomebrewLibPath = "/usr/local/lib/libonnxruntime.dylib"
+
+// bareLibraryName is the file name handed to the platform loader when no path
+// applies, so it searches LD_LIBRARY_PATH (or DYLD_LIBRARY_PATH) and the
+// system directories for it.
+//
+// Saying nothing is not an option on Linux or macOS. The wrapper's own default
+// there is "onnxruntime.so", and no official ONNX Runtime archive ships that
+// name: onnxruntime-linux-x64-1.24.1.tgz has lib/libonnxruntime.so (a link to
+// .so.1, a link to .so.1.24.1), and dlopen does not add a "lib" prefix. So the
+// documented LD_LIBRARY_PATH setup never loaded anything. On Windows the
+// wrapper's default, onnxruntime.dll, is what the release zips ship, so ""
+// still defers to it.
+func bareLibraryName(goos string) string {
+	switch goos {
+	case "windows":
+		return ""
+	case "darwin":
+		return "libonnxruntime.dylib"
+	default:
+		return "libonnxruntime.so"
+	}
+}
+
 // loadedVersion is the version string of the ONNX Runtime that initEnvironment
 // actually loaded, recorded once so errors and reports can name it. Empty until
 // initialisation has been attempted.
@@ -129,10 +173,11 @@ var loadedVersion string
 // of a result — it identifies the runtime that produced it.
 func RuntimeVersion() string { return loadedVersion }
 
-// resolveSharedLibraryPath picks the shared library to hand to the wrapper.
-// It returns "" to mean "say nothing and let the platform loader decide".
+// resolveSharedLibraryPath picks the shared library to hand to the wrapper: a
+// path, a bare name for the platform loader to search for (bareLibraryName),
+// or "" on Windows to keep the wrapper's own default.
 //
-// Precedence is explicit request, then platform default, then the loader. An
+// Precedence is explicit request, then a known install path, then the loader. An
 // explicit request that does not exist is an error rather than a silent
 // fallthrough: someone who set the variable is choosing a runtime, and quietly
 // loading a different one is the failure this whole change exists to prevent.
@@ -143,10 +188,14 @@ func resolveSharedLibraryPath(goos string, getenv func(string) string, exists fu
 		}
 		return p, nil
 	}
-	if goos == "darwin" && exists(homebrewLibPath) {
-		return homebrewLibPath, nil
+	if goos == "darwin" {
+		for _, p := range []string{homebrewLibPath, intelHomebrewLibPath} {
+			if exists(p) {
+				return p, nil
+			}
+		}
 	}
-	return "", nil
+	return bareLibraryName(goos), nil
 }
 
 func fileExists(path string) bool {
@@ -209,8 +258,11 @@ func InitRuntime() error { return initEnvironment() }
 
 // describeSource names where the runtime was loaded from, for error messages.
 func describeSource(libPath string) string {
-	if libPath == "" {
-		return "the system library path"
+	switch {
+	case libPath == "":
+		return "the wrapper's default name, searched on the system library path"
+	case !strings.ContainsAny(libPath, `/\`):
+		return libPath + ", searched on the system library path"
 	}
 	return libPath
 }
@@ -441,7 +493,7 @@ func (p *Predictor) preprocess(img image.Image) ([]float32, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("cannot preprocess an empty image")
 	}
 
-	img = NormalizePolarity(img)
+	img = NormalizePolarity(imageio.FlattenOnWhite(img))
 
 	targetHeight := p.targetHeight
 	targetWidth := p.targetWidth
@@ -494,9 +546,26 @@ func (p *Predictor) decode(preds []float32, shape onnxruntime_go.Shape) (string,
 			"charset/model mismatch at decode time: charset has %d characters -> expects %d classes, tensor has %d",
 			len(p.charset), expected, numClasses)}
 	}
-	if need := seqLen * numClasses; len(preds) < need {
+	// An exact length and a batch of 1, as the other three bindings require. A
+	// [2, T, C] tensor used to decode its first item and drop the second.
+	batch := int(shape[0])
+	if need := batch * seqLen * numClasses; len(preds) != need {
 		return "", &ContractError{Msg: fmt.Sprintf(
 			"output tensor holds %d values, shape %v needs %d", len(preds), shape, need)}
+	}
+	if batch != 1 {
+		return "", &ContractError{Msg: fmt.Sprintf("expected a batch of 1, got shape %v", shape)}
+	}
+	nonFinite := 0
+	for _, v := range preds {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			nonFinite++
+		}
+	}
+	if nonFinite > 0 {
+		return "", &OutputError{Msg: fmt.Sprintf(
+			"%d non-finite value(s) (NaN or infinity) out of %d; refusing to decode them into text",
+			nonFinite, len(preds))}
 	}
 
 	var decoded []rune

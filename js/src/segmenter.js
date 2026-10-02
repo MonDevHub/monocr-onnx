@@ -132,7 +132,7 @@ function suppressPageRules(binary, width, height) {
  *     side. On a page cropped flush to the ink the threshold moved 0.21% at
  *     window 3 (17.2455 here against Go's 17.2096) and 1.17% at window 15, and no
  *     band count changed. Unifying the divisors would change output for users of
- *     at least one binding, so it is an owner decision, not a cleanup.
+ *     at least one binding, so it is left as is.
  */
 function smoothProfile(hist, window) {
     if (window <= 1) return hist;
@@ -356,14 +356,24 @@ class LineSegmenter {
      * @returns {Promise<Array<{img: sharp.Sharp, bbox: {x: number, y: number, w: number, h: number}}>>}
      */
     async segment(imagePath) {
-        const image = imaging()(imagePath);
-        const { width, height } = await image.metadata();
-        
-        // 1. Get raw grayscale data for thresholding
-        const grayBuffer = await image
+        // Read the way it is displayed, as MonOCR reads it: EXIF orientation
+        // applied, transparency composited onto white (a transparent background
+        // otherwise reads as black, which this threshold calls ink). Both are
+        // no-ops on an opaque, untagged image. MonOCR.predictPage hands this an
+        // already-normalised page, so for that path nothing changes.
+        const image = imaging()(imagePath).autoOrient().flatten({ background: '#ffffff' });
+
+        // 1. Get raw grayscale data for thresholding.
+        //
+        // Dimensions come from the decoded buffer, not from `metadata()`, which
+        // reports the STORED size: for EXIF tags 5-8 that is the transpose of
+        // the image the pixels below describe. Crops taken by `extract` are in
+        // the oriented coordinates, the same as these.
+        const { data: grayBuffer, info } = await image
             .grayscale()
             .raw()
-            .toBuffer();
+            .toBuffer({ resolveWithObject: true });
+        const { width, height } = info;
 
         // 2. Simple Adaptive-ish Thresholding
         // Since we don't have CV2's adaptiveThreshold easily, we'll do a simple threshold 

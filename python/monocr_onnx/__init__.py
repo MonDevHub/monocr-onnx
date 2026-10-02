@@ -1,5 +1,5 @@
 from .ocr import read_image, read_images, read_pdf, read_pdfs, read_image_with_accuracy
-from .predictor import MonOCR, ModelContractError
+from .predictor import MonOCR, ModelContractError, ModelOutputError
 from .model_manager import ModelManager, ModelDownloadError
 
 # Read from the installed metadata, so pyproject.toml is the only place a
@@ -25,6 +25,7 @@ __all__ = [
     "read_image_with_accuracy",
     "MonOCR",
     "ModelContractError",
+    "ModelOutputError",
     "ModelManager",
     "ModelDownloadError",
 ]

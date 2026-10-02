@@ -1,5 +1,5 @@
 const MonOCR = require('./monocr');
-const { ModelContractError } = require('./monocr');
+const { ModelContractError, ModelOutputError } = require('./monocr');
 const ModelManager = require('./model-manager');
 const { MODEL_REVISION } = require('./model-manager');
 const { calculateAccuracy } = require('./utils');
@@ -11,6 +11,9 @@ module.exports = {
     // would rather degrade than decode with a mismatched vocabulary; do not
     // swallow it, because what it prevents is confident wrong text.
     ModelContractError,
+    // Thrown when the model returns NaN or infinite scores. Without it such a
+    // failure decoded as a blank or truncated line.
+    ModelOutputError,
     MODEL_REVISION,
     calculateAccuracy,
     read_image,
@@ -116,6 +119,9 @@ async function read_pdf(pdfPath, modelPath = null, charsetPath = null) {
         
         return pages;
     } catch (err) {
+        // A broken model is rethrown as itself, so `instanceof` still works on
+        // the PDF path the way it does on the image path.
+        if (err instanceof ModelOutputError || err instanceof ModelContractError) throw err;
         throw new Error(`Failed to process PDF: ${err.message}`);
     } finally {
         // Cleanup

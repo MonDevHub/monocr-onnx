@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::image_io::load_grey;
 use crate::model_manager::ModelManager;
 use crate::segmenter::{tile_line, LineSegment, LineSegmenter, DEFAULT_DENSITY_THRESHOLD_RATIO};
 use crate::utils::calculate_accuracy;
@@ -150,10 +151,12 @@ pub fn normalize_polarity(image: &GrayImage) -> Cow<'_, GrayImage> {
 /// the pad, the normalisation — belongs to [`MonOcr::preprocess`], per crop.
 /// This mirrors `js/src/monocr.js`'s `normalizePageForSegmentation` and
 /// `go/monocr.go`'s `predictImage`.
+///
+/// [`load_grey`] applies the EXIF orientation and flattens transparency onto
+/// white before polarity is judged: a transparent background would otherwise
+/// read as black, and the probe would invert the page into near-white text.
 fn page_for_segmentation(image_path: &Path) -> Result<GrayImage> {
-    let page = image::open(image_path)
-        .with_context(|| format!("cannot open {}", image_path.display()))?
-        .to_luma8();
+    let page = load_grey(image_path)?;
     Ok(normalize_polarity(&page).into_owned())
 }
 
@@ -185,6 +188,24 @@ impl fmt::Display for ModelContractError {
 }
 
 impl std::error::Error for ModelContractError {}
+
+/// Model scores that cannot be decoded: a NaN or an infinity.
+///
+/// The argmax in the decoder compares with `>`, which is false for every NaN,
+/// so a NaN was skipped silently and a row of them decoded as class 0, the CTC
+/// blank; `+inf` simply won its timestep. A numeric failure in the runtime or
+/// the artifact then read as a blank or wrong line. On real input the pinned
+/// model's scores are finite, so this is only returned on such a failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOutputError(pub String);
+
+impl fmt::Display for ModelOutputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "model output is not decodable: {}", self.0)
+    }
+}
+
+impl std::error::Error for ModelOutputError {}
 
 /// Strip line terminators, and nothing else.
 ///
@@ -482,8 +503,7 @@ impl MonOcrBuilder {
     /// has to happen on each port before either is trusted, and which was
     /// impossible while the squeeze arm was unreachable.
     ///
-    /// An A/B over 201 rendered lines (2026-08-22) found the answer
-    /// is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
+    /// Measured over 201 rendered lines, the answer is width-dependent: squeezing is mildly better up to 3 tiles and 3.7x to
     /// 24x worse from 4 tiles up, where it drives CER above 0.9. Tiling is the
     /// safe default because its downside is bounded and squeezing's is not.
     pub fn tile_wide_lines(mut self, tile: bool) -> Self {
@@ -879,15 +899,7 @@ impl MonOcr {
 
         let pdf_path = pdf_path.as_ref();
 
-        // Check for pdftoppm
-        let check = Command::new("which").arg("pdftoppm").output().await;
-
-        if check.is_err() || !check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-            anyhow::bail!("pdftoppm not found: please install poppler-utils");
-        }
-        if check.as_ref().map(|o| o.stdout.is_empty()).unwrap_or(true) {
-            anyhow::bail!("pdftoppm not found: please install poppler-utils");
-        }
+        require_program("pdftoppm").await?;
 
         // Create temp directory
         let temp_dir = tempfile::tempdir()?;
@@ -1041,7 +1053,7 @@ impl MonOcr {
     /// A line wider than the model window is tiled by
     /// [`crate::segmenter::tile_line`], not squeezed.
     ///
-    /// Measured on **this** binding, 2026-08-22, over 201 rendered Mon lines by
+    /// Measured on **this** binding over 201 rendered Mon lines by
     /// `examples/tiling_ab.rs`. The answer depends on how wide the line is:
     ///
     /// ```text
@@ -1059,11 +1071,9 @@ impl MonOcr {
     /// argument — the downside is a fraction of a point on already-low rates, and
     /// the upside is not losing the line.
     ///
-    /// Char-level CER here; the 2026-08-22 A/B over 201 rendered lines scores the same
-    /// images by grapheme cluster and finds the same crossover. That report also
-    /// records that these numbers do **not** reproduce the older
-    /// squeezed-0.1434-against-tiled-0.0795 figures quoted elsewhere, whose
-    /// harness was never committed.
+    /// Char-level CER here; scored by grapheme cluster, the same images give the
+    /// same crossover: squeezing wins at 2 tiles, the two are level at 3, and
+    /// tiling wins from 4.
     ///
     /// The measurement is one held-out font at one size, on rendered lines rather
     /// than photographed pages. If the pinned model moves, re-run the example
@@ -1081,10 +1091,9 @@ impl MonOcr {
         // between lines. Inverting each crop inside `preprocess` afterwards
         // cannot recover a line that was never found.
         //
-        // The three sibling bindings all fixed this after an audit caught the
-        // probe sitting in `preprocess` alone — `go/monocr.go` `predictImage`,
-        // `js/src/monocr.js` `predictPage`, `python/monocr_onnx/predictor.py`
-        // `predict_page`. This binding had the probe in neither place.
+        // The other three bindings order it the same way: `go/monocr.go`
+        // `predictImage`, `js/src/monocr.js` `predictPage`,
+        // `python/monocr_onnx/predictor.py` `predict_page`.
         //
         // The probe is idempotent, so the per-crop call in `preprocess_line` still
         // covers `predict_single_line` without fighting this one.
@@ -1129,9 +1138,7 @@ impl MonOcr {
         image_path: impl AsRef<Path>,
     ) -> Result<LineResult> {
         let image_path = image_path.as_ref();
-        let crop = image::open(image_path)
-            .with_context(|| format!("cannot open {}", image_path.display()))?
-            .to_luma8();
+        let crop = load_grey(image_path)?;
 
         let (w, h) = crop.dimensions();
         if w == 0 || h == 0 {
@@ -1268,7 +1275,11 @@ impl MonOcr {
 /// as [`segment_page`]: the polarity step below is otherwise reachable only
 /// through a loaded ONNX session, and a mutation that deleted it survived the
 /// whole suite.
-fn preprocess_line(image: &GrayImage, target_height: u32, target_width: u32) -> Array4<f32> {
+pub(crate) fn preprocess_line(
+    image: &GrayImage,
+    target_height: u32,
+    target_width: u32,
+) -> Array4<f32> {
     // Per crop, which is what the single-line path needs: `predict_single_line`
     // never reaches the page-level probe in `segment_page`. On a page the probe
     // has already run and this call is a no-op, because it is idempotent.
@@ -1302,6 +1313,31 @@ fn preprocess_line(image: &GrayImage, target_height: u32, target_width: u32) -> 
     tensor
 }
 
+/// Check that `program` can be started, by running `program -v`.
+///
+/// This used to ask `which`, which Windows does not have, so `read_pdf` failed
+/// on a Windows machine with poppler on its PATH. Starting the program itself
+/// works wherever it can be run later. Only a missing executable (`NotFound`)
+/// is reported as not installed; the exit status is ignored, because the probe
+/// asks whether the program exists, not what `-v` returns.
+async fn require_program(program: &str) -> Result<()> {
+    use std::process::Stdio;
+    let status = tokio::process::Command::new(program)
+        .arg("-v")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match status {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("{program} not found: please install poppler-utils")
+        }
+        Err(e) => Err(anyhow::Error::new(e).context(format!("cannot run {program}"))),
+    }
+}
+
 /// CTC greedy decode of a flat logits buffer.
 ///
 /// Free-standing so it can be exercised without an ONNX session.
@@ -1330,11 +1366,31 @@ fn decode_ctc(charset: &[char], data: &[f32], shape: &[usize]) -> Result<String>
         ))
         .into());
     }
-    if data.len() < sequence_length * num_classes {
+    // An exact length and a batch of 1, as the other three bindings require. A
+    // [2, T, C] tensor used to decode its first item and drop the second.
+    let batch = shape[0];
+    let need = batch
+        .checked_mul(sequence_length)
+        .and_then(|n| n.checked_mul(num_classes));
+    if need != Some(data.len()) {
         return Err(ModelContractError(format!(
             "output tensor holds {} values, shape {shape:?} needs {}",
             data.len(),
-            sequence_length * num_classes
+            need.map_or_else(|| "more than fits".to_string(), |n| n.to_string())
+        ))
+        .into());
+    }
+    if batch != 1 {
+        return Err(
+            ModelContractError(format!("expected a batch of 1, got shape {shape:?}")).into(),
+        );
+    }
+    let non_finite = data.iter().filter(|v| !v.is_finite()).count();
+    if non_finite > 0 {
+        return Err(ModelOutputError(format!(
+            "{non_finite} non-finite value(s) (NaN or infinity) out of {}; \
+             refusing to decode them into text",
+            data.len()
         ))
         .into());
     }
@@ -1718,6 +1774,91 @@ mod tests {
         decode_ctc(&charset, &data, &[1, 0, PINNED_CLASSES]).expect_err("empty sequence axis");
         decode_ctc(&charset, &data, &[1, 16, PINNED_CLASSES])
             .expect_err("shape larger than the buffer");
+        decode_ctc(&charset, &data, &[1, 4, PINNED_CLASSES])
+            .expect_err("shape smaller than the buffer");
+        // A batch of two used to decode the first item and drop the second. The
+        // buffer holds both items, so only the batch check can refuse it.
+        let err =
+            decode_ctc(&charset, &data, &[2, 4, PINNED_CLASSES]).expect_err("batch other than 1");
+        assert!(err.to_string().contains("batch of 1"), "{err}");
+    }
+
+    /// A missing program is reported as not installed, without `which`.
+    #[tokio::test]
+    async fn require_program_reports_a_missing_program_as_not_installed() {
+        let err = require_program("monocr-no-such-program")
+            .await
+            .expect_err("a missing program must be refused");
+        assert_eq!(
+            err.to_string(),
+            "monocr-no-such-program not found: please install poppler-utils"
+        );
+    }
+
+    /// A program on PATH passes, whatever its `-v` exits with. `cargo` is on
+    /// PATH wherever this suite runs.
+    #[tokio::test]
+    async fn require_program_accepts_a_program_on_path() {
+        require_program("cargo").await.expect("cargo is on PATH");
+    }
+
+    /// The page path reads a file the way it is displayed: EXIF orientation
+    /// applied and transparency flattened onto white BEFORE the polarity probe.
+    /// Without the flattening the (0, 0, 0, 0) background reads black, the probe
+    /// inverts the page, and the dark text comes out near-white.
+    #[test]
+    fn the_page_path_reads_oriented_and_transparent_files_as_displayed() {
+        let fixture = |n: &str| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../data/fixtures/input")
+                .join(n)
+        };
+        let page = page_for_segmentation(&fixture("orient-6.jpg")).unwrap();
+        assert_eq!(page.dimensions(), (64, 32));
+
+        let page = page_for_segmentation(&fixture("alpha-text.png")).unwrap();
+        assert_eq!(page.get_pixel(0, 0)[0], 255);
+        let darkest = page.pixels().map(|p| p[0]).min().unwrap();
+        assert!(darkest < 64, "darkest pixel {darkest}: the text was lost");
+    }
+
+    /// A NaN or an infinity in the logits must fail the read, not decode. The
+    /// argmax compares with `>`, false for every NaN, so before this guard a NaN
+    /// was skipped silently and `+inf` simply won its timestep. On real input
+    /// the pinned model's scores are finite; this only fires on a numeric
+    /// failure.
+    #[test]
+    fn decode_refuses_non_finite_logits() {
+        let charset: Vec<char> = "abc".chars().collect();
+        let num_classes = charset.len() + 1;
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let argmax = [1usize, 0, 2];
+            let mut data = vec![0f32; argmax.len() * num_classes];
+            for (t, want) in argmax.iter().enumerate() {
+                data[t * num_classes + want] = 1.0;
+            }
+            data[num_classes + 2] = bad;
+            let err = decode_ctc(&charset, &data, &[1, argmax.len(), num_classes])
+                .expect_err("a non-finite logit must be refused");
+            assert!(
+                err.downcast_ref::<ModelOutputError>().is_some(),
+                "{bad}: got {err}"
+            );
+            assert!(err.to_string().contains("non-finite"), "{err}");
+        }
+    }
+
+    #[test]
+    fn finite_logits_still_decode() {
+        let charset: Vec<char> = "abc".chars().collect();
+        let num_classes = charset.len() + 1;
+        let argmax = [1usize, 1, 0, 1, 2, 3];
+        let mut data = vec![0f32; argmax.len() * num_classes];
+        for (t, want) in argmax.iter().enumerate() {
+            data[t * num_classes + want] = 1.0;
+        }
+        let text = decode_ctc(&charset, &data, &[1, argmax.len(), num_classes]).unwrap();
+        assert_eq!(text, "aabc");
     }
 
     /// A tiled line must report the box the text actually came from: the tiles
