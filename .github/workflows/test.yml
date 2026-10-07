@@ -194,7 +194,7 @@ jobs:
       #     this suite quietly validates against the new one as though nothing moved
       #
       # The pin makes a contract change a deliberate bump here rather than an event. It
-      # is a SHA, not a tag: MonDevHub/monocr's one tag, cli/v0.1.1, versions its CLI
+      # is a SHA, not a tag: MonDevHub/monocr's only tags are cli/v*, which version its CLI
       # rather than the fixtures, and a SHA cannot be moved.
       #
       # TO BUMP: set `ref` to the new monorepo SHA and run the Rust suite locally against
