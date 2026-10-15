@@ -1,8 +1,9 @@
 # Contributing
 
 Bug reports and pull requests are welcome. The four bindings (Python, JavaScript, Go, Rust) share one
-version and one model contract; see [README.md § Limitations](README.md#limitations)
-for where they still differ, and [RELEASING.md](RELEASING.md) for how a release is cut.
+version and one model contract; see [README.md § How it works](README.md#how-it-works) and
+[§ Limitations](README.md#limitations) for where they still differ, and [RELEASING.md](RELEASING.md)
+for how a release is cut.
 
 ## Running the tests
 
@@ -11,7 +12,7 @@ These are the commands CI runs; each line starts from the repository root:
 ```bash
 cd python && pip install . pytest && pytest tests/
 cd js     && pnpm install --frozen-lockfile && pnpm test
-cd go     && gofmt -l . && go vet ./... && go test ./...
+cd go     && test -z "$(gofmt -l .)" && go vet ./... && go test ./...
 cd rust   && cargo fmt --check && cargo test
 ```
 

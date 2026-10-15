@@ -138,11 +138,13 @@ background is not read as black; the one exception is a NumPy array handed
 straight to Python's `LineSegmenter.segment`, which is converted as given. Go and
 Rust read the tag only from JPEG and from a PNG eXIf chunk;
 Python and JavaScript also read it from the other formats their imaging libraries
-decode, such as TIFF and WebP, and Python alone honours an eXIf chunk placed
-after the image data. Compositing a partly transparent pixel can differ by one
-grey level between bindings. Python clips a 16-bit greyscale PNG when it converts
-it to 8 bits, so a page with a background of 60000 and ink of 6000 reads as all
-white in Python and keeps its contrast in the other three.
+decode, such as TIFF and WebP. Python alone also honours an eXIf chunk placed
+after the image data, an eXIf chunk with a stray `Exif\0\0` prefix, and an
+ImageMagick "Raw profile type exif" text chunk. Compositing a partly transparent
+pixel can differ by one grey level between bindings. Python clips a 16-bit
+greyscale PNG when it converts it to 8 bits, so a page with a background of
+60000 and ink of 6000 reads as all white in Python and keeps its contrast in the
+other three.
 
 ## Limitations
 
@@ -156,6 +158,9 @@ return 55 and 61.
 
 The cause is two things compounding: four different image-resampling kernels,
 two of them the wrong family, and line segmenters that are not configured alike.
+Training resizes bilinearly, as Python (OpenCV `INTER_LINEAR`) and Rust
+(`FilterType::Triangle`) do; Go uses `draw.CatmullRom`, which is bicubic, and
+JavaScript uses sharp's default, lanczos3.
 Python binarises adaptively where the other three use a flat threshold at 128;
 Python sets its gap threshold at 0.02 of the profile's maximum with a smoothing
 window of 5, where the other three use 0.05 of the non-zero mean and a window of
@@ -164,6 +169,12 @@ JavaScript and Go squeeze it.
 
 **That is agreement, not accuracy.** These images have no ground truth, and four
 implementations reading the same wrong thing would agree perfectly.
+
+**The kernels are not aligned yet, on purpose.** Bilinear everywhere is the
+right default, but with no labelled image in this repository nothing can show
+that switching Go and JavaScript improves accuracy rather than changing which
+line loses its last diacritic. A labelled set comes first; then align the
+kernels and measure.
 
 ## Related
 
