@@ -1,5 +1,7 @@
 # monocr-onnx
 
+Part of the Mon OCR toolchain; see [how the pieces fit](https://github.com/MonDevHub).
+
 On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 (mnw), running on ONNX Runtime, with bindings for Python, JavaScript (Node.js), Go
 and Rust. Images never leave the machine.
@@ -49,6 +51,19 @@ The Rust crate is `monocr`, but the library it exposes is `monocr_onnx`:
 The first run downloads the model (46.2 MB) and caches it. PDFs need poppler's
 `pdftoppm` on the `PATH` in every binding; images need nothing extra.
 
+### PDFs need poppler
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. Confirm with `pdftoppm -v` in a new shell.
+Each binding's README notes how its PDF call finds poppler.
+
 ## Quick start
 
 ```python
@@ -65,8 +80,13 @@ print(text)
 line_text = engine.predict_line("single_line_crop.png")
 ```
 
-Each binding's README has its own quick start; the Python, JavaScript and Go
-ones also cover a CLI. Runnable examples for Python, JavaScript and Go are in
+Each binding's README has its own quick start. Every binding also installs a
+CLI: Python's is `monocr-onnx`; npm (`npm install -g monocr`), Go
+(`go install github.com/MonDevHub/monocr-onnx/go/cmd/monocr@latest`) and Rust
+(`cargo install monocr`, then `monocr page.jpg`) install one named `monocr`. That
+name collides with the command of the separate PyPI package
+[`monocr`](https://pypi.org/project/monocr/): with both installed, whichever is
+first on `PATH` runs. Runnable examples for Python, JavaScript and Go are in
 [`examples/`](examples/).
 
 ## Supported platforms
@@ -185,6 +205,10 @@ kernels and measure.
   (SwiftUI). The Android and iOS apps build from source and are not in an app
   store yet. The apps cap a file you open for recognition at 50 MB; this SDK has
   no such limit.
+- [MonDevHub/MonCorpusCollection](https://github.com/MonDevHub/MonCorpusCollection)
+  — the Mon text corpus the training data is drawn from.
+- [MonDevHub/awesome-mon-nlp](https://github.com/MonDevHub/awesome-mon-nlp) — a
+  curated list of NLP resources for Mon.
 - [Issues](https://github.com/MonDevHub/monocr-onnx/issues) — bugs and
   questions. [`RELEASING.md`](RELEASING.md) describes how a release is cut.
 

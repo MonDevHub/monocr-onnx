@@ -170,8 +170,8 @@ Adding its `lib` directory to `PATH` is the weakest option: the loader searches
 
 ## PDFs need poppler
 
-`ReadPDF` and `ReadPDFs` need `pdftoppm` from poppler (`brew install poppler`,
-`sudo apt-get install poppler-utils`). Images need nothing extra.
+`ReadPDF` and `ReadPDFs` need `pdftoppm` from poppler; install it per platform as
+the [root README](https://github.com/MonDevHub/monocr-onnx#pdfs-need-poppler) shows. Images need nothing extra.
 
 ## Limitations
 
