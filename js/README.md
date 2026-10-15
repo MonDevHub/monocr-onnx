@@ -132,8 +132,8 @@ measurement. No accuracy figure is claimed here; see the
 ## Development
 
 ```bash
-npm install
-npm test     # offline: no model download, no network
+pnpm install --frozen-lockfile
+pnpm test    # offline: no model download, no network
 ```
 
 ## License

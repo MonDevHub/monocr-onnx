@@ -355,8 +355,8 @@ class MonOCR {
         // Every segmented line was squeezed into 124 columns of a 1024 canvas
         // and the remaining 900 filled with white padding -- an ~8x horizontal
         // crush. `predictLine(path)` on a pre-cropped file was unaffected, which
-        // is exactly the path docs/CROSS_BINDING_PARITY.md measured, so the
-        // parity run could not have caught it.
+        // is exactly the path the line-level parity run measured, so that run
+        // could not have caught it.
         //
         // Materialising the grayscale raw buffer first costs one decode and
         // reports the true post-`extract` size in `info`.
@@ -542,7 +542,7 @@ class MonOCR {
      * Porting `tile_line` and `cut_column` from python/monocr_onnx/segmenter.py
      * is still worth doing — squeezing's downside on very wide input is
      * unbounded where tiling's is not. Deferred because the four bindings
-     * already disagree on output (docs/CROSS_BINDING_PARITY.md) and cut
+     * already disagree on output (README.md#limitations) and cut
      * positions would be a second axis.
      */
     async predictPage(imagePath) {

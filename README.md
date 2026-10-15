@@ -1,4 +1,4 @@
-# MonOCR
+# monocr-onnx
 
 On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 (mnw), running on ONNX Runtime, with bindings for Python, JavaScript (Node.js), Go
@@ -138,9 +138,11 @@ background is not read as black; the one exception is a NumPy array handed
 straight to Python's `LineSegmenter.segment`, which is converted as given. Go and
 Rust read the tag only from JPEG and from a PNG eXIf chunk;
 Python and JavaScript also read it from the other formats their imaging libraries
-decode, such as TIFF and WebP.
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md#input-loading-and-decode-guards--measured-2026-10-01)
-has the remaining differences.
+decode, such as TIFF and WebP, and Python alone honours an eXIf chunk placed
+after the image data. Compositing a partly transparent pixel can differ by one
+grey level between bindings. Python clips a 16-bit greyscale PNG when it converts
+it to 8 bits, so a page with a background of 60000 and ink of 6000 reads as all
+white in Python and keeps its contrast in the other three.
 
 ## Limitations
 
@@ -162,11 +164,6 @@ JavaScript and Go squeeze it.
 
 **That is agreement, not accuracy.** These images have no ground truth, and four
 implementations reading the same wrong thing would agree perfectly.
-
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md) reports 5 of 7.
-It measured the line path on pre-cropped files against the previous model, which
-skips segmentation entirely, and its header marks the figures stale. Only the
-page figure above describes what the documented API does.
 
 ## Related
 
