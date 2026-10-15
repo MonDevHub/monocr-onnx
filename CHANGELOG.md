@@ -4,7 +4,7 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
-## 0.5.0 — 2026-10-01
+## 0.5.0 — 2026-10-02
 
 A minor release: the bindings raise new errors on a broken model output, and
 read EXIF-rotated and transparent images differently, now correctly. The model,
