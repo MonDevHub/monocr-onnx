@@ -160,6 +160,15 @@ fn page_for_segmentation(image_path: &Path) -> Result<GrayImage> {
     Ok(normalize_polarity(&page).into_owned())
 }
 
+/// What [`MonOcr::predict_page`] hands the model for one page.
+enum PageInput {
+    /// The lines segmentation found, read one by one.
+    Lines(Vec<LineSegment>),
+    /// Segmentation found no lines, so the whole polarity-corrected page is
+    /// read as one line.
+    WholePage(GrayImage),
+}
+
 /// Find the lines of a page: correct polarity, then segment.
 ///
 /// A free function taking the segmenter rather than a method on [`MonOcr`], so
@@ -168,9 +177,21 @@ fn page_for_segmentation(image_path: &Path) -> Result<GrayImage> {
 /// through the model, and a mutation that dropped the probe survived the whole
 /// suite — which is how three sibling bindings shipped the bug this function
 /// exists to prevent.
-fn segment_page(segmenter: &LineSegmenter, image_path: &Path) -> Result<Vec<LineSegment>> {
+///
+/// When segmentation returns no lines at all, the page itself comes back as
+/// [`PageInput::WholePage`]. Either the page is blank or it is a single line the
+/// projection profile did not split, so it is tried as one line before giving
+/// up — the same fallback as `python/monocr_onnx/predictor.py` `predict_page`
+/// (`if not lines`) and `go/monocr.go` `predictImage`. Without it this binding
+/// returned no lines, so the input those bindings read came back as "" with no
+/// error.
+fn segment_page(segmenter: &LineSegmenter, image_path: &Path) -> Result<PageInput> {
     let page = page_for_segmentation(image_path)?;
-    segmenter.segment_image(&page)
+    let lines = segmenter.segment_image(&page)?;
+    if lines.is_empty() {
+        return Ok(PageInput::WholePage(page));
+    }
+    Ok(PageInput::Lines(lines))
 }
 
 /// A model artifact that disagrees with the charset or the input geometry this
@@ -1101,8 +1122,20 @@ impl MonOcr {
         // The ordering itself is tested through `segment_page`, not through here:
         // this method needs a loaded session, so a mutation to THIS LINE survives
         // the suite. Keep the delegation a single call so the untested surface
-        // stays one line wide.
-        let lines = segment_page(&self.segmenter, image_path)?;
+        // stays one line wide. The same goes for the no-lines decision, which
+        // `segment_page` makes and is tested on.
+        let lines = match segment_page(&self.segmenter, image_path)? {
+            PageInput::Lines(lines) => lines,
+            PageInput::WholePage(page) => {
+                // Read untiled, as Python's `predict_line(img)` is.
+                let (w, h) = page.dimensions();
+                let text = self.predict_line(&page).await?;
+                return Ok(vec![LineResult {
+                    text,
+                    bbox: BBox { x: 0, y: 0, w, h },
+                }]);
+            }
+        };
 
         let mut results = Vec::new();
         for line in lines {
@@ -1596,7 +1629,10 @@ mod tests {
              cannot show the probe is needed — pick a harder fixture"
         );
 
-        let corrected = segment_page(&seg, &dark_path).unwrap();
+        let corrected = match segment_page(&seg, &dark_path).unwrap() {
+            PageInput::Lines(lines) => lines,
+            PageInput::WholePage(_) => panic!("the corrected dark page found no lines at all"),
+        };
         assert_eq!(
             corrected.len(),
             light.len(),
@@ -1612,6 +1648,50 @@ mod tests {
                 "corrected bands must land on the same rows as the upright page"
             );
         }
+    }
+
+    /// A page segmentation finds no lines in is read whole, not dropped.
+    ///
+    /// Python's `predict_page` (`if not lines: return self.predict_line(img)`)
+    /// and Go's `predictImage` both do this; this binding returned an empty
+    /// vector, so the same input gave "" with no error. Driven through
+    /// `segment_page` because `predict_page` needs a loaded session.
+    #[test]
+    fn a_page_with_no_lines_falls_back_to_the_whole_page() {
+        // Blank-ish: light grey, nothing below the ink threshold.
+        let blank = GrayImage::from_pixel(300, 120, Luma([235u8]));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blank.png");
+        blank.save(&path).unwrap();
+
+        let seg = LineSegmenter::new(10, 3);
+        assert!(
+            seg.segment(&path).unwrap().is_empty(),
+            "the fixture must segment into no lines for this test to mean anything"
+        );
+
+        match segment_page(&seg, &path).unwrap() {
+            PageInput::WholePage(page) => {
+                assert_eq!(
+                    page.dimensions(),
+                    (300, 120),
+                    "the fallback must be the whole page"
+                );
+            }
+            PageInput::Lines(lines) => panic!(
+                "no lines found, but segment_page returned {} line(s) instead of the whole page",
+                lines.len()
+            ),
+        }
+
+        // And a page that does segment is not read whole.
+        let drawn = drawn_page(400, 300, 20, 10, 18);
+        let drawn_path = dir.path().join("drawn.png");
+        drawn.save(&drawn_path).unwrap();
+        assert!(matches!(
+            segment_page(&seg, &drawn_path).unwrap(),
+            PageInput::Lines(ref l) if !l.is_empty()
+        ));
     }
 
     /// The per-crop half of the same gap. `predict_single_line` never reaches
