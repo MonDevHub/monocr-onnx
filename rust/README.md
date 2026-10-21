@@ -86,7 +86,8 @@ Weights and their charset come from revision `d3d9d5e`
 (`model_manager::MODEL_REVISION`) of
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
 `~/.monocr/models/<revision>/`, so re-pinning is a cache miss rather than a
-silent reuse. The graph takes a `[batch, 1, 160, 1024]` input and emits
+silent reuse. Both files are checked by sha256 after download and on each load;
+a cached file with the wrong digest is deleted and fetched again. The graph takes a `[batch, 1, 160, 1024]` input and emits
 `[batch, sequence, 277]` logits: 276 characters plus the CTC blank. Input
 height and width are both static; batch is the only dynamic input axis.
 
