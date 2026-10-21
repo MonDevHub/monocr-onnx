@@ -91,7 +91,9 @@ async function read_pdf(pdfPath, modelPath = null, charsetPath = null) {
         // Convert PDF to images using pdftoppm
         // pdftoppm -png -r 300 input.pdf output_prefix
         const outputPrefix = path.join(tempDir, 'page');
-        await execFilePromise('pdftoppm', ['-png', '-r', '300', pdfPath, outputPrefix]);
+        // An absolute path never starts with '-', so pdftoppm cannot read a
+        // file named like one of its flags (e.g. `-singlefile`) as an option.
+        await execFilePromise('pdftoppm', ['-png', '-r', '300', path.resolve(pdfPath), outputPrefix]);
 
         // Read generated images
         const files = fs.readdirSync(tempDir).sort(); // Sort to ensure page order? pdftoppm uses -1, -2 etc.

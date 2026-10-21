@@ -20,11 +20,10 @@ printf '%s\\n' "$@" > "$MONOCR_TEST_ARGV"
 : > "$5-1.png"
 `;
 
-test('read_pdf passes a hostile path to pdftoppm without a shell', {
-    skip: process.platform === 'win32' && 'the fake pdftoppm is a POSIX shell script',
-}, async (t) => {
+// Puts the fake pdftoppm first on PATH and stubs the model. Returns the
+// scratch directory and the file the fake writes its argv to.
+function setUp(t) {
     const MonOCR = require('../src/monocr');
-    const { read_pdf } = require('../src/index');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monocr-js-inject-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -34,9 +33,6 @@ test('read_pdf passes a hostile path to pdftoppm without a shell', {
     fs.writeFileSync(path.join(bin, 'pdftoppm'), FAKE_PDFTOPPM, { mode: 0o755 });
 
     const argvLog = path.join(dir, 'argv.txt');
-    const marker = path.join(dir, 'pwned');
-    const pdfPath = path.join(dir, `doc$(touch ${marker})\`touch ${marker}\`.pdf`);
-
     const oldPath = process.env.PATH;
     const oldLog = process.env.MONOCR_TEST_ARGV;
     process.env.PATH = `${bin}${path.delimiter}${oldPath}`;
@@ -50,10 +46,25 @@ test('read_pdf passes a hostile path to pdftoppm without a shell', {
     t.mock.method(MonOCR.prototype, 'init', async function () { this.session = {}; });
     t.mock.method(MonOCR.prototype, 'predictPage', async () => [{ text: 'page one' }]);
 
+    const readArgv = () => fs.readFileSync(argvLog, 'utf8').split('\n').slice(0, -1);
+    return { dir, readArgv };
+}
+
+const POSIX_ONLY = {
+    skip: process.platform === 'win32' && 'the fake pdftoppm is a POSIX shell script',
+};
+
+test('read_pdf passes a hostile path to pdftoppm without a shell', POSIX_ONLY, async (t) => {
+    const { read_pdf } = require('../src/index');
+    const { dir, readArgv } = setUp(t);
+
+    const marker = path.join(dir, 'pwned');
+    const pdfPath = path.join(dir, `doc$(touch ${marker})\`touch ${marker}\`.pdf`);
+
     const pages = await read_pdf(pdfPath);
 
     assert.equal(fs.existsSync(marker), false, 'the path was run by a shell');
-    const argv = fs.readFileSync(argvLog, 'utf8').split('\n').slice(0, -1);
+    const argv = readArgv();
     assert.equal(argv.length, 5);
     assert.deepEqual(argv.slice(0, 3), ['-png', '-r', '300']);
     assert.equal(argv[3], pdfPath, 'the PDF path reached pdftoppm unaltered');
@@ -62,4 +73,19 @@ test('read_pdf passes a hostile path to pdftoppm without a shell', {
     assert.deepEqual(pages, ['page one']);
     // The temp dir is removed after the pages are read.
     assert.equal(fs.existsSync(path.dirname(argv[4])), false);
+});
+
+test('read_pdf never hands pdftoppm a path that reads as a flag', POSIX_ONLY, async (t) => {
+    const { read_pdf } = require('../src/index');
+    const { dir, readArgv } = setUp(t);
+
+    const oldCwd = process.cwd();
+    process.chdir(dir);
+    t.after(() => process.chdir(oldCwd));
+
+    await read_pdf('-singlefile');
+
+    const pdfArg = readArgv()[3];
+    assert.ok(path.isAbsolute(pdfArg), `expected an absolute path, got ${pdfArg}`);
+    assert.equal(path.basename(pdfArg), '-singlefile');
 });

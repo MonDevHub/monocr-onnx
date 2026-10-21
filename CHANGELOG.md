@@ -14,8 +14,10 @@ language.
   check is also run without a shell. Pages and the missing-`pdftoppm` error
   are unchanged; a failed conversion's message no longer shows shell quotes
   around the two paths.
+  The path is also passed as an absolute path, so a file named like a
+  `pdftoppm` flag (for example `-singlefile`) is read as a file, not an option.
   `test/read-pdf.test.js` puts a fake `pdftoppm` on `PATH` and fails if a
-  hostile filename runs a command.
+  hostile filename runs a command or reaches `pdftoppm` as a flag.
 
 ## 0.5.0 — 2026-10-01
 
