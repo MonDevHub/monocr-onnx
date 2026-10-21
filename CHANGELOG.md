@@ -4,6 +4,19 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## Unreleased
+
+- **JavaScript: `read_pdf` no longer runs the PDF path through a shell.** It
+  built a `pdftoppm` command line and ran it with `child_process.exec`, so a
+  path containing `$(...)` or backticks was executed as a command. It now uses
+  `execFile` with an argument array, as the Python, Go and Rust bindings
+  already did, and the path reaches `pdftoppm` unaltered. The `pdftoppm -v`
+  check is also run without a shell. Pages and the missing-`pdftoppm` error
+  are unchanged; a failed conversion's message no longer shows shell quotes
+  around the two paths.
+  `test/read-pdf.test.js` puts a fake `pdftoppm` on `PATH` and fails if a
+  hostile filename runs a command.
+
 ## 0.5.0 — 2026-10-01
 
 A minor release: the bindings raise new errors on a broken model output, and
