@@ -174,6 +174,18 @@ def test_a_corrupt_download_raises_and_leaves_nothing_behind(manager, serve):
     assert list(manager.cache_dir.glob("*.part")) == []
 
 
+def test_a_failure_while_verifying_leaves_no_partial_file(manager, serve, monkeypatch):
+    serve(b"weights")
+
+    def unreadable(path):
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(manager, "_digest", unreadable)
+    with pytest.raises(OSError):
+        manager.get_model_path()
+    assert list(manager.cache_dir.glob("*.part")) == []
+
+
 def test_a_stale_cache_entry_with_the_wrong_digest_is_refetched(tmp_path, serve):
     payload = b"weights"
     m = ModelManager(cache_root=tmp_path)

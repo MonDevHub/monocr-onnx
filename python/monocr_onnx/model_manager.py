@@ -141,23 +141,29 @@ class ModelManager:
             tmp.unlink(missing_ok=True)
             raise ModelDownloadError(f"failed to download {url}: {e}") from e
 
-        expected = self._SHA256.get(filename)
-        actual = self._digest(tmp)
-        if expected and actual != expected:
-            tmp.unlink(missing_ok=True)
-            raise ModelDownloadError(
-                f"checksum mismatch for {filename} from {url}\n"
-                f"  expected sha256 {expected}\n"
-                f"  got      sha256 {actual}\n"
-                "The pinned revision is immutable, so this is a corrupted or "
-                "intercepted download, not a new release.\n"
-                "Retry; if it persists, a proxy may be rewriting the download: "
-                f"fetch {url} manually into {dest.parent}."
-            )
+        # Every failure from here on removes the temp file too, as the other
+        # bindings do; the rename is the last step, so it never removes a
+        # verified file.
+        try:
+            expected = self._SHA256.get(filename)
+            actual = self._digest(tmp)
+            if expected and actual != expected:
+                raise ModelDownloadError(
+                    f"checksum mismatch for {filename} from {url}\n"
+                    f"  expected sha256 {expected}\n"
+                    f"  got      sha256 {actual}\n"
+                    "The pinned revision is immutable, so this is a corrupted or "
+                    "intercepted download, not a new release.\n"
+                    "Retry; if it persists, a proxy may be rewriting the download: "
+                    f"fetch {url} manually into {dest.parent}."
+                )
 
-        # Atomic-ish: the file only appears at its final name once it is whole
-        # and verified, so an interrupted run cannot leave a half-model behind.
-        tmp.replace(dest)
+            # Atomic-ish: the file only appears at its final name once it is whole
+            # and verified, so an interrupted run cannot leave a half-model behind.
+            tmp.replace(dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         print(f"Saved to {dest}")
 
     @staticmethod
