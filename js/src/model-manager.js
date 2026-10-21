@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
+const crypto = require('crypto');
 
 /**
  * The exact Hugging Face revision this release decodes.
@@ -24,11 +25,47 @@ const MODEL_REPO = 'janakhpon/monocr';
  * Files fetched from the pinned revision. `bytes` is the size Hugging Face
  * reports for that revision; a file on disk of any other size is a partial or
  * corrupted download, not a cache hit.
+ *
+ * `sha256` is the digest of each file at that revision, copied from
+ * `python/monocr_onnx/model_manager.py` (`_SHA256`), which is the source of
+ * truth; `test/model-manager.test.js` fails if the two drift. Bump the revision
+ * and both digests together, never one alone.
+ *
+ * All four bindings share `~/.monocr/models/<revision>/`, so a corrupt file
+ * written by any of them would otherwise be reused by every one, forever.
  */
 const REMOTE_FILES = [
-    { remote: 'onnx/monocr.onnx', local: 'monocr.onnx', bytes: 46247040, label: 'model' },
-    { remote: 'onnx/charset.txt', local: 'charset.txt', bytes: 556, label: 'charset' },
+    {
+        remote: 'onnx/monocr.onnx',
+        local: 'monocr.onnx',
+        bytes: 46247040,
+        sha256: 'b95de1ea0e3dc99a5c31bea32e220835da801f683ed17091eaec9954c80a4c04',
+        label: 'model',
+    },
+    {
+        remote: 'onnx/charset.txt',
+        local: 'charset.txt',
+        bytes: 556,
+        sha256: 'edfd75f688e4155c64aeee0dbac755da0e7ba45a388a2d178a84190fb3d7e953',
+        label: 'charset',
+    },
 ];
+
+/** Hex sha256 of a file, read in chunks so a 46 MB model is not held twice. */
+function sha256File(filePath) {
+    const hash = crypto.createHash('sha256');
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const buf = Buffer.allocUnsafe(1 << 20);
+        let n;
+        while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+            hash.update(buf.subarray(0, n));
+        }
+    } finally {
+        fs.closeSync(fd);
+    }
+    return hash.digest('hex');
+}
 
 class ModelManager {
     constructor(revision = MODEL_REVISION) {
@@ -47,6 +84,10 @@ class ModelManager {
         this.baseUrl = `https://huggingface.co/${MODEL_REPO}/resolve/${this.revision}`;
         this.modelFileName = 'monocr.onnx';
         this.charsetFileName = 'charset.txt';
+
+        // The specs this instance fetches and verifies. An instance field so a
+        // test can inject a tiny file and its digest without touching the network.
+        this.files = REMOTE_FILES;
     }
 
     /**
@@ -73,22 +114,32 @@ class ModelManager {
     }
 
     /**
-     * True when a cached file is present *and* the right size. Size alone is not
-     * integrity, but it does catch the failure this cache actually suffers:
-     * an interrupted download left behind as a permanent, silently truncated
-     * "cache hit".
+     * True when a cached file is present, the right size, *and* has the pinned
+     * sha256 -- the same check the Python binding makes.
+     *
+     * Size is checked first because it is free and catches the common failure,
+     * an interrupted download. The digest catches the rest: a same-size file
+     * with different bytes, or one written by another binding into the shared
+     * cache before that binding verified anything.
+     *
+     * The digest is recomputed on every check rather than remembered in a
+     * sidecar marker. That costs one read of the 46 MB model per load (a
+     * fraction of a second, small next to creating the ONNX session), and a
+     * marker could be left standing over a file that changed after it was
+     * written.
      */
     hasFile(spec) {
         const target = path.join(this.cacheDir, spec.local);
         if (!fs.existsSync(target)) return false;
-        return fs.statSync(target).size === spec.bytes;
+        if (fs.statSync(target).size !== spec.bytes) return false;
+        return sha256File(target) === spec.sha256;
     }
 
     /**
      * Check if the pinned revision is fully cached
      */
     hasModel() {
-        return REMOTE_FILES.every((spec) => this.hasFile(spec));
+        return this.files.every((spec) => this.hasFile(spec));
     }
 
     /**
@@ -97,7 +148,7 @@ class ModelManager {
      * Writes to `<dest>.part` and renames on success, so an interrupted or
      * short download never occupies the cached path.
      */
-    async downloadFile(url, destPath, expectedBytes, label) {
+    async downloadFile(url, destPath, expectedBytes, label, expectedSha256) {
         const tmpPath = `${destPath}.part`;
 
         await new Promise((resolve, reject) => {
@@ -169,6 +220,22 @@ class ModelManager {
             );
         }
 
+        // Verified before the rename, so a corrupt file never reaches the cached
+        // path where every binding would trust it.
+        if (typeof expectedSha256 === 'string') {
+            const actual = sha256File(tmpPath);
+            if (actual !== expectedSha256) {
+                fs.unlinkSync(tmpPath);
+                throw new Error(
+                    `Checksum mismatch for ${label} from ${url}\n` +
+                    `  expected sha256 ${expectedSha256}\n` +
+                    `  got      sha256 ${actual}\n` +
+                    `Revision ${this.revision} is immutable, so this is a corrupted or ` +
+                    'intercepted download, not a new release. Refusing to cache it.'
+                );
+            }
+        }
+
         fs.renameSync(tmpPath, destPath);
     }
 
@@ -183,13 +250,19 @@ class ModelManager {
         console.log(`Cache directory: ${this.cacheDir}`);
 
         let fetched = 0;
-        for (const spec of REMOTE_FILES) {
+        for (const spec of this.files) {
             if (this.hasFile(spec)) continue;
+            // Present but wrong: a partial write, or a file that predates the
+            // digest check. Remove it and fetch once; a second mismatch throws
+            // from downloadFile rather than looping.
+            const dest = path.join(this.cacheDir, spec.local);
+            fs.rmSync(dest, { force: true });
             await this.downloadFile(
                 `${this.baseUrl}/${spec.remote}`,
-                path.join(this.cacheDir, spec.local),
+                dest,
                 spec.bytes,
-                spec.label
+                spec.label,
+                spec.sha256
             );
             fetched += 1;
         }
@@ -237,3 +310,4 @@ module.exports = ModelManager;
 module.exports.MODEL_REVISION = MODEL_REVISION;
 module.exports.MODEL_REPO = MODEL_REPO;
 module.exports.REMOTE_FILES = REMOTE_FILES;
+module.exports.sha256File = sha256File;
