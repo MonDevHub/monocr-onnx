@@ -154,3 +154,58 @@ test('predictPage calls the page-level probe before segment', () => {
     assert.ok(segmentAt !== -1, 'predictPage no longer calls segment; update this test');
     assert.ok(probeAt < segmentAt, 'the probe must be called BEFORE segmentation');
 });
+
+test('predictPage reads the whole page when segmentation finds no lines', async () => {
+    // Python's predict_page (`if not lines: return self.predict_line(img)`) and
+    // Go's predictImage both fall back to reading the page as one line. This
+    // binding returned [], so the same input gave "" with no error.
+    const sharp = require('sharp');
+    const { StubOCR, fakeSession, BUNDLED_CHARSET } = require('./helpers');
+
+    const W = 300, H = 120;
+    // Blank-ish: light grey, nothing below the ink threshold.
+    const blank = await sharp({
+        create: { width: W, height: H, channels: 3, background: { r: 235, g: 235, b: 235 } },
+    }).png().toBuffer();
+
+    const ocr = new StubOCR(fakeSession(), BUNDLED_CHARSET);
+    ocr.session = fakeSession();
+    const calls = [];
+    ocr.predictLine = async (src) => { calls.push(src); return 'whole page'; };
+
+    assert.strictEqual(
+        (await ocr.segmenter.segment(blank)).length, 0,
+        'the fixture must segment into no lines for this test to mean anything'
+    );
+
+    const out = await ocr.predictPage(blank);
+    assert.strictEqual(calls.length, 1, 'no lines found, so the page must be read once, whole');
+    const read = await sharp(calls[0]).metadata();
+    assert.deepStrictEqual([read.width, read.height], [W, H], 'the fallback must be the whole page');
+    assert.deepStrictEqual(out, [{ text: 'whole page', bbox: { x: 0, y: 0, w: W, h: H } }]);
+});
+
+test('predictPage does not read the whole page when it finds lines', async () => {
+    // The control for the fallback: a page that segments is read line by line.
+    const sharp = require('sharp');
+    const { StubOCR, fakeSession, BUNDLED_CHARSET } = require('./helpers');
+
+    const W = 900, H = 260;
+    const g = new Uint8Array(W * H).fill(255);
+    for (const top of [40, 140]) {
+        for (let y = top; y < top + 60; y++)
+            for (let x = 60; x < W - 60; x += 20)
+                for (let i = 0; i < 12; i++) g[y * W + x + i] = 0;
+    }
+    const page = await sharp(Buffer.from(g), { raw: { width: W, height: H, channels: 1 } }).png().toBuffer();
+
+    const ocr = new StubOCR(fakeSession(), BUNDLED_CHARSET);
+    ocr.session = fakeSession();
+    let calls = 0;
+    ocr.predictLine = async () => { calls += 1; return 'line'; };
+
+    const out = await ocr.predictPage(page);
+    assert.strictEqual(out.length, 2);
+    assert.strictEqual(calls, 2);
+    for (const { bbox } of out) assert.ok(bbox.h < H, 'a segmented line must not span the whole page');
+});
