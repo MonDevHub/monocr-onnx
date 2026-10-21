@@ -14,7 +14,8 @@ language.
   corrupt or truncated file written there was reused forever. Each binding now
   checks the digest after download, before the file is moved into the cache, and
   again on every load. A cached file with the wrong digest is deleted and fetched
-  once; a download with the wrong digest is an error and is not cached. The
+  once; a download with the wrong digest is an error, in all four bindings
+  naming the URL to fetch by hand and the cache directory, and is not cached. The
   digests are Python's (`python/monocr_onnx/model_manager.py`), and each binding
   has a test that fails if its copy drifts from them. Checking on every load
   costs one read of the 46 MB model, chosen over a sidecar marker because a

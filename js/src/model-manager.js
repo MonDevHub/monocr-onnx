@@ -211,32 +211,38 @@ class ModelManager {
             request(url, 5);
         });
 
-        const actualBytes = fs.statSync(tmpPath).size;
-        if (typeof expectedBytes === 'number' && actualBytes !== expectedBytes) {
-            fs.unlinkSync(tmpPath);
-            throw new Error(
-                `Downloaded ${label} is ${actualBytes} bytes, expected ${expectedBytes} ` +
-                `at revision ${this.revision}. Refusing to cache it.`
-            );
-        }
-
-        // Verified before the rename, so a corrupt file never reaches the cached
-        // path where every binding would trust it.
-        if (typeof expectedSha256 === 'string') {
-            const actual = sha256File(tmpPath);
-            if (actual !== expectedSha256) {
-                fs.unlinkSync(tmpPath);
+        // Every failure below removes the temp file, not only the mismatch.
+        try {
+            const actualBytes = fs.statSync(tmpPath).size;
+            if (typeof expectedBytes === 'number' && actualBytes !== expectedBytes) {
                 throw new Error(
-                    `Checksum mismatch for ${label} from ${url}\n` +
-                    `  expected sha256 ${expectedSha256}\n` +
-                    `  got      sha256 ${actual}\n` +
-                    `Revision ${this.revision} is immutable, so this is a corrupted or ` +
-                    'intercepted download, not a new release. Refusing to cache it.'
+                    `Downloaded ${label} is ${actualBytes} bytes, expected ${expectedBytes} ` +
+                    `at revision ${this.revision}. Refusing to cache it.`
                 );
             }
-        }
 
-        fs.renameSync(tmpPath, destPath);
+            // Verified before the rename, so a corrupt file never reaches the cached
+            // path where every binding would trust it.
+            if (typeof expectedSha256 === 'string') {
+                const actual = sha256File(tmpPath);
+                if (actual !== expectedSha256) {
+                    throw new Error(
+                        `Checksum mismatch for ${label} from ${url}\n` +
+                        `  expected sha256 ${expectedSha256}\n` +
+                        `  got      sha256 ${actual}\n` +
+                        `Revision ${this.revision} is immutable, so this is a corrupted or ` +
+                        'intercepted download, not a new release. Refusing to cache it.\n' +
+                        'Retry; if it persists, a proxy may be rewriting the download: ' +
+                        `fetch ${url} manually into ${path.dirname(destPath)}.`
+                    );
+                }
+            }
+
+            fs.renameSync(tmpPath, destPath);
+        } catch (err) {
+            fs.rmSync(tmpPath, { force: true });
+            throw err;
+        }
     }
 
     /**

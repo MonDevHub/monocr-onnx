@@ -210,8 +210,9 @@ func download(url, dest, wantSHA256 string) error {
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA256 {
 		return fmt.Errorf(
 			"checksum mismatch for %s from %s\n  expected sha256 %s\n  got      sha256 %s\n"+
-				"The pinned revision is immutable, so this is a corrupted or intercepted download, not a new release",
-			filepath.Base(dest), url, wantSHA256, got)
+				"The pinned revision is immutable, so this is a corrupted or intercepted download, not a new release.\n"+
+				"Retry; if it persists, a proxy may be rewriting the download: fetch %s manually into %s.",
+			filepath.Base(dest), url, wantSHA256, got, url, filepath.Dir(dest))
 	}
 
 	if err := os.Rename(tmpName, dest); err != nil {

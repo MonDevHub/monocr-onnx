@@ -173,12 +173,18 @@ func TestCorruptCachedCharsetIsRefetched(t *testing.T) {
 // A transfer with the wrong digest must fail loudly and never reach the cached
 // path, where every binding would trust it from then on.
 func TestDownloadWithWrongDigestIsRefused(t *testing.T) {
-	wrong := []byte("same length, wrong!")
+	wrong := []byte("fake onnx WEIGHTS")
+	if len(wrong) != len(fakeModel) {
+		t.Fatalf("fixture is %d bytes, want %d: only the digest may differ", len(wrong), len(fakeModel))
+	}
 	m, _ := testManager(t, map[string][]byte{ModelFilename: wrong, CharsetFilename: fakeCharset}, fakeModel, fakeCharset)
 
 	_, err := m.GetModelPath()
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("GetModelPath err = %v; want a checksum mismatch", err)
+	}
+	if !strings.Contains(err.Error(), "manually into "+m.cacheDir+".") {
+		t.Fatalf("GetModelPath err = %v; want the next step naming %s", err, m.cacheDir)
 	}
 	entries, _ := os.ReadDir(m.cacheDir)
 	for _, e := range entries {

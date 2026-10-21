@@ -50,6 +50,7 @@ function serve(t, bodyFor) {
 
 function managerIn(t) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'monocr-home-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     t.mock.method(os, 'homedir', () => home);
     const mgr = new ModelManager();
     mgr.ensureCacheDir();
@@ -172,7 +173,11 @@ test('a download with the wrong digest is refused before it reaches the cache', 
     serve(t, (url) => Buffer.alloc(specs.find((s) => s.local === path.basename(url)).bytes, 0x41));
     t.mock.method(console, 'log', () => {});
 
-    await assert.rejects(mgr.ensureModel(), /Checksum mismatch for model/);
+    await assert.rejects(mgr.ensureModel(), (err) => {
+        assert.match(err.message, /Checksum mismatch for model/);
+        assert.ok(err.message.includes(`manually into ${mgr.cacheDir}.`), err.message);
+        return true;
+    });
     assert.equal(fs.existsSync(mgr.getModelPath()), false, 'a bad download must not be cached');
     assert.equal(fs.existsSync(`${mgr.getModelPath()}.part`), false, 'the temp file must be removed');
 });

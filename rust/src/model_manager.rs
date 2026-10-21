@@ -174,35 +174,38 @@ impl ModelManager {
             .progress_chars(">-"));
 
         let tmp_path = dest.with_extension("part");
-        let mut file = fs::File::create(&tmp_path)?;
-        let copied = io::copy(&mut response, &mut file);
-        drop(file);
+        // Every failure below removes the temp file, not only the mismatch.
+        let result = (|| -> io::Result<()> {
+            let mut file = fs::File::create(&tmp_path)?;
+            io::copy(&mut response, &mut file)?;
+            drop(file);
 
-        if let Err(e) = copied {
+            let actual = file_sha256(&tmp_path)?;
+            if actual != expected_sha256 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "checksum mismatch for {} from {url}\n  expected sha256 {expected_sha256}\n  \
+                         got      sha256 {actual}\nThe pinned revision is immutable, so this is a \
+                         corrupted or intercepted download, not a new release.\nRetry; if it \
+                         persists, a proxy may be rewriting the download: fetch {url} manually \
+                         into {}.",
+                        dest.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        dest.parent().unwrap_or(Path::new(".")).display(),
+                    ),
+                ));
+            }
+
+            fs::rename(&tmp_path, dest)
+        })();
+
+        if result.is_err() {
             let _ = fs::remove_file(&tmp_path);
-            return Err(e);
         }
-
-        let actual = file_sha256(&tmp_path)?;
-        if actual != expected_sha256 {
-            let _ = fs::remove_file(&tmp_path);
-            pb.finish_and_clear();
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "checksum mismatch for {} from {url}\n  expected sha256 {expected_sha256}\n  \
-                     got      sha256 {actual}\nThe pinned revision is immutable, so this is a \
-                     corrupted or intercepted download, not a new release.",
-                    dest.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                ),
-            ));
-        }
-
-        fs::rename(&tmp_path, dest)?;
         pb.finish_and_clear();
-        Ok(())
+        result
     }
 }
 
@@ -377,12 +380,16 @@ mod tests {
     #[test]
     fn a_download_with_the_wrong_digest_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let (base, _) = serve(b"same length, wrong!");
+        let wrong = b"fake onnx WEIGHTS";
+        assert_eq!(wrong.len(), FAKE_MODEL.len(), "only the digest may differ");
+        let (base, _) = serve(wrong);
         let m = test_manager(dir.path(), base);
 
         let err = m.get_model_path().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("checksum mismatch"), "{err}");
+        let next_step = format!("manually into {}.", dir.path().display());
+        assert!(err.to_string().contains(&next_step), "{err}");
         let left: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())

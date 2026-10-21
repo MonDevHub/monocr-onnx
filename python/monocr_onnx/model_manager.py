@@ -150,7 +150,9 @@ class ModelManager:
                 f"  expected sha256 {expected}\n"
                 f"  got      sha256 {actual}\n"
                 "The pinned revision is immutable, so this is a corrupted or "
-                "intercepted download, not a new release."
+                "intercepted download, not a new release.\n"
+                "Retry; if it persists, a proxy may be rewriting the download: "
+                f"fetch {url} manually into {dest.parent}."
             )
 
         # Atomic-ish: the file only appears at its final name once it is whole
