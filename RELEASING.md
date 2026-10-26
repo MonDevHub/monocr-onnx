@@ -118,7 +118,7 @@ commit afterwards. Treat it as the fallback it is, and follow §1 to §3 below b
 ## 1. Verify before building
 
 ```bash
-cd go     && gofmt -l . && go vet ./... && go test ./...
+cd go     && test -z "$(gofmt -l .)" && go vet ./... && go test ./...
 cd ../js  && npm test
 cd ../python && .venv/bin/python3 -m pytest -q
 cd ../rust && cargo fmt --check && cargo check --all-targets && cargo clippy --all-targets
@@ -234,6 +234,7 @@ Do not trust the publish command's own output.
 ```bash
 curl -s https://registry.npmjs.org/monocr | python3 -c "import json,sys;print(json.load(sys.stdin)['dist-tags'])"
 curl -s https://pypi.org/pypi/monocr-onnx/json | python3 -c "import json,sys;print(json.load(sys.stdin)['info']['version'])"
+GOPROXY=proxy.golang.org go list -m github.com/MonDevHub/monocr-onnx/go@v0.5.0
 ```
 
 Then re-run step 3 against the *downloaded* artifact, not the local one. That is

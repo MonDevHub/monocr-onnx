@@ -108,16 +108,7 @@ rather than a numeric failure turned into a blank or wrong line.
 ## PDFs need poppler
 
 `read_pdf` shells out to poppler's `pdftoppm`. Images need nothing extra.
-
-```bash
-brew install poppler                 # macOS
-sudo apt-get install poppler-utils   # Debian, Ubuntu
-```
-
-On Windows: `scoop install poppler`, `choco install poppler`,
-`conda install -c conda-forge poppler`, or the prebuilt binaries from
-[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. `read_pdf` checks for poppler by running
+Install it per platform as the [root README](https://github.com/MonDevHub/monocr-onnx#pdfs-need-poppler) shows. `read_pdf` checks for poppler by running
 `pdftoppm -v`; confirm with the same command in a new shell. 0.4.2 and earlier
 ran `which pdftoppm` instead, which a stock Windows shell lacks, so on Windows
 those versions also need a `which` on `PATH` (Git for Windows' `usr\bin` has
