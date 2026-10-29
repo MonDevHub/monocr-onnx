@@ -1,11 +1,7 @@
 # Supported platforms
 
-All four bindings run on the CPU and are built for Linux, Windows and
-Apple-silicon macOS. CI runs on Linux only.
-
-## Intel Macs
-
-Intel Macs are narrower:
+Intel Macs are narrower than the Linux, Windows and Apple-silicon targets the
+[README](../README.md#supported-platforms) lists:
 
 - **JavaScript:** `onnxruntime-node` ships no Intel-macOS binary.
 - **Rust:** the crate's build has no prebuilt ONNX Runtime to link there; see

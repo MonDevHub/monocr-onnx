@@ -37,10 +37,10 @@ cargo add monocr                           # Rust
 ```
 
 Keep the floors: 0.1.x pairs a 225-character charset with a 277-class graph and
-returns wrong characters, and npm before 0.4.0 has the bug above. pip and npm
-take the newest release above the floor; npm then saves a caret range, which on
-0.x stops below the next minor, so moving from 0.4.x to 0.5.x takes another
-install. The Rust crate is `monocr`, but its library is
+returns wrong characters, not merely worse ones, and npm before 0.4.0 has the
+bug above. pip and npm take the newest release above the floor; npm then saves
+a caret range, which on 0.x stops below the next minor, so moving from 0.4.x to
+0.5.x takes another install. The Rust crate is `monocr`, but its library is
 `monocr_onnx`: `use monocr_onnx::MonOcr`.
 
 The first run downloads the model (46.2 MB) and caches it.
@@ -93,9 +93,9 @@ detail per binding. CI runs on Linux only.
 | Go | [`go/`](go/) | [pkg.go.dev](https://pkg.go.dev/github.com/MonDevHub/monocr-onnx/go) | Go 1.23+, ONNX Runtime 1.18.0+ shared library | v0.5.0 |
 | Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | Rust 1.88+ | 0.5.0 |
 
-Go is the only binding that always needs ONNX Runtime installed separately;
-[`go/README.md`](go/README.md) covers it. Python and JavaScript bring the runtime
-with them, and Rust links a prebuilt one at build time where `ort` publishes one.
+Go is the only binding that always needs ONNX Runtime installed separately; it
+loads the shared library at run time, and [`go/README.md`](go/README.md) covers
+it. Python and JavaScript bring the runtime with them, and Rust links a prebuilt one at build time where `ort` publishes one.
 
 "In this tree" is the version the source declares, not what a registry serves. A
 tag and a publish are different events: if a registry shows an older number than
