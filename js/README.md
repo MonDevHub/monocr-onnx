@@ -106,18 +106,8 @@ monocr download      # pre-fetch the model
 ## PDFs need poppler
 
 `read_pdf` and `read_pdfs` shell out to poppler's `pdftoppm`. Images need
-nothing extra.
-
-```bash
-brew install poppler                 # macOS
-sudo apt-get install poppler-utils   # Debian, Ubuntu
-```
-
-On Windows: `scoop install poppler`, `choco install poppler`,
-`conda install -c conda-forge poppler`, or the prebuilt binaries from
-[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. Confirm with `pdftoppm -v` in a new shell;
-that is the check `read_pdf` runs.
+nothing extra. Install it per platform as the [root README](https://github.com/MonDevHub/monocr-onnx#pdfs-need-poppler) shows, then confirm with
+`pdftoppm -v` in a new shell; that is the check `read_pdf` runs.
 
 ## Limitations
 
@@ -132,8 +122,8 @@ measurement. No accuracy figure is claimed here; see the
 ## Development
 
 ```bash
-npm install
-npm test     # offline: no model download, no network
+pnpm install --frozen-lockfile
+pnpm test    # offline: no model download, no network
 ```
 
 ## License

@@ -9,7 +9,7 @@
 //     scale = 160/3300  ->  newWidth = 124   (correct: 1024)
 // an ~8x horizontal crush, with the other 900 columns filled as white padding.
 // `predictLine(path)` on a pre-cropped file was unaffected — which is the only
-// path docs/CROSS_BINDING_PARITY.md exercised, so nothing caught it.
+// path the line-level parity run exercised, so nothing caught it.
 
 const test = require('node:test');
 const assert = require('node:assert');

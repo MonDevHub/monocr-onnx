@@ -152,7 +152,9 @@ wrongly before. The evidence:
 Not covered: Go and Rust read the tag only from JPEG and from a PNG eXIf chunk
 placed before the image data. Python and JS use their imaging libraries and
 also honour it in other containers such as TIFF and WebP, and Python in a few
-non-standard PNG placements; `docs/CROSS_BINDING_PARITY.md` lists them. Go
+non-standard PNG placements;
+[`docs/CROSS_BINDING_PARITY.md`](https://github.com/MonDevHub/monocr-onnx/blob/python/v0.5.0/docs/CROSS_BINDING_PARITY.md)
+(removed after 0.5.0) lists them. Go
 decodes only JPEG and PNG anyway; Rust's `image` crate decodes more formats
 than that.
 
@@ -258,7 +260,8 @@ text.
 
 After the fix that page returns 1,178 characters of Mon text, 0.656 similar to
 Python's. The remainder is the resampling-kernel divergence
-`docs/CROSS_BINDING_PARITY.md` already records, not this defect.
+[`docs/CROSS_BINDING_PARITY.md`](https://github.com/MonDevHub/monocr-onnx/blob/python/v0.5.0/docs/CROSS_BINDING_PARITY.md)
+already records, not this defect.
 
 Two tests were added. The suite was green through the whole bug: the existing
 preprocessing test lifts the dimension arithmetic into a copy and never looked at

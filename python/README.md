@@ -84,17 +84,8 @@ collided with the command installed by the separate
 ## PDFs need poppler
 
 `read_pdf` goes through `pdf2image`, which shells out to poppler's `pdftoppm`.
-Without it the call raises a `RuntimeError` naming poppler.
-
-```bash
-brew install poppler                 # macOS
-sudo apt-get install poppler-utils   # Debian, Ubuntu
-```
-
-On Windows: `scoop install poppler`, `choco install poppler`,
-`conda install -c conda-forge poppler`, or the prebuilt binaries from
-[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-with `Library\bin` added to `PATH`. `read_pdf` does not forward pdf2image's
+Without it the call raises a `RuntimeError` naming poppler. Install it per
+platform as the [root README](https://github.com/MonDevHub/monocr-onnx#pdfs-need-poppler) shows. `read_pdf` does not forward pdf2image's
 `poppler_path`, so `PATH` is the route. Check with `pdfinfo -v` in a new shell.
 
 ## What to expect
