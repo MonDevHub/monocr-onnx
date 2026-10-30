@@ -67,13 +67,15 @@ async function read_pdf(pdfPath, modelPath = null, charsetPath = null) {
     const fs = require('fs');
     const os = require('os');
     const path = require('path');
-    const { exec } = require('child_process');
+    const { execFile } = require('child_process');
     const util = require('util');
-    const execPromise = util.promisify(exec);
+    // execFile, not exec: no shell runs, so a path holding `$(...)`, backticks
+    // or quotes reaches pdftoppm as one literal argument instead of executing.
+    const execFilePromise = util.promisify(execFile);
     
     // Check for pdftoppm
     try {
-        await execPromise('pdftoppm -v');
+        await execFilePromise('pdftoppm', ['-v']);
     } catch (e) {
         throw new Error('pdftoppm not found: please install poppler-utils (brew install poppler on macOS, or sudo apt install poppler-utils on Linux)');
     }
@@ -89,7 +91,9 @@ async function read_pdf(pdfPath, modelPath = null, charsetPath = null) {
         // Convert PDF to images using pdftoppm
         // pdftoppm -png -r 300 input.pdf output_prefix
         const outputPrefix = path.join(tempDir, 'page');
-        await execPromise(`pdftoppm -png -r 300 "${pdfPath}" "${outputPrefix}"`);
+        // An absolute path never starts with '-', so pdftoppm cannot read a
+        // file named like one of its flags (e.g. `-singlefile`) as an option.
+        await execFilePromise('pdftoppm', ['-png', '-r', '300', path.resolve(pdfPath), outputPrefix]);
 
         // Read generated images
         const files = fs.readdirSync(tempDir).sort(); // Sort to ensure page order? pdftoppm uses -1, -2 etc.
