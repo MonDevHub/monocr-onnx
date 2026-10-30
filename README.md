@@ -1,10 +1,12 @@
-# MonOCR
+# monocr-onnx
+
+Part of the Mon OCR toolchain; see [how the pieces fit](https://github.com/MonDevHub).
 
 On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 (mnw), running on ONNX Runtime, with bindings for Python, JavaScript (Node.js), Go
 and Rust. Images never leave the machine.
 
-Mon is classified as **vulnerable** in UNESCO's
+Mon was listed as **vulnerable** in UNESCO's 2010
 [Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
 This project digitises the Mon script so that later work — system integrations,
 corpora, language models — has something to build on.
@@ -49,6 +51,19 @@ The Rust crate is `monocr`, but the library it exposes is `monocr_onnx`:
 The first run downloads the model (46.2 MB) and caches it. PDFs need poppler's
 `pdftoppm` on the `PATH` in every binding; images need nothing extra.
 
+### PDFs need poppler
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. Confirm with `pdftoppm -v` in a new shell.
+Each binding's README notes how its PDF call finds poppler.
+
 ## Quick start
 
 ```python
@@ -65,8 +80,13 @@ print(text)
 line_text = engine.predict_line("single_line_crop.png")
 ```
 
-Each binding's README has its own quick start; the Python, JavaScript and Go
-ones also cover a CLI. Runnable examples for Python, JavaScript and Go are in
+Each binding's README has its own quick start. Every binding also installs a
+CLI: Python's is `monocr-onnx`; npm (`npm install -g monocr`), Go
+(`go install github.com/MonDevHub/monocr-onnx/go/cmd/monocr@latest`) and Rust
+(`cargo install monocr`, then `monocr page.jpg`) install one named `monocr`. That
+name collides with the command of the separate PyPI package
+[`monocr`](https://pypi.org/project/monocr/): with both installed, whichever is
+first on `PATH` runs. Runnable examples for Python, JavaScript and Go are in
 [`examples/`](examples/).
 
 ## Supported platforms
@@ -138,9 +158,13 @@ background is not read as black; the one exception is a NumPy array handed
 straight to Python's `LineSegmenter.segment`, which is converted as given. Go and
 Rust read the tag only from JPEG and from a PNG eXIf chunk;
 Python and JavaScript also read it from the other formats their imaging libraries
-decode, such as TIFF and WebP.
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md#input-loading-and-decode-guards--measured-2026-10-01)
-has the remaining differences.
+decode, such as TIFF and WebP. Python alone also honours an eXIf chunk placed
+after the image data, an eXIf chunk with a stray `Exif\0\0` prefix, and an
+ImageMagick "Raw profile type exif" text chunk. Compositing a partly transparent
+pixel can differ by one grey level between bindings. Python clips a 16-bit
+greyscale PNG when it converts it to 8 bits, so a page with a background of
+60000 and ink of 6000 reads as all white in Python and keeps its contrast in the
+other three.
 
 ## Limitations
 
@@ -154,6 +178,9 @@ return 55 and 61.
 
 The cause is two things compounding: four different image-resampling kernels,
 two of them the wrong family, and line segmenters that are not configured alike.
+Training resizes bilinearly, as Python (OpenCV `INTER_LINEAR`) and Rust
+(`FilterType::Triangle`) do; Go uses `draw.CatmullRom`, which is bicubic, and
+JavaScript uses sharp's default, lanczos3.
 Python binarises adaptively where the other three use a flat threshold at 128;
 Python sets its gap threshold at 0.02 of the profile's maximum with a smoothing
 window of 5, where the other three use 0.05 of the non-zero mean and a window of
@@ -163,10 +190,11 @@ JavaScript and Go squeeze it.
 **That is agreement, not accuracy.** These images have no ground truth, and four
 implementations reading the same wrong thing would agree perfectly.
 
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md) reports 5 of 7.
-It measured the line path on pre-cropped files against the previous model, which
-skips segmentation entirely, and its header marks the figures stale. Only the
-page figure above describes what the documented API does.
+**The kernels are not aligned yet, on purpose.** Bilinear everywhere is the
+right default, but with no labelled image in this repository nothing can show
+that switching Go and JavaScript improves accuracy rather than changing which
+line loses its last diacritic. A labelled set comes first; then align the
+kernels and measure.
 
 ## Related
 
@@ -177,6 +205,10 @@ page figure above describes what the documented API does.
   (SwiftUI). The Android and iOS apps build from source and are not in an app
   store yet. The apps cap a file you open for recognition at 50 MB; this SDK has
   no such limit.
+- [MonDevHub/MonCorpusCollection](https://github.com/MonDevHub/MonCorpusCollection)
+  — the Mon text corpus the training data is drawn from.
+- [MonDevHub/awesome-mon-nlp](https://github.com/MonDevHub/awesome-mon-nlp) — a
+  curated list of NLP resources for Mon.
 - [Issues](https://github.com/MonDevHub/monocr-onnx/issues) — bugs and
   questions. [`RELEASING.md`](RELEASING.md) describes how a release is cut.
 
