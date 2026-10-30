@@ -6,7 +6,7 @@ On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 (mnw), running on ONNX Runtime, with bindings for Python, JavaScript (Node.js), Go
 and Rust. Images never leave the machine.
 
-Mon is classified as **vulnerable** in UNESCO's
+Mon was listed as **vulnerable** in UNESCO's 2010
 [Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
 This project digitises the Mon script so that later work — system integrations,
 corpora, language models — has something to build on.
