@@ -92,6 +92,8 @@ rather than turning a numeric failure into a blank or wrong line. `read_pdf` and
 Models come from revision `MODEL_REVISION` (`d3d9d5e`) of
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
 `~/.monocr/models/<revision>/`, so a new pin is a cache miss, not a silent swap.
+Both files are checked by sha256 after download and on each load; a cached file
+with the wrong digest is deleted and fetched again.
 
 ## CLI
 

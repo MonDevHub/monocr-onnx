@@ -561,6 +561,19 @@ class MonOCR {
         const source = await normalizePageForSegmentation(imagePath);
 
         const lines = await this.segmenter.segment(source);
+
+        if (lines.length === 0) {
+            // Segmentation found no lines. Either the page is blank or it is a
+            // single line the projection profile did not split, so read it as one
+            // line before giving up -- the same fallback as Python's
+            // `predict_page` (`if not lines`) and Go's `predictImage`. Without it
+            // this returned [], and the input those bindings read gave "" here
+            // with no error.
+            const { width, height } = await imaging()(source).metadata();
+            const text = await this.predictLine(source);
+            return [{ text, bbox: { x: 0, y: 0, w: width, h: height } }];
+        }
+
         const results = [];
 
         for (const line of lines) {

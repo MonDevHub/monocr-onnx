@@ -6,18 +6,29 @@ language.
 
 ## Unreleased
 
-- **JavaScript: `read_pdf` no longer runs the PDF path through a shell.** It
-  built a `pdftoppm` command line and ran it with `child_process.exec`, so a
-  path containing `$(...)` or backticks was executed as a command. It now uses
-  `execFile` with an argument array, as the Python, Go and Rust bindings
-  already did, and the path reaches `pdftoppm` unaltered. The `pdftoppm -v`
-  check is also run without a shell. Pages and the missing-`pdftoppm` error
-  are unchanged; a failed conversion's message no longer shows shell quotes
-  around the two paths.
-  The path is also passed as an absolute path, so a file named like a
-  `pdftoppm` flag (for example `-singlefile`) is read as a file, not an option.
-  `test/read-pdf.test.js` puts a fake `pdftoppm` on `PATH` and fails if a
-  hostile filename runs a command or reaches `pdftoppm` as a flag.
+### Fixed
+
+- **JavaScript, Go and Rust verify the model and charset by sha256**, as Python
+  already did. JavaScript checked only the file size; Go and Rust checked only
+  that the file existed. All four share `~/.monocr/models/<revision>/`, so a
+  corrupt or truncated file written there was reused forever. Each binding now
+  checks the digest after download, before the file is moved into the cache, and
+  again on every load. A cached file with the wrong digest is deleted and fetched
+  once; a download with the wrong digest is an error, in all four bindings
+  naming the URL to fetch by hand and the cache directory, and is not cached. The
+  digests are Python's (`python/monocr_onnx/model_manager.py`), and each binding
+  has a test that fails if its copy drifts from them. Checking on every load
+  costs one read of the 46 MB model, chosen over a sidecar marker because a
+  marker can outlive a change to the file it vouches for.
+- **JavaScript and Rust read the whole page when segmentation finds no lines.**
+  Python and Go already fell back to reading the page as one line; JavaScript's
+  `predictPage` and Rust's `predict_page` returned no lines, so the same input
+  read as `""` with no error. Both now return one result covering the whole
+  page, read untiled, as Python's `predict_line(img)` is.
+
+### Changed
+
+- The Rust crate depends on `sha2` 0.10.
 
 ## 0.5.0 — 2026-10-01
 
