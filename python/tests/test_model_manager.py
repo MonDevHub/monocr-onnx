@@ -169,7 +169,20 @@ def test_a_corrupt_download_raises_and_leaves_nothing_behind(manager, serve):
     with pytest.raises(ModelDownloadError) as exc:
         manager.get_model_path()
     assert "checksum" in str(exc.value)
+    assert f"manually into {manager.cache_dir}." in str(exc.value)
     assert not (manager.cache_dir / manager.MODEL_FILENAME).exists()
+    assert list(manager.cache_dir.glob("*.part")) == []
+
+
+def test_a_failure_while_verifying_leaves_no_partial_file(manager, serve, monkeypatch):
+    serve(b"weights")
+
+    def unreadable(path):
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(manager, "_digest", unreadable)
+    with pytest.raises(OSError):
+        manager.get_model_path()
     assert list(manager.cache_dir.glob("*.part")) == []
 
 

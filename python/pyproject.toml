@@ -14,7 +14,7 @@ readme = "README.md"
 # Lowering this again re-forks the lock — check for a cp310 wheel first.
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Janakh", email = "janakh@example.com" }]
+authors = [{ name = "Janakh", email = "jnovaxer@gmail.com" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

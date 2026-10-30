@@ -4,6 +4,32 @@ All four bindings (Python, JavaScript, Go and Rust) share one model contract and
 are versioned together. A release number means the same contract in every
 language.
 
+## Unreleased
+
+### Fixed
+
+- **JavaScript, Go and Rust verify the model and charset by sha256**, as Python
+  already did. JavaScript checked only the file size; Go and Rust checked only
+  that the file existed. All four share `~/.monocr/models/<revision>/`, so a
+  corrupt or truncated file written there was reused forever. Each binding now
+  checks the digest after download, before the file is moved into the cache, and
+  again on every load. A cached file with the wrong digest is deleted and fetched
+  once; a download with the wrong digest is an error, in all four bindings
+  naming the URL to fetch by hand and the cache directory, and is not cached. The
+  digests are Python's (`python/monocr_onnx/model_manager.py`), and each binding
+  has a test that fails if its copy drifts from them. Checking on every load
+  costs one read of the 46 MB model, chosen over a sidecar marker because a
+  marker can outlive a change to the file it vouches for.
+- **JavaScript and Rust read the whole page when segmentation finds no lines.**
+  Python and Go already fell back to reading the page as one line; JavaScript's
+  `predictPage` and Rust's `predict_page` returned no lines, so the same input
+  read as `""` with no error. Both now return one result covering the whole
+  page, read untiled, as Python's `predict_line(img)` is.
+
+### Changed
+
+- The Rust crate depends on `sha2` 0.10.
+
 ## 0.5.0 — 2026-10-01
 
 A minor release: the bindings raise new errors on a broken model output, and
@@ -137,7 +163,9 @@ wrongly before. The evidence:
 Not covered: Go and Rust read the tag only from JPEG and from a PNG eXIf chunk
 placed before the image data. Python and JS use their imaging libraries and
 also honour it in other containers such as TIFF and WebP, and Python in a few
-non-standard PNG placements; `docs/CROSS_BINDING_PARITY.md` lists them. Go
+non-standard PNG placements;
+[`docs/CROSS_BINDING_PARITY.md`](https://github.com/MonDevHub/monocr-onnx/blob/python/v0.5.0/docs/CROSS_BINDING_PARITY.md)
+(removed after 0.5.0) lists them. Go
 decodes only JPEG and PNG anyway; Rust's `image` crate decodes more formats
 than that.
 
@@ -243,7 +271,8 @@ text.
 
 After the fix that page returns 1,178 characters of Mon text, 0.656 similar to
 Python's. The remainder is the resampling-kernel divergence
-`docs/CROSS_BINDING_PARITY.md` already records, not this defect.
+[`docs/CROSS_BINDING_PARITY.md`](https://github.com/MonDevHub/monocr-onnx/blob/python/v0.5.0/docs/CROSS_BINDING_PARITY.md)
+already records, not this defect.
 
 Two tests were added. The suite was green through the whole bug: the existing
 preprocessing test lifts the dimension arithmetic into a copy and never looked at

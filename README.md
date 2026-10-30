@@ -1,18 +1,19 @@
-# MonOCR
+# monocr-onnx
+
+Part of the Mon OCR toolchain; see [how the pieces fit](https://github.com/MonDevHub).
 
 On-device OCR for the [Mon language](https://en.wikipedia.org/wiki/Mon_language)
 (mnw), running on ONNX Runtime, with bindings for Python, JavaScript (Node.js), Go
-and Rust. Images never leave the machine.
-
-Mon is classified as **vulnerable** in UNESCO's
-[Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger).
-This project digitises the Mon script so that later work — system integrations,
-corpora, language models — has something to build on.
+and Rust. Images never leave the machine. Mon is classified as **vulnerable** in
+UNESCO's
+[Atlas of the World's Languages in Danger](https://en.wikipedia.org/wiki/Atlas_of_the_World%27s_Languages_in_Danger);
+digitising its script gives later work — system integrations, corpora, language
+models — something to build on.
 
 ## Status
 
-- **0.5.0** is the version in this tree, for all four bindings. The four share
-  one version number, one model and one charset; see the [changelog](CHANGELOG.md).
+- **0.5.0** is the version in this tree for all four bindings. They share one
+  version number, one model and one charset; see the [changelog](CHANGELOG.md).
 - It reads printed Mon. Handwriting is out of scope.
 - No accuracy figure is claimed here. The
   [model card](https://huggingface.co/janakhpon/monocr) has the held-out result
@@ -22,10 +23,9 @@ corpora, language models — has something to build on.
 
 > [!IMPORTANT]
 > **Upgrade the JavaScript package.** Every npm release before 0.4.0 returned
-> noise rather than text: the preprocessing step read a three-channel buffer as
-> if it were one channel, so it sampled the wrong bytes. On a typeset page
-> `monocr@0.3.2` returned 168 characters of garbage where 0.4.0 returns 1,178 of
-> Mon. The Python, Go and Rust bindings were never affected.
+> noise: preprocessing read a three-channel buffer as one channel. On a typeset
+> page `monocr@0.3.2` returned 168 characters of garbage where 0.4.0 returns
+> 1,178 of Mon. The Python, Go and Rust bindings were never affected.
 
 ## Install
 
@@ -36,47 +36,55 @@ go get github.com/MonDevHub/monocr-onnx/go # Go
 cargo add monocr                           # Rust
 ```
 
-Keep the floors. 0.1.x pairs a 225-character charset with a 277-class graph and
-returns wrong characters, not merely worse ones, and every npm release before
-0.4.0 returns noise. pip and npm take the newest release above the floor, and
-`go get` and `cargo add` the newest release. npm then saves a caret range, which
-on 0.x stops below the next minor, so moving from 0.4.x to 0.5.x takes another
-install.
+Keep the floors: 0.1.x pairs a 225-character charset with a 277-class graph and
+returns wrong characters, not merely worse ones, and npm before 0.4.0 has the
+bug above. pip and npm take the newest release above the floor; npm then saves
+a caret range, which on 0.x stops below the next minor, so moving from 0.4.x to
+0.5.x takes another install. The Rust crate is `monocr`, but its library is
+`monocr_onnx`: `use monocr_onnx::MonOcr`.
 
-The Rust crate is `monocr`, but the library it exposes is `monocr_onnx`:
-`use monocr_onnx::MonOcr`.
+The first run downloads the model (46.2 MB) and caches it.
 
-The first run downloads the model (46.2 MB) and caches it. PDFs need poppler's
-`pdftoppm` on the `PATH` in every binding; images need nothing extra.
+### PDFs need poppler
+
+PDFs need poppler's `pdftoppm` on the `PATH` in every binding; images need
+nothing extra.
+
+```bash
+brew install poppler                 # macOS
+sudo apt-get install poppler-utils   # Debian, Ubuntu
+```
+
+On Windows: `scoop install poppler`, `choco install poppler`,
+`conda install -c conda-forge poppler`, or the prebuilt binaries from
+[oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+with `Library\bin` added to `PATH`. Confirm with `pdftoppm -v` in a new shell.
+Each binding's README notes how its PDF call finds poppler.
 
 ## Quick start
 
 ```python
 from monocr_onnx import MonOCR
 
-# Downloads the pinned model on first run and caches it by revision.
-engine = MonOCR()
-
-# Page-level: segments into lines, then reads each one.
-text = engine.predict("scanned_document.jpg")
-print(text)
-
-# Line-level: skips segmentation, for a crop you have already cut.
-line_text = engine.predict_line("single_line_crop.png")
+engine = MonOCR()                                  # fetches and caches the pinned model
+text = engine.predict("scanned_document.jpg")      # page: segments into lines, reads each
+line = engine.predict_line("single_line_crop.png") # one line you have already cut
 ```
 
-Each binding's README has its own quick start; the Python, JavaScript and Go
-ones also cover a CLI. Runnable examples for Python, JavaScript and Go are in
-[`examples/`](examples/).
+Each binding's README has its own quick start, and [`examples/`](examples/) has
+runnable Python, JavaScript and Go examples. Every binding also installs a CLI:
+Python's is `monocr-onnx`; npm (`npm install -g monocr`), Go
+(`go install github.com/MonDevHub/monocr-onnx/go/cmd/monocr@latest`) and Rust
+(`cargo install monocr`, then `monocr page.jpg`) install one named `monocr`. That
+name collides with the separate PyPI package
+[`monocr`](https://pypi.org/project/monocr/): with both installed, whichever is
+first on `PATH` runs.
 
 ## Supported platforms
 
-All four run on the CPU, and are built for Linux, Windows and Apple-silicon
-macOS. Intel Macs are narrower: `onnxruntime-node` ships no Intel-macOS binary,
-the Rust crate's build has no prebuilt ONNX Runtime to link there, and neither
-Microsoft's 1.24.1 release nor Homebrew has a prebuilt Intel-macOS library for
-Go. Python still installs there, on onnxruntime 1.23.2 (the last release with an
-Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
+All four run on the CPU on Linux, Windows and Apple-silicon macOS. Intel Macs are
+narrower; [docs/supported-platforms.md](docs/supported-platforms.md) has the
+detail per binding. CI runs on Linux only.
 
 | Binding | Directory | Package | Requires | In this tree |
 | :--- | :--- | :--- | :--- | :--- |
@@ -86,13 +94,12 @@ Intel-macOS wheel) and Python 3.11 to 3.13. CI runs on Linux only.
 | Rust | [`rust/`](rust/) | [crates.io: monocr](https://crates.io/crates/monocr) | Rust 1.88+ | 0.5.0 |
 
 Go is the only binding that always needs ONNX Runtime installed separately; it
-loads the shared library at run time. [`go/README.md`](go/README.md) covers installing it.
-The Python and JavaScript packages bring the runtime with them, and the Rust
-crate links a prebuilt one at build time on the targets `ort` publishes one for.
+loads the shared library at run time, and [`go/README.md`](go/README.md) covers
+it. Python and JavaScript bring the runtime with them, and Rust links a prebuilt one at build time where `ort` publishes one.
 
-"In this tree" is the version the source here declares, not what a registry
-serves. A tag and a publish are different events: if a registry's page shows an
-older number than a pushed tag, that release has not landed.
+"In this tree" is the version the source declares, not what a registry serves. A
+tag and a publish are different events: if a registry shows an older number than
+a pushed tag, that release has not landed.
 
 ## How it works
 
@@ -104,11 +111,6 @@ Image (File/Buffer)
                   → ONNX Runtime session → greedy CTC decode → String
 ```
 
-The names are the Python and JavaScript classes; JavaScript's page method is
-`predictPage`. Rust spells the engine
-`MonOcr`; Go uses `model.Manager`, `segmenter.LineSegmenter` and
-`predictor.Predictor`.
-
 | Attribute    | Specification |
 | ------------ | ------------- |
 | Architecture | MobileNetV3-Large + SE + 2×BiLSTM-512 + attention + CTC |
@@ -118,55 +120,29 @@ The names are the Python and JavaScript classes; JavaScript's page method is
 | Charset      | 276 characters, 277 classes |
 | Asset size   | 46.2 MB |
 
-The model is pinned to revision `d3d9d5e` of
-[`janakhpon/monocr`](https://huggingface.co/janakhpon/monocr), not to `main`, and
-cached under `~/.monocr/models/<revision>/`. Each binding ships the matching
-charset and refuses to decode if the two disagree: CTC reserves index 0 for the
-blank, so a model over N characters must emit N + 1 classes. Without that check
-a mismatch returns well-formed Mon text that is wrong, with no error and no
-lookup miss. Decoding refuses a broken output the same way: logits holding a NaN
-or an infinity raise `ModelOutputError` (Go: `*predictor.OutputError`), and
-logits that are not `[1, sequence, N + 1]` raise `ModelContractError` (Go:
-`*predictor.ContractError`), rather than decoding into a blank or wrong line.
-
-A file the binding opens itself, and in JavaScript an encoded `Buffer`, is turned
-the way it is displayed, from its EXIF Orientation tag. An image you pass in
-already decoded (a PIL `Image`, a sharp instance, an `image.Image`) is not
-re-oriented. Transparency is composited onto white before the conversion to grey
-for every input, opened by the binding or decoded by you, so a transparent
-background is not read as black; the one exception is a NumPy array handed
-straight to Python's `LineSegmenter.segment`, which is converted as given. Go and
-Rust read the tag only from JPEG and from a PNG eXIf chunk;
-Python and JavaScript also read it from the other formats their imaging libraries
-decode, such as TIFF and WebP.
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md#input-loading-and-decode-guards--measured-2026-10-01)
-has the remaining differences.
+The model is pinned to one revision, and every binding refuses to decode when the
+charset, the output shape or the output values break the contract, rather than
+return wrong Mon text. [docs/model-contract.md](docs/model-contract.md) has the
+revision, the cache path, the error types and each binding's class names.
+[docs/image-input.md](docs/image-input.md) covers EXIF orientation, transparency
+and 16-bit images.
 
 ## Limitations
 
-**The bindings disagree on page output.** Measured 2026-10-01 on the page path —
-`read_image` / `predict`, the call the quick starts use — over the seven images
-in [`data/images/`](data/images/): Python, JavaScript and Go return identical
-text on **1 of 7**. Pairwise, Python matches JavaScript on 1, Python matches Go
-on 1, and JavaScript matches Go on 3. Rust matches Python on 3. The widest gap is
-`000028.jpg`, where Python and Rust return 154 characters and JavaScript and Go
-return 55 and 61.
+**The bindings disagree on page output.** On the seven images in
+[`data/images/`](data/images/), Python, JavaScript and Go return identical text on
+**1 of 7** (measured 2026-10-01). The causes are different resampling kernels and
+differently configured line segmenters. That is agreement, not accuracy: the
+images have no ground truth. The kernels stay unaligned until a labelled set can
+show that aligning them helps. [docs/binding-differences.md](docs/binding-differences.md)
+has the pairwise numbers and each cause.
 
-The cause is two things compounding: four different image-resampling kernels,
-two of them the wrong family, and line segmenters that are not configured alike.
-Python binarises adaptively where the other three use a flat threshold at 128;
-Python sets its gap threshold at 0.02 of the profile's maximum with a smoothing
-window of 5, where the other three use 0.05 of the non-zero mean and a window of
-3; and Python and Rust cut a line too wide for the model into tiles where
-JavaScript and Go squeeze it.
+## Develop and release
 
-**That is agreement, not accuracy.** These images have no ground truth, and four
-implementations reading the same wrong thing would agree perfectly.
-
-[`docs/CROSS_BINDING_PARITY.md`](docs/CROSS_BINDING_PARITY.md) reports 5 of 7.
-It measured the line path on pre-cropped files against the previous model, which
-skips segmentation entirely, and its header marks the figures stale. Only the
-page figure above describes what the documented API does.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the test command for each binding (the
+ones CI runs) and the A/B rule for any change that can alter output.
+[`RELEASING.md`](RELEASING.md) describes how a release is cut. Bugs and questions
+go to [Issues](https://github.com/MonDevHub/monocr-onnx/issues).
 
 ## Related
 
@@ -177,8 +153,10 @@ page figure above describes what the documented API does.
   (SwiftUI). The Android and iOS apps build from source and are not in an app
   store yet. The apps cap a file you open for recognition at 50 MB; this SDK has
   no such limit.
-- [Issues](https://github.com/MonDevHub/monocr-onnx/issues) — bugs and
-  questions. [`RELEASING.md`](RELEASING.md) describes how a release is cut.
+- [MonDevHub/MonCorpusCollection](https://github.com/MonDevHub/MonCorpusCollection)
+  — the Mon text corpus the training data is drawn from.
+- [MonDevHub/awesome-mon-nlp](https://github.com/MonDevHub/awesome-mon-nlp) — a
+  curated list of NLP resources for Mon.
 
 ## License
 

@@ -70,7 +70,8 @@ monocr runtime       # onnxruntime 1.24.1 (tested against 1.24.1, requires >= 1.
 Weights come from revision `d3d9d5e` (`model.ModelRevision`) of
 [janakhpon/monocr](https://huggingface.co/janakhpon/monocr) and are cached under
 `~/.monocr/models/<revision>/`, so re-pinning is a cache miss rather than a
-silent reuse. The graph takes a `[batch, 1, 160, 1024]` input and emits
+silent reuse. Both files are checked by sha256 after download and on each load;
+a cached file with the wrong digest is deleted and fetched again. The graph takes a `[batch, 1, 160, 1024]` input and emits
 `[batch, sequence, 277]` logits: 276 characters plus the CTC blank. Input
 height and width are both static; batch is the only dynamic input axis. Images
 are read as JPEG or PNG.
@@ -170,8 +171,13 @@ Adding its `lib` directory to `PATH` is the weakest option: the loader searches
 
 ## PDFs need poppler
 
-`ReadPDF` and `ReadPDFs` need `pdftoppm` from poppler (`brew install poppler`,
-`sudo apt-get install poppler-utils`). Images need nothing extra.
+`ReadPDF` and `ReadPDFs` need `pdftoppm` from poppler; install it per platform as
+the [root README](https://github.com/MonDevHub/monocr-onnx#pdfs-need-poppler) shows. Images need nothing extra.
+
+Both find it with `exec.LookPath("pdftoppm")`, so it must be on the `PATH` of the
+process calling them; there is no option to point at a binary elsewhere. When the
+lookup fails they return `pdftoppm not found: please install poppler-utils`
+before reading any page.
 
 ## Limitations
 
