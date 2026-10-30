@@ -2,8 +2,9 @@
 
 Bug reports and pull requests are welcome. The four bindings (Python, JavaScript, Go, Rust) share one
 version and one model contract; see [README.md § How it works](README.md#how-it-works) and
-[§ Limitations](README.md#limitations) for where they still differ, and [RELEASING.md](RELEASING.md)
-for how a release is cut.
+[§ Limitations](README.md#limitations), with the detail in
+[docs/binding-differences.md](docs/binding-differences.md), for where they still differ, and
+[RELEASING.md](RELEASING.md) for how a release is cut.
 
 ## Running the tests
 
@@ -39,7 +40,9 @@ and a new model revision.
 - **Put the result in the pull request:** the inputs, both arms' numbers, any per-bucket split (for
   example by line width), the exact command, and what the comparison doesn't cover.
 - **Keep the bindings in step.** A change to one binding's segmentation says whether the others
-  get the same change, and updates [README.md § Limitations](README.md#limitations) if they now
-  differ. A change to tiling in `python/monocr_onnx/segmenter.py` also regenerates
+  get the same change. If they now differ, it updates
+  [docs/binding-differences.md](docs/binding-differences.md), and the summary in
+  [README.md § Limitations](README.md#limitations) if the headline count changes. A change to
+  tiling in `python/monocr_onnx/segmenter.py` also regenerates
   `shared/segmentation-fixtures/tiling-cases.json` in MonDevHub/monocr, which is generated from this
   binding's `tile_line`.
