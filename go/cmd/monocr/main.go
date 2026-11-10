@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MonDevHub/monocr-onnx/go"
 	"github.com/MonDevHub/monocr-onnx/go/pkg/model"
@@ -71,25 +73,13 @@ func main() {
 		Short: "Process all images in a directory",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			dir := args[0]
-			files, err := os.ReadDir(dir)
+			failed, err := runBatch(args[0], monocr.ReadImage, os.Stdout, os.Stderr)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading directory: %v\n", err)
 				os.Exit(1)
 			}
-
-			for _, file := range files {
-				ext := filepath.Ext(file.Name())
-				if ext == ".jpg" || ext == ".png" || ext == ".jpeg" {
-					path := filepath.Join(dir, file.Name())
-					fmt.Fprintf(os.Stderr, "Processing %s...\n", file.Name())
-					text, err := monocr.ReadImage(path)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Failed to process %s: %v\n", file.Name(), err)
-					} else {
-						fmt.Printf("--- %s ---\n%s\n\n", file.Name(), text)
-					}
-				}
+			if failed > 0 {
+				os.Exit(1)
 			}
 		},
 	}
@@ -118,4 +108,42 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// isImage reports whether name has an extension batch reads, in any case: a
+// camera's IMG_0001.JPG was skipped when the match was case-sensitive.
+func isImage(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png":
+		return true
+	}
+	return false
+}
+
+// runBatch reads every image in dir and returns how many failed, so the
+// command can exit non-zero: it used to exit 0 even when every file failed.
+func runBatch(dir string, read func(string) (string, error), stdout, stderr io.Writer) (int, error) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	failed, total := 0, 0
+	for _, file := range files {
+		if file.IsDir() || !isImage(file.Name()) {
+			continue
+		}
+		total++
+		fmt.Fprintf(stderr, "Processing %s...\n", file.Name())
+		text, err := read(filepath.Join(dir, file.Name()))
+		if err != nil {
+			failed++
+			fmt.Fprintf(stderr, "Failed to process %s: %v\n", file.Name(), err)
+			continue
+		}
+		fmt.Fprintf(stdout, "--- %s ---\n%s\n\n", file.Name(), text)
+	}
+	if failed > 0 {
+		fmt.Fprintf(stderr, "%d of %d files failed.\n", failed, total)
+	}
+	return failed, nil
 }
