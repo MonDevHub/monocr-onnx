@@ -1,6 +1,6 @@
 from pathlib import Path
 from PIL import Image
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 from .predictor import MonOCR
 from .utils import calculate_accuracy
 
@@ -54,14 +54,22 @@ def read_pdf(pdf_path, model_path=None, charset_path=None):
         list[str]: list of recognized text per page.
     """
     try:
-        images = convert_from_path(str(pdf_path), dpi=300)
+        page_count = pdfinfo_from_path(str(pdf_path))["Pages"]
     except Exception as e:
         raise RuntimeError(f"Failed to convert PDF. Ensure poppler-utils is installed. Error: {e}")
-    
+
     ocr = MonOCR(model_path, charset_path)
-    # Process pages sequentially as they are in memory
-    results = [ocr.predict(img) for img in images]
-        
+    # One page at a time: at 300 dpi an A4 page is about 25 MB of RGB, so
+    # rasterising the whole document up front held every page in memory at
+    # once, and a few hundred pages exhausted it before the first was read.
+    results = []
+    for page in range(1, page_count + 1):
+        try:
+            images = convert_from_path(str(pdf_path), dpi=300, first_page=page, last_page=page)
+        except Exception as e:
+            raise RuntimeError(f"Failed to convert page {page} of the PDF. Error: {e}")
+        results.extend(ocr.predict(img) for img in images)
+
     return results
 
 def read_pdfs(pdf_paths, model_path=None, charset_path=None, workers=4):
