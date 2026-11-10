@@ -25,9 +25,26 @@ language.
   `predictPage` and Rust's `predict_page` returned no lines, so the same input
   read as `""` with no error. Both now return one result covering the whole
   page, read untiled, as Python's `predict_line(img)` is.
+- **`batch` exits 1 when any file fails**, in the Python, JavaScript and Go
+  CLIs. It reported each failure and still exited 0, even when every file
+  failed. Go's `batch` also matches extensions in any case, so `IMG_0001.JPG` is
+  no longer skipped.
+- **Python's `read_pdf` rasterises one page at a time** instead of the whole
+  document up front, which held every 300 dpi page in memory at once.
+- **Go refuses an image whose header declares more than 178,956,970 pixels**
+  before decoding it, the limit Pillow applies in Python. A few header bytes
+  could otherwise make the decoder allocate gigabytes.
+- **Go gives up on a model download that stalls for 60 seconds**, as Python's
+  `requests` timeout does. It used `http.Get`, which has no timeout.
+- **JavaScript no longer throws on a line crop far taller than wide**: the
+  resized width rounded to 0, which sharp rejects.
 
 ### Changed
 
+- **The Rust CLI refuses to replace an existing output file** unless `--force`
+  is given, and never writes over its input. The default output is the input
+  with its extension swapped, so it silently replaced a `scan.txt` beside
+  `scan.png`.
 - The Rust crate depends on `sha2` 0.10.
 
 ## 0.5.0 — 2026-10-01
