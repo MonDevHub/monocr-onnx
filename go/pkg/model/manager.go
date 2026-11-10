@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -172,6 +174,36 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// stallTimeout is how long a download may wait for a response or for its next
+// byte before it is abandoned, the 60 seconds the Python binding passes to
+// requests. It bounds a stall, not the whole transfer, so a slow link that
+// keeps delivering still finishes the 46 MB model. A var so a test can shorten
+// it.
+var stallTimeout = 60 * time.Second
+
+// stallReader cancels the request when no byte has arrived for stallTimeout.
+type stallReader struct {
+	r     io.Reader
+	timer *time.Timer
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.timer.Reset(stallTimeout)
+	}
+	return n, err
+}
+
+// stalled names a stall as the cause when the timer cancelled ctx, rather than
+// the bare "context canceled" the transport reports.
+func stalled(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("no data for %v, gave up: %w", stallTimeout, err)
+	}
+	return err
+}
+
 // download writes url to dest via a temporary file, so an interrupted transfer
 // never leaves a truncated artifact that the existence check would accept. The
 // sha256 is checked before the rename, so a corrupt transfer never reaches the
@@ -181,9 +213,21 @@ func download(url, dest, wantSHA256 string) error {
 		return fmt.Errorf("failed to create cache directory: %v", err)
 	}
 
-	resp, err := http.Get(url)
+	// http.Get has no timeout at all, so a server that accepted the
+	// connection and then went quiet hung the first prediction forever. The
+	// timer covers the wait for headers and every gap between body reads.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(stallTimeout, cancel)
+	defer timer.Stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to download %s: %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download %s: %v", url, stalled(ctx, err))
 	}
 	defer resp.Body.Close()
 
@@ -199,9 +243,9 @@ func download(url, dest, wantSHA256 string) error {
 	defer os.Remove(tmpName)
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+	if _, err := io.Copy(io.MultiWriter(tmp, h), &stallReader{r: resp.Body, timer: timer}); err != nil {
 		tmp.Close()
-		return fmt.Errorf("failed to write %s: %v", dest, err)
+		return fmt.Errorf("failed to write %s: %v", dest, stalled(ctx, err))
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("failed to close %s: %v", tmpName, err)
