@@ -19,6 +19,15 @@ import (
 	"golang.org/x/image/draw"
 )
 
+// MaxPixels is the largest width*height Load will decode. It is the Python
+// binding's limit (Pillow refuses an image over twice its MAX_IMAGE_PIXELS,
+// 2 * 89,478,485), so the two bindings turn away the same files.
+//
+// The header is a few bytes and can claim any size; image.Decode allocates
+// what it claims before reading a pixel, so a small file could otherwise ask
+// for gigabytes.
+const MaxPixels = 2 * 89478485
+
 // Load decodes the image file at path the right way up.
 //
 // Go's image/jpeg and image/png return the stored pixels and ignore the EXIF
@@ -29,10 +38,20 @@ import (
 // Only a file this binding decodes itself is oriented. An image.Image handed
 // to Predictor.Predict was decoded by the caller, who owns its orientation; the other
 // three bindings make the same split.
+//
+// A file whose header declares more than MaxPixels pixels is refused before
+// any pixel is decoded.
 func Load(path string) (image.Image, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode image: %v", err)
+	}
+	if px := int64(cfg.Width) * int64(cfg.Height); px > MaxPixels {
+		return nil, fmt.Errorf("image is %dx%d (%d pixels), over the %d-pixel limit", cfg.Width, cfg.Height, px, int64(MaxPixels))
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
