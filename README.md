@@ -137,6 +137,12 @@ images have no ground truth. The kernels stay unaligned until a labelled set can
 show that aligning them helps. [docs/binding-differences.md](docs/binding-differences.md)
 has the pairwise numbers and each cause.
 
+**No binding levels the background as training did.** The training pipeline
+evens out the background of every line before resizing, so grey boxes, sepia
+paper and coloured panels reach the network near-white. None of the four
+bindings does this yet: a line on a tinted or uneven background reaches the
+model as it was scanned.
+
 ## Develop and release
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) has the test command for each binding (the

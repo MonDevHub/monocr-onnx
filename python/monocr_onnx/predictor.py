@@ -266,10 +266,16 @@ class MonOCR:
         """
         Scale a line crop to the model's input height and right-pad it with white.
 
-        Mirrors ``resize_and_pad`` in the training pipeline: aspect ratio is
-        preserved while the height-scaled width still fits the canvas, then the
-        image is squeezed horizontally rather than truncated, and the result is
-        normalised to [-1, 1].
+        Follows the resize, padding and normalisation of ``resize_and_pad`` in
+        the training pipeline: aspect ratio is preserved while the height-scaled
+        width still fits the canvas, then the image is squeezed horizontally
+        rather than truncated, and the result is normalised to [-1, 1].
+
+        It does not mirror all of it. Training also levels the background
+        before resizing (a dilation estimates the local background tone and
+        each pixel is divided by it, so tinted or uneven paper becomes
+        near-white); this method does not, nor does any other binding. README
+        § Limitations records the gap.
 
         The old code divided by 255, producing [0, 1]. Every pixel then reached
         the network offset by +1.0 and at half the intended scale — the network
