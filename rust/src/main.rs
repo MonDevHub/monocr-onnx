@@ -25,6 +25,10 @@ struct Args {
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
+
+    /// Replace the output file if it already exists
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -69,6 +73,30 @@ fn is_pdf(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Refuse an output path that would destroy a file the user has.
+///
+/// The default output is the input with its extension swapped, so `monocr
+/// scan.png` silently replaced a `scan.txt` already beside it, and `monocr
+/// notes.txt` would write its result over the input it was reading. An
+/// existing file is replaced only with `--force`; the input never is.
+fn check_output(input: &Path, output: &Path, force: bool) -> Result<()> {
+    if let (Ok(a), Ok(b)) = (input.canonicalize(), output.canonicalize()) {
+        if a == b {
+            anyhow::bail!(
+                "Output {:?} is the input file; pass --output to choose another path",
+                output
+            );
+        }
+    }
+    if output.exists() && !force {
+        anyhow::bail!(
+            "Output file already exists: {:?}. Pass --force to replace it, or --output to choose another path",
+            output
+        );
+    }
+    Ok(())
+}
+
 fn get_default_output(input: &Path, format: &OutputFormat) -> PathBuf {
     let ext = match format {
         OutputFormat::Text => "txt",
@@ -95,6 +123,9 @@ async fn main() -> Result<()> {
     let output_path = args
         .output
         .unwrap_or_else(|| get_default_output(&args.input, &args.format));
+
+    // Before the model loads, so a refusal costs nothing.
+    check_output(&args.input, &output_path, args.force)?;
 
     if args.verbose {
         println!("Output file: {:?}", output_path);
@@ -192,5 +223,41 @@ fn build_json_output(pages: &[Vec<LineResult>]) -> JsonOutput {
     JsonOutput {
         success: true,
         pages,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_existing_output_is_refused_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("scan.png");
+        let output = dir.path().join("scan.txt");
+        std::fs::write(&input, b"x").unwrap();
+        std::fs::write(&output, b"the user's own notes").unwrap();
+
+        let err = check_output(&input, &output, false).unwrap_err();
+        assert!(err.to_string().contains("--force"), "{err}");
+        assert!(check_output(&input, &output, true).is_ok());
+    }
+
+    #[test]
+    fn a_new_output_is_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("scan.png");
+        std::fs::write(&input, b"x").unwrap();
+        assert!(check_output(&input, &dir.path().join("scan.txt"), false).is_ok());
+    }
+
+    #[test]
+    fn the_input_is_never_the_output_even_with_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("notes.txt");
+        std::fs::write(&input, b"x").unwrap();
+        let output = get_default_output(&input, &OutputFormat::Text);
+
+        assert!(check_output(&input, &output, true).is_err());
     }
 }

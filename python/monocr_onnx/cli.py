@@ -82,6 +82,7 @@ def batch(directory, model, charset):
     from .predictor import MonOCR
     ocr = MonOCR(model, charset)
     
+    failed = 0
     for file in sorted(files):
         click.echo(f"Processing {file.name}...", err=True)
         try:
@@ -90,7 +91,13 @@ def batch(directory, model, charset):
             click.echo(text)
             click.echo()
         except Exception as e:
-             click.echo(f"Failed to process {file.name}: {e}", err=True)
+            failed += 1
+            click.echo(f"Failed to process {file.name}: {e}", err=True)
+
+    # A script checking the exit status must see a partial or total failure.
+    if failed:
+        click.echo(f"{failed} of {len(files)} files failed.", err=True)
+        exit(1)
 
 if __name__ == '__main__':
     main()

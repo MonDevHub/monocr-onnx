@@ -3,12 +3,15 @@ package imageio
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -335,5 +338,51 @@ func TestAnIFDOffsetBeyondTheBufferIsNoTag(t *testing.T) {
 		if got := ExifOrientation(file); got != 6 {
 			t.Fatalf("well-formed %s: orientation %d, want 6", name, got)
 		}
+	}
+}
+
+// pngClaiming is a valid 1x1 greyscale PNG whose IHDR now declares w x h, with
+// the header CRC recomputed so the decoder accepts the header and goes on to
+// allocate what it declares.
+func pngClaiming(t *testing.T, w, h uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	// Signature (8), IHDR length (4), "IHDR" (4), width, height, five more
+	// header bytes, then the CRC over the type and the data.
+	binary.BigEndian.PutUint32(b[16:], w)
+	binary.BigEndian.PutUint32(b[20:], h)
+	binary.BigEndian.PutUint32(b[29:], crc32.ChecksumIEEE(b[12:29]))
+	return b
+}
+
+// A header can declare any size in a few bytes, and image.Decode allocates the
+// declared size before reading a pixel. Load refuses a file over MaxPixels
+// from its header alone.
+func TestLoadRefusesAnImageOverThePixelLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "huge.png")
+	// 13400 * 13400 = 179,560,000, just over MaxPixels.
+	if err := os.WriteFile(path, pngClaiming(t, 13400, 13400), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "pixel limit") {
+		t.Fatalf("Load of a 13400x13400 header: err %v, want the pixel-limit refusal", err)
+	}
+}
+
+// Under the limit the header passes, and the file fails only because its
+// pixel data does not match: the cap does not turn away ordinary pages.
+func TestLoadPassesAHeaderUnderThePixelLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "page.png")
+	if err := os.WriteFile(path, pngClaiming(t, 2480, 3508), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || strings.Contains(err.Error(), "pixel limit") {
+		t.Fatalf("Load of a 2480x3508 header: err %v, want a decode error, not the pixel limit", err)
 	}
 }

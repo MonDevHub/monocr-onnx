@@ -370,7 +370,9 @@ class MonOCR {
 
         // Scale to target height
         const scale = this.targetHeight / info.height;
-        const newWidth = Math.min(this.targetWidth, Math.round(info.width * scale));
+        // At least 1: a crop far taller than wide (a 1x400 sliver scales to
+        // 0.4) rounded to 0, and sharp rejects a zero width outright.
+        const newWidth = Math.max(1, Math.min(this.targetWidth, Math.round(info.width * scale)));
 
         // `.toColourspace('b-w')` is load-bearing, not tidiness. Re-wrapping a raw
         // buffer loses the b-w colourspace the `.grayscale()` above established --
