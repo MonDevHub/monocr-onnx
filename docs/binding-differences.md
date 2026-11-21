@@ -20,9 +20,12 @@ implementations reading the same wrong thing would agree perfectly.
 Two things compound: four different image-resampling kernels, two of them the
 wrong family, and line segmenters that are not configured alike.
 
-- **Resampling.** Training resizes bilinearly, as Python (OpenCV `INTER_LINEAR`)
-  and Rust (`FilterType::Triangle`) do. Go uses `draw.CatmullRom`, which is
-  bicubic, and JavaScript uses sharp's default, lanczos3.
+- **Resampling.** Training resizes bilinearly with OpenCV `INTER_LINEAR`, and so
+  does Python. Rust's `FilterType::Triangle` is the same kernel only when it
+  enlarges: when it shrinks, `image` 0.24 widens the kernel by the scale factor
+  and averages over the wider span, where `INTER_LINEAR` still reads two pixels
+  per axis. Go uses `draw.CatmullRom`, which is bicubic, and JavaScript uses
+  sharp's default, lanczos3.
 - **Binarisation.** Python binarises adaptively; the other three use a flat
   threshold at 128.
 - **Line gaps.** Python sets its gap threshold at 0.02 of the profile's maximum

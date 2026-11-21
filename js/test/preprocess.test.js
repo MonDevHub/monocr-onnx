@@ -145,3 +145,18 @@ test('without toColourspace the buffer is 3x, which the guard must reject', asyn
     assert.notStrictEqual(unfixed.length, TARGET_H * newWidth,
         'a 3x buffer must not be mistakable for a single-channel one');
 });
+
+test('a crop far taller than wide still gets a width of at least one column', async () => {
+    // 1x400 scales to 160/400 = 0.4 columns, which rounded to 0, and sharp
+    // throws on a zero resize width instead of returning a tensor.
+    const { fakeSession, StubOCR, BUNDLED_CHARSET } = require('./helpers');
+    const ocr = new StubOCR(fakeSession(), BUNDLED_CHARSET);
+    await ocr.init();
+    const sliver = await sharp({
+        create: { width: 1, height: 400, channels: 3, background: 'black' }
+    }).png().toBuffer();
+
+    const tensor = await ocr.preprocess(sliver);
+
+    assert.deepStrictEqual(tensor.dims, [1, 1, TARGET_H, TARGET_W]);
+});

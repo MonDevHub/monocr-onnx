@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // `main` is a moving ref and the artifact has already changed under it — from a
@@ -191,5 +192,57 @@ func TestDownloadWithWrongDigestIsRefused(t *testing.T) {
 		if strings.HasPrefix(e.Name(), ModelFilename) {
 			t.Fatalf("a refused download left %s in the cache", e.Name())
 		}
+	}
+}
+
+// http.Get has no timeout, so a server that accepted the connection and then
+// went quiet hung the first prediction forever. A stall before the headers and
+// a stall mid-body must both end in an error.
+func TestDownloadGivesUpOnAStalledServer(t *testing.T) {
+	saved := stallTimeout
+	stallTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = saved })
+
+	// Closed by each subtest's cleanup before its server closes, so a
+	// download that never gives up fails the test instead of hanging it.
+	var release chan struct{}
+	for name, handler := range map[string]http.HandlerFunc{
+		"before headers": func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		},
+		"mid body": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "1000")
+			w.Write([]byte("partial"))
+			w.(http.Flusher).Flush()
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			release = make(chan struct{})
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
+			t.Cleanup(func() { close(release) })
+			dest := filepath.Join(t.TempDir(), ModelFilename)
+
+			done := make(chan error, 1)
+			go func() { done <- download(srv.URL+"/onnx/"+ModelFilename, dest, hexSHA256(fakeModel)) }()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "gave up") {
+					t.Fatalf("download err = %v; want the stall named", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("download still waiting on a silent server after 5s")
+			}
+			if _, err := os.Stat(dest); !os.IsNotExist(err) {
+				t.Fatalf("a stalled download left %s behind: %v", dest, err)
+			}
+		})
 	}
 }

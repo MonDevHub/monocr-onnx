@@ -81,6 +81,14 @@ program
             } else {
                 console.log(JSON.stringify(results, null, 2));
             }
+
+            // A script checking the exit status must see a partial or total
+            // failure; the per-file errors are in the results above.
+            const failed = results.filter(r => !r.success).length;
+            if (failed > 0) {
+                console.error(`${failed} of ${results.length} files failed.`);
+                process.exitCode = 1;
+            }
         } catch (err) {
             console.error('Error:', err.message);
             process.exit(1);
